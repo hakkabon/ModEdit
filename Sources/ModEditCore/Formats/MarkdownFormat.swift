@@ -1,29 +1,22 @@
-import AppKit
 import UniformTypeIdentifiers
 
 struct MarkdownFormat: DocumentFormat {
     let id = "markdown"
     let displayName = "Markdown"
-    let contentTypes: [UTType] = [.markdown]
+    let contentTypes: [UTType] = [.markdownText]
     let fileExtensions = ["md", "markdown", "mdown"]
 
-    func makeHighlighter() -> (any SyntaxHighlighter)? {
-        let bold = NSFontManager.shared.convert(
-            .monospacedSystemFont(ofSize: 13, weight: .regular), toHaveTrait: .boldFontMask)
-        let base: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: NSColor.textColor]
-        let rules = (try? [
-            HighlightRule(#"^\s{0,3}#{1,6}\s.*$"#, [.foregroundColor: NSColor.systemBlue, .font: bold]),
-            HighlightRule(#"\*\*[^*\n]+\*\*|__[^_\n]+__"#, [.font: bold]),
-            HighlightRule(#"`[^`\n]+`"#, [.foregroundColor: NSColor.systemPink]),
-            HighlightRule(#"\[[^\]\n]*\]\([^)\n]*\)"#,
-                          [.foregroundColor: NSColor.linkColor,
-                           .underlineStyle: NSUnderlineStyle.single.rawValue]),
-            HighlightRule(#"^\s*>\s?.*$"#, [.foregroundColor: NSColor.secondaryLabelColor]),
-            HighlightRule(#"^\s*[-*+]\s"#, [.foregroundColor: NSColor.systemOrange]),
-        ]) ?? []
-        return RuleBasedHighlighter(base: base, rules: rules)
+    /// Lowest priority first; code spans last so their colour wins over
+    /// anything that happens to match inside them.
+    var highlightRules: [HighlightRule] {
+        [
+            HighlightRule(#"^\s{0,3}#{1,6}\s.*$"#, .heading),
+            HighlightRule(#"\*\*[^*\n]+\*\*|__[^_\n]+__"#, .strong),
+            HighlightRule(#"\[[^\]\n]*\]\([^)\n]*\)"#, .link),
+            HighlightRule(#"^\s*>\s?.*$"#, .quote),
+            HighlightRule(#"^\s*[-*+]\s"#, .listMarker),
+            HighlightRule(#"`[^`\n]+`"#, .code),
+        ]
     }
 
     func makePreviewRenderer() -> (any PreviewRenderer)? { MarkdownPreviewRenderer() }

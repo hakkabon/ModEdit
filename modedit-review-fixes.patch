@@ -1,0 +1,2407 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..6c7e506
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,16 @@
++# Build and test on macOS (the app depends on AppKit, SwiftUI and WebKit, so
++# Linux is not supported). Written without a local toolchain: verify first run.
++name: CI
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++
++jobs:
++  macos:
++    runs-on: macos-15
++    steps:
++      - uses: actions/checkout@v4
++      - run: swift build
++      - run: swift test
+diff --git a/Package.swift b/Package.swift
+index 920de74..c182e28 100644
+--- a/Package.swift
++++ b/Package.swift
+@@ -19,7 +19,10 @@ let package = Package(
+             name: "ModEditCore"),
+         .executableTarget(
+             name: "ModEditApp",
+-            dependencies: ["ModEditCore"]),
++            dependencies: ["ModEditCore"],
++            // Info.plist is consumed by scripts/make-app.sh when assembling the
++            // .app bundle; SwiftPM must not treat it as a target resource.
++            exclude: ["Resources/Info.plist"]),
+         .testTarget(
+             name: "ModEditTests",
+             dependencies: ["ModEditCore"]),
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..c44a505
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,254 @@
++# ModEdit
++
++A native macOS text editor for **editing text that renders differently from its
++plain-ASCII source**. You type Markdown or LaTeX on the left; a live preview on
++the right shows it as headings, emphasis, symbols and mathematics.
++
++> **Status: early development (v0.1.0).** The editor, syntax colouring, format
++> switching, file open/save and the live preview work end to end for Plain Text,
++> Markdown, LaTeX and HTML. Rendering *inside* the editor pane (single-pane
++> "live preview" with a caret that moves through rendered text) is the next big
++> milestone; see the [roadmap](#roadmap).
++
++## Table of contents
++
++1. [Features](#features)
++2. [Requirements](#requirements)
++3. [Build, run, test](#build-run-test)
++4. [Architecture](#architecture)
++5. [Formats](#formats)
++6. [The preview](#the-preview)
++7. [Adding a format](#adding-a-format)
++8. [Project layout](#project-layout)
++9. [Design decisions](#design-decisions)
++10. [Known limitations](#known-limitations)
++11. [Roadmap](#roadmap)
++12. [Contributing](#contributing)
++13. [License](#license)
++
++## Features
++
++* Document-based app (open, save, autosave, versions) built on SwiftUI
++  `DocumentGroup`.
++* TextKit 2 `NSTextView` editor with find bar, undo/redo and **all automatic
++  text "corrections" disabled** (smart quotes, dashes, replacement), because this
++  is a source editor.
++* **Syntax colouring** for Markdown, LaTeX and HTML: debounced, incremental
++  (only the edited lines), chunked on load so large files do not freeze the UI,
++  and safe with input methods (Japanese/Chinese/Korean composition).
++* **Live preview** (WebKit) that keeps its scroll position while you type:
++  * *Markdown* — headings, paragraphs, lists, block quotes, fenced code,
++    `**bold**`, `*italic*`, `` `code` ``, links.
++  * *LaTeX* — `\section`, `\textbf`, `\emph`, math with Greek letters and
++    operators (`\alpha` → α), super/subscripts (`x^2`, `x_{i}`), comments hidden.
++  * *HTML* — your page as written (scripts disabled).
++* **Encoding-faithful I/O**: UTF-8 (with/without BOM), UTF-16 and detected legacy
++  encodings are written back the way they were read; saving never silently
++  replaces characters.
++* Light/dark mode aware (dynamic system colours, `color-scheme` in the preview).
++
++## Requirements
++
++* macOS 13 or newer
++* Swift 6.1 / Xcode 16.3 or newer
++* No third-party dependencies
++
++## Build, run, test
++
++```sh
++swift build
++swift test                      # macOS only: the module uses AppKit/SwiftUI/WebKit
++
++scripts/make-app.sh             # builds .build/.../ModEdit.app (debug)
++scripts/make-app.sh release     # release build
++open "$(swift build --show-bin-path)/ModEdit.app"
++```
++
++Why a script? `swift run` starts a bare executable without an app bundle, so the
++document types in `Info.plist` are not registered and Finder cannot open files
++with it. `make-app.sh` wraps the binary in a minimal bundle and ad-hoc signs it.
++You can also open `Package.swift` in Xcode and run the `ModEdit` scheme.
++
++## Architecture
++
++```
++ModEditApp (executable)           thin: @main App { ModEditScene() }
++        │
++        ▼  only public symbol: ModEditScene
++ModEditCore (library)
++┌──────────────────────────────────────────────────────────────────────────┐
++│ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
++│                    │                  │  ▲ edits           (WKWebView)    │
++│ Model         EditorModel (@MainActor, @Published text/format)           │
++│                    │ writes through                                       │
++│               EditorDocument  (Sendable, lock-protected; snapshots)      │
++│ IO            TextIO (decode/encode, BOM, encoding detection)            │
++│                                                                          │
++│ Formats       DocumentFormat ── FormatRegistry (immutable)               │
++│                 • id, content types                                      │
++│                 • highlightRules: [HighlightRule(pattern, TokenKind)]    │
++│                 • makePreviewRenderer()                                  │
++│ Highlighting  Tokenizer → Token(range, kind)   (pure, platform-neutral)  │
++│               EditorTheme: TokenKind → fonts/colours (AppKit)            │
++│               StorageHighlighter: applies tokens to NSTextStorage        │
++│               DirtyRange: accumulates pending edits for debouncing       │
++│ Preview       PreviewRenderer → MarkdownHTML / LaTeXHTML → PreviewPage   │
++└──────────────────────────────────────────────────────────────────────────┘
++```
++
++Data flow while typing:
++
++1. `NSTextView` edits its text storage.
++2. The storage delegate reports the edit → `DirtyRange` accumulates it → after an
++   80 ms debounce `StorageHighlighter` re-colours **only the touched lines**.
++3. `textDidChange` copies the text into `EditorModel`, which publishes it and
++   writes it to `EditorDocument` (what gets saved).
++4. SwiftUI re-evaluates `EditorRootView`; `PreviewPane` re-renders after a 250 ms
++   debounce, skipping identical output and restoring the scroll position.
++
++## Formats
++
++| Format     | Types                         | Colouring                                      | Preview |
++|------------|-------------------------------|------------------------------------------------|---------|
++| Plain Text | `public.plain-text`, UTF-8    | —                                              | —       |
++| Markdown   | `net.daringfireball.markdown` | headings, bold, links, quotes, lists, code     | yes     |
++| LaTeX      | `org.tug.tex`                 | commands, arguments, math, comments            | yes     |
++| HTML       | `public.html`                 | tags, attributes, strings, comments            | yes     |
++
++The format is chosen from the file's type on open and can be changed from the
++toolbar picker (which also lets you pick a format for a new, untitled document).
++XML, JSON and YAML open as plain text.
++
++> `UTType.markdown` only exists in the macOS 27 SDK, so Markdown is imported by
++> identifier (`UTType(importedAs:)`) and declared in `Info.plist`.
++
++## The preview
++
++Previewed files are *untrusted input*, so the preview is hardened:
++
++* the web view runs with **JavaScript disabled**;
++* **navigation is blocked** — clicked links open in your browser, never in the
++  preview;
++* all text is **HTML-escaped** before markup is added; raw HTML in a Markdown or
++  LaTeX file is shown as text;
++* Markdown links are limited to `http`, `https` and `mailto`;
++* generated pages carry a **Content-Security-Policy** forbidding scripts, remote
++  loads and frames.
++
++The previous implementation inserted LaTeX source into the page unescaped, so a
++`.tex` file containing `<script>` would execute it.
++
++## Adding a format
++
++1. Create a type conforming to `DocumentFormat` (see `MarkdownFormat.swift`):
++
++   ```swift
++   struct TOMLFormat: DocumentFormat {
++       let id = "toml"
++       let displayName = "TOML"
++       let contentTypes: [UTType] = [UTType(importedAs: "org.toml")]
++       let fileExtensions = ["toml"]
++
++       // Lowest priority first: later rules win where they overlap.
++       var highlightRules: [HighlightRule] {
++           [
++               HighlightRule(#"^\s*\[[^\]\n]+\]"#, .heading),
++               HighlightRule(#""[^"\n]*""#, .string),
++               HighlightRule(#"#.*$"#, .comment),      // opaque rules last
++           ]
++       }
++       func makePreviewRenderer() -> (any PreviewRenderer)? { nil }
++   }
++   ```
++2. Add it to `FormatRegistry.standard`.
++3. Declare the type in `Info.plist` (`UTImportedTypeDeclarations` and
++   `CFBundleDocumentTypes`) if the system does not know it.
++4. Add tests: `FormatTests.swift` already checks that **every** shipped rule
++   compiles, so a typo cannot silently disable highlighting.
++
++A new preview is a `PreviewRenderer` returning an HTML string; wrap bodies with
++`PreviewPage.wrap(body:)` and escape text with `HTMLEscaping.escape`.
++
++## Project layout
++
++```
++Package.swift
++scripts/make-app.sh                 build ModEdit.app
++Sources/
++  ModEditApp/                       @main, Info.plist
++  ModEditCore/
++    ModEditScene.swift              the only public API
++    Formats/                        DocumentFormat, FormatRegistry, formats, UTTypes
++    Highlighting/                   Token, Tokenizer, DirtyRange, EditorTheme, StorageHighlighter
++    IO/TextIO.swift
++    Model/                          EditorDocument (persisted), EditorModel (UI state)
++    Preview/                        PreviewRenderer, MarkdownHTML, LaTeXHTML, escaping, page
++    UI/                             EditorRootView, EditorTextView, PreviewPane
++Tests/ModEditTests/                 Swift Testing suites
++.github/workflows/ci.yml            macOS build + test
++```
++
++## Design decisions
++
++* **Semantic tokens, not AppKit attributes, in formats.** Formats say *what* text
++  is (`TokenKind`); `EditorTheme` says how it looks. Formats become pure,
++  `Sendable` and testable; theming is one file.
++* **Immutable registry, not a mutable singleton.** No registration step to
++  forget or race.
++* **Document vs. model split.** `ReferenceFileDocument` must be `Sendable` and is
++  saved off the main thread, so the persisted state is lock-protected and saved
++  via a value snapshot; UI state lives in a `@MainActor` model.
++* **Rules are ordered by priority** ("later wins") so comments and code spans
++  reliably override anything matching inside them.
++* **Small public surface.** Only `ModEditScene` is public.
++
++## Known limitations
++
++* **Line-oriented highlighting.** Constructs spanning lines (fenced code blocks,
++  multi-line HTML comments or tags) are not recognised. A stateful lexer would fix
++  this.
++* **HTML attribute-name colouring** matches `name=` anywhere, not only in tags.
++* **Preview is a separate pane.** The caret and scroll position are not
++  synchronised with the source.
++* **Markdown subset only** (no nested lists, tables, images, setext headings).
++  **LaTeX subset only** (no environments, `\frac`, `\sqrt`, macros).
++* **HTML preview cannot load relative resources** (images, CSS) because
++  `DocumentGroup` does not expose the document's URL.
++* **The text is copied** from the text view into the model on every edit (O(n)
++  per keystroke); fine for ordinary files, costly for very large ones.
++* **External changes are not pushed into the text view** (for example *Revert to
++  Saved*): `EditorTextView.updateNSView` only reacts to format changes.
++* **Dirty tracking relies on `NSTextView`'s undo registration** to mark the
++  document edited; verify this on your macOS version (see the review notes).
++* **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
++* **Never compiled or run by the author of this patch** (no macOS toolchain was
++  available): expect small build fixes on first compile.
++
++## Roadmap
++
++1. **Rendering inside the editor.** The headline feature. Plan: introduce a
++   platform-neutral `TextRenderer` that emits *runs tiling the source exactly*
++   (hidden markup = zero-width run) with a two-way source↔display offset map;
++   draw the rendered form for everything except the line under the caret using
++   TextKit 2 layout fragments or text attachments. The offset map is what lets
++   the caret move through rendered text.
++2. **Scroll and caret synchronisation** between source and preview (needs the
++   same source map).
++3. **Real parsers:** `swift-markdown` for CommonMark/GFM, a bundled KaTeX for
++   typeset maths, and a stateful lexer for multi-line highlighting.
++4. **NSDocument-based shell** if relative resources or finer control over saving
++   are needed. Note SwiftUI's new `WritableDocument` API (SDK 27) is the intended
++   successor to `ReferenceFileDocument`.
++5. User-selectable themes, font and size settings; line numbers; soft-wrap toggle.
++6. Export (HTML/PDF) from the preview.
++
++## Contributing
++
++* Keep formats free of AppKit types; put visual choices in `EditorTheme`.
++* Every behaviour change needs a test (`swift test` must pass).
++* Escape anything inserted into HTML (`HTMLEscaping.escape`).
++* Document non-obvious decisions with `///` comments, especially invariants.
++
++## License
++
++See [LICENSE](LICENSE).
+diff --git a/Sources/ModEdit/ModEdit.swift b/Sources/ModEdit/ModEdit.swift
+deleted file mode 100644
+index 08b22b8..0000000
+--- a/Sources/ModEdit/ModEdit.swift
++++ /dev/null
+@@ -1,2 +0,0 @@
+-// The Swift Programming Language
+-// https://docs.swift.org/swift-book
+diff --git a/Sources/ModEditApp/ModEditApp.swift b/Sources/ModEditApp/ModEditApp.swift
+index 3ab5908..58766d5 100644
+--- a/Sources/ModEditApp/ModEditApp.swift
++++ b/Sources/ModEditApp/ModEditApp.swift
+@@ -1,18 +1,13 @@
+ import SwiftUI
+ import ModEditCore
+ 
++/// Application entry point.
++///
++/// All behaviour lives in `ModEditCore`; the app target only hosts the scene so
++/// that the core stays a reusable (and testable) library.
+ @main
+ struct ModEditApp: App {
+-    init() {
+-        FormatRegistry.shared.register(PlainTextFormat())
+-        FormatRegistry.shared.register(MarkdownFormat())
+-        FormatRegistry.shared.register(LaTeXFormat())
+-        FormatRegistry.shared.register(HTMLFormat())
+-    }
+-
+     var body: some Scene {
+-        DocumentGroup(newDocument: EditorDocument()) { config in
+-            EditorRootView(document: config.document)
+-        }
++        ModEditScene()
+     }
+ }
+diff --git a/Sources/ModEditApp/Resources/Info.plist b/Sources/ModEditApp/Resources/Info.plist
+index 90c9ee1..5705bf0 100644
+--- a/Sources/ModEditApp/Resources/Info.plist
++++ b/Sources/ModEditApp/Resources/Info.plist
+@@ -8,8 +8,10 @@
+     <string>ModEdit</string>
+     <key>CFBundleExecutable</key>
+     <string>ModEdit</string>
++    <!-- A literal identifier: $(PRODUCT_BUNDLE_IDENTIFIER) is only substituted by
++         Xcode, and scripts/make-app.sh copies this file verbatim. -->
+     <key>CFBundleIdentifier</key>
+-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
++    <string>io.github.hakkabon.ModEdit</string>
+     <key>CFBundleInfoDictionaryVersion</key>
+     <string>6.0</string>
+     <key>CFBundleName</key>
+@@ -17,18 +19,24 @@
+     <key>CFBundlePackageType</key>
+     <string>APPL</string>
+     <key>CFBundleShortVersionString</key>
+-    <string>1.0</string>
++    <string>0.1.0</string>
+     <key>CFBundleVersion</key>
+     <string>1</string>
+     <key>LSMinimumSystemVersion</key>
+     <string>13.0</string>
+-    <key>NSMainStoryboardFile</key>
+-    <string></string>
++    <key>NSPrincipalClass</key>
++    <string>NSApplication</string>
++    <key>NSHighResolutionCapable</key>
++    <true/>
+     <key>CFBundleDocumentTypes</key>
+     <array>
+         <dict>
++            <key>CFBundleTypeName</key>
++            <string>Text Document</string>
+             <key>CFBundleTypeRole</key>
+             <string>Editor</string>
++            <key>LSHandlerRank</key>
++            <string>Alternate</string>
+             <key>LSItemContentTypes</key>
+             <array>
+                 <string>public.plain-text</string>
+@@ -38,17 +46,56 @@
+             </array>
+         </dict>
+     </array>
++    <!-- net.daringfireball.markdown is only a *system* type from macOS 27; on
++         earlier systems the app must declare it itself. -->
+     <key>UTImportedTypeDeclarations</key>
+     <array>
+         <dict>
+             <key>UTTypeIdentifier</key>
+-            <string>org.tug.tex</string>
++            <string>net.daringfireball.markdown</string>
++            <key>UTTypeDescription</key>
++            <string>Markdown Document</string>
+             <key>UTTypeConformsTo</key>
+             <array>
+                 <string>public.plain-text</string>
+             </array>
++            <key>UTTypeTagSpecification</key>
++            <dict>
++                <key>public.filename-extension</key>
++                <array>
++                    <string>md</string>
++                    <string>markdown</string>
++                    <string>mdown</string>
++                </array>
++                <key>public.mime-type</key>
++                <array>
++                    <string>text/markdown</string>
++                </array>
++            </dict>
++        </dict>
++        <dict>
++            <key>UTTypeIdentifier</key>
++            <string>org.tug.tex</string>
+             <key>UTTypeDescription</key>
+             <string>LaTeX Document</string>
++            <key>UTTypeConformsTo</key>
++            <array>
++                <string>public.plain-text</string>
++            </array>
++            <key>UTTypeTagSpecification</key>
++            <dict>
++                <key>public.filename-extension</key>
++                <array>
++                    <string>tex</string>
++                    <string>sty</string>
++                    <string>cls</string>
++                    <string>ltx</string>
++                </array>
++                <key>public.mime-type</key>
++                <array>
++                    <string>application/x-tex</string>
++                </array>
++            </dict>
+         </dict>
+     </array>
+ </dict>
+diff --git a/Sources/ModEditCore/Formats/ContentTypes.swift b/Sources/ModEditCore/Formats/ContentTypes.swift
+new file mode 100644
+index 0000000..0690fe5
+--- /dev/null
++++ b/Sources/ModEditCore/Formats/ContentTypes.swift
+@@ -0,0 +1,13 @@
++import UniformTypeIdentifiers
++
++extension UTType {
++    /// Markdown.
++    ///
++    /// `UTType.markdown` only exists in the macOS 27 SDK, so it cannot be used
++    /// with a macOS 13 deployment target. Importing by identifier works on every
++    /// OS version; the type is declared in `Info.plist` (`UTImportedTypeDeclarations`).
++    static let markdownText = UTType(importedAs: "net.daringfireball.markdown")
++
++    /// LaTeX / TeX source. Also declared in `Info.plist`.
++    static let latex = UTType(importedAs: "org.tug.tex")
++}
+diff --git a/Sources/ModEditCore/Formats/DocumentFormat.swift b/Sources/ModEditCore/Formats/DocumentFormat.swift
+index 0c6ed32..e766e0a 100644
+--- a/Sources/ModEditCore/Formats/DocumentFormat.swift
++++ b/Sources/ModEditCore/Formats/DocumentFormat.swift
+@@ -1,33 +1,37 @@
+-import AppKit
++import Foundation
+ import UniformTypeIdentifiers
+ 
++/// Describes one kind of text file: how to recognise it, how to colour it and
++/// how to preview it.
++///
++/// A format is a small, immutable, `Sendable` value. It contains **no AppKit
++/// types**: syntax colouring is described semantically (`HighlightRule` ->
++/// `TokenKind`) and mapped to fonts and colours by `EditorTheme`. That keeps
++/// formats trivially unit-testable and makes themes (dark mode, user themes) a
++/// one-place change.
++///
++/// To add a format: create a conforming type, then add it to
++/// `FormatRegistry.standard`.
+ protocol DocumentFormat: Sendable {
++    /// Stable identifier (used for selection and persistence).
+     var id: String { get }
++    /// Name shown in the UI.
+     var displayName: String { get }
++    /// Uniform type identifiers this format handles.
+     var contentTypes: [UTType] { get }
++    /// File extensions typically used by this format.
+     var fileExtensions: [String] { get }
+ 
+-    func makeHighlighter() -> (any SyntaxHighlighter)?
+-    func makePreviewRenderer() -> (any PreviewRenderer)?
+-}
++    /// Syntax-colouring rules, **lowest priority first**: when two rules match
++    /// the same characters the *later* rule's attributes win. List broad,
++    /// structural rules first and "opaque" ones (comments, code spans) last.
++    var highlightRules: [HighlightRule] { get }
+ 
+-protocol SyntaxHighlighter {
+-    func highlight(_ storage: NSTextStorage, in requestedRange: NSRange)
++    /// A renderer for the live preview, or `nil` if the format has none.
++    func makePreviewRenderer() -> (any PreviewRenderer)?
+ }
+ 
++/// Turns document source into an HTML page for the preview pane.
+ protocol PreviewRenderer: Sendable {
+     func renderHTML(from source: String) async throws -> String
+ }
+-
+-@MainActor
+-final class FormatRegistry {
+-    static let shared = FormatRegistry()
+-    private var formats: [any DocumentFormat] = []
+-
+-    func register(_ format: any DocumentFormat) { formats.append(format) }
+-
+-    func format(for type: UTType) -> any DocumentFormat {
+-        formats.first { f in f.contentTypes.contains { type.conforms(to: $0) } }
+-            ?? PlainTextFormat()
+-    }
+-}
+diff --git a/Sources/ModEditCore/Formats/FormatRegistry.swift b/Sources/ModEditCore/Formats/FormatRegistry.swift
+new file mode 100644
+index 0000000..ffb92cc
+--- /dev/null
++++ b/Sources/ModEditCore/Formats/FormatRegistry.swift
+@@ -0,0 +1,48 @@
++import Foundation
++import UniformTypeIdentifiers
++
++/// The set of known formats.
++///
++/// This is an **immutable value**, not a mutable singleton: there is no
++/// registration step that can be forgotten or raced, and tests can build their
++/// own registry.
++struct FormatRegistry: Sendable {
++    /// Specific formats, in matching priority order.
++    let formats: [any DocumentFormat]
++    /// Used when nothing more specific matches.
++    let fallback: any DocumentFormat
++
++    static let standard = FormatRegistry(
++        formats: [MarkdownFormat(), LaTeXFormat(), HTMLFormat()],
++        fallback: PlainTextFormat())
++
++    /// Every format, fallback last. Used to populate pickers.
++    var allFormats: [any DocumentFormat] { formats + [fallback] }
++
++    /// Content types the app can open. Source types without a dedicated format
++    /// (XML, JSON, YAML) are opened as plain text.
++    var readableContentTypes: [UTType] {
++        allFormats.flatMap { $0.contentTypes } + [.xml, .json, .yaml]
++    }
++
++    /// Picks the format for `type`.
++    ///
++    /// Matching order matters. Markdown and LaTeX both *conform to* plain text,
++    /// so a naive "first format that the type conforms to" lookup, with plain
++    /// text registered first, would hand every Markdown file to the plain-text
++    /// format. We therefore try an exact match, then conformance to the
++    /// *specific* formats, and only then the fallback.
++    func format(for type: UTType) -> any DocumentFormat {
++        if let exact = allFormats.first(where: { $0.contentTypes.contains(type) }) {
++            return exact
++        }
++        return formats.first { format in
++            format.contentTypes.contains { type.conforms(to: $0) }
++        } ?? fallback
++    }
++
++    /// Looks a format up by `DocumentFormat.id`.
++    func format(withID id: String) -> (any DocumentFormat)? {
++        allFormats.first { $0.id == id }
++    }
++}
+diff --git a/Sources/ModEditCore/Formats/HTMLFormat.swift b/Sources/ModEditCore/Formats/HTMLFormat.swift
+index ecbc108..c2ee078 100644
+--- a/Sources/ModEditCore/Formats/HTMLFormat.swift
++++ b/Sources/ModEditCore/Formats/HTMLFormat.swift
+@@ -1,4 +1,3 @@
+-import AppKit
+ import UniformTypeIdentifiers
+ 
+ struct HTMLFormat: DocumentFormat {
+@@ -7,17 +6,18 @@ struct HTMLFormat: DocumentFormat {
+     let contentTypes: [UTType] = [.html]
+     let fileExtensions = ["html", "htm", "xhtml"]
+ 
+-    func makeHighlighter() -> (any SyntaxHighlighter)? {
+-        let base: [NSAttributedString.Key: Any] = [
+-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+-            .foregroundColor: NSColor.textColor]
+-        let rules = (try? [
+-            HighlightRule(#"<!--.*?-->"#, [.foregroundColor: NSColor.secondaryLabelColor]),
+-            HighlightRule(#"<[^>]+>"#, [.foregroundColor: NSColor.systemBlue]),
+-            HighlightRule(#"[a-zA-Z-]+="#, [.foregroundColor: NSColor.systemPurple]),
+-            HighlightRule(#""[^"]*""#, [.foregroundColor: NSColor.systemOrange]),
+-        ]) ?? []
+-        return RuleBasedHighlighter(base: base, rules: rules)
++    /// Lowest priority first; comments last.
++    ///
++    /// Known limitation: the attribute-name rule matches `name=` anywhere, not
++    /// only inside tags, and nothing here understands multi-line constructs
++    /// (see "Known limitations" in the README).
++    var highlightRules: [HighlightRule] {
++        [
++            HighlightRule(#"<[^>]+>"#, .tag),
++            HighlightRule(#"[a-zA-Z-]+(?==)"#, .attributeName),
++            HighlightRule(#""[^"\n]*""#, .string),
++            HighlightRule(#"<!--.*?-->"#, .comment),
++        ]
+     }
+ 
+     func makePreviewRenderer() -> (any PreviewRenderer)? { HTMLPreviewRenderer() }
+diff --git a/Sources/ModEditCore/Formats/LaTeXFormat.swift b/Sources/ModEditCore/Formats/LaTeXFormat.swift
+index 92b3509..f4d7bba 100644
+--- a/Sources/ModEditCore/Formats/LaTeXFormat.swift
++++ b/Sources/ModEditCore/Formats/LaTeXFormat.swift
+@@ -1,28 +1,21 @@
+-import AppKit
+ import UniformTypeIdentifiers
+ 
+-extension UTType {
+-    static let latex = UTType(importedAs: "org.tug.tex")
+-}
+-
+ struct LaTeXFormat: DocumentFormat {
+     let id = "latex"
+     let displayName = "LaTeX"
+     let contentTypes: [UTType] = [.latex]
+     let fileExtensions = ["tex", "sty", "cls", "ltx"]
+ 
+-    func makeHighlighter() -> (any SyntaxHighlighter)? {
+-        let base: [NSAttributedString.Key: Any] = [
+-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+-            .foregroundColor: NSColor.textColor]
+-        let rules = (try? [
+-            HighlightRule(#"%.*$"#, [.foregroundColor: NSColor.secondaryLabelColor]),
+-            HighlightRule(#"\\[a-zA-Z]+"#, [.foregroundColor: NSColor.systemPurple]),
+-            HighlightRule(#"\$[^$\n]+\$"#, [.foregroundColor: NSColor.systemTeal]),
+-            HighlightRule(#"\[([^\]\n]+)\]"#, [.foregroundColor: NSColor.systemOrange]),
+-            HighlightRule(#"\{([^\}\n]+)\}"#, [.foregroundColor: NSColor.systemBlue]),
+-        ]) ?? []
+-        return RuleBasedHighlighter(base: base, rules: rules)
++    /// Lowest priority first. Comments come *last*: anything inside a `%`
++    /// comment must look like a comment, not like a command or an argument.
++    var highlightRules: [HighlightRule] {
++        [
++            HighlightRule(#"\{([^\}\n]+)\}"#, .argument),
++            HighlightRule(#"\[([^\]\n]+)\]"#, .optionalArgument),
++            HighlightRule(#"\\[a-zA-Z]+"#, .command),
++            HighlightRule(#"\$[^$\n]+\$"#, .math),
++            HighlightRule(#"(?<!\\)%.*$"#, .comment),
++        ]
+     }
+ 
+     func makePreviewRenderer() -> (any PreviewRenderer)? { LaTeXPreviewRenderer() }
+diff --git a/Sources/ModEditCore/Formats/MarkdownFormat.swift b/Sources/ModEditCore/Formats/MarkdownFormat.swift
+index 2c1c8de..83e5309 100644
+--- a/Sources/ModEditCore/Formats/MarkdownFormat.swift
++++ b/Sources/ModEditCore/Formats/MarkdownFormat.swift
+@@ -1,29 +1,22 @@
+-import AppKit
+ import UniformTypeIdentifiers
+ 
+ struct MarkdownFormat: DocumentFormat {
+     let id = "markdown"
+     let displayName = "Markdown"
+-    let contentTypes: [UTType] = [.markdown]
++    let contentTypes: [UTType] = [.markdownText]
+     let fileExtensions = ["md", "markdown", "mdown"]
+ 
+-    func makeHighlighter() -> (any SyntaxHighlighter)? {
+-        let bold = NSFontManager.shared.convert(
+-            .monospacedSystemFont(ofSize: 13, weight: .regular), toHaveTrait: .boldFontMask)
+-        let base: [NSAttributedString.Key: Any] = [
+-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+-            .foregroundColor: NSColor.textColor]
+-        let rules = (try? [
+-            HighlightRule(#"^\s{0,3}#{1,6}\s.*$"#, [.foregroundColor: NSColor.systemBlue, .font: bold]),
+-            HighlightRule(#"\*\*[^*\n]+\*\*|__[^_\n]+__"#, [.font: bold]),
+-            HighlightRule(#"`[^`\n]+`"#, [.foregroundColor: NSColor.systemPink]),
+-            HighlightRule(#"\[[^\]\n]*\]\([^)\n]*\)"#,
+-                          [.foregroundColor: NSColor.linkColor,
+-                           .underlineStyle: NSUnderlineStyle.single.rawValue]),
+-            HighlightRule(#"^\s*>\s?.*$"#, [.foregroundColor: NSColor.secondaryLabelColor]),
+-            HighlightRule(#"^\s*[-*+]\s"#, [.foregroundColor: NSColor.systemOrange]),
+-        ]) ?? []
+-        return RuleBasedHighlighter(base: base, rules: rules)
++    /// Lowest priority first; code spans last so their colour wins over
++    /// anything that happens to match inside them.
++    var highlightRules: [HighlightRule] {
++        [
++            HighlightRule(#"^\s{0,3}#{1,6}\s.*$"#, .heading),
++            HighlightRule(#"\*\*[^*\n]+\*\*|__[^_\n]+__"#, .strong),
++            HighlightRule(#"\[[^\]\n]*\]\([^)\n]*\)"#, .link),
++            HighlightRule(#"^\s*>\s?.*$"#, .quote),
++            HighlightRule(#"^\s*[-*+]\s"#, .listMarker),
++            HighlightRule(#"`[^`\n]+`"#, .code),
++        ]
+     }
+ 
+     func makePreviewRenderer() -> (any PreviewRenderer)? { MarkdownPreviewRenderer() }
+diff --git a/Sources/ModEditCore/Formats/PlainTextFormat.swift b/Sources/ModEditCore/Formats/PlainTextFormat.swift
+index b6eaf6c..23bce0c 100644
+--- a/Sources/ModEditCore/Formats/PlainTextFormat.swift
++++ b/Sources/ModEditCore/Formats/PlainTextFormat.swift
+@@ -1,4 +1,3 @@
+-import AppKit
+ import UniformTypeIdentifiers
+ 
+ struct PlainTextFormat: DocumentFormat {
+@@ -7,6 +6,6 @@ struct PlainTextFormat: DocumentFormat {
+     let contentTypes: [UTType] = [.plainText, .utf8PlainText]
+     let fileExtensions = ["txt", "text", "log"]
+ 
+-    func makeHighlighter() -> (any SyntaxHighlighter)? { nil }
++    var highlightRules: [HighlightRule] { [] }
+     func makePreviewRenderer() -> (any PreviewRenderer)? { nil }
+ }
+diff --git a/Sources/ModEditCore/Highlighting/DirtyRange.swift b/Sources/ModEditCore/Highlighting/DirtyRange.swift
+new file mode 100644
+index 0000000..55c9bf3
+--- /dev/null
++++ b/Sources/ModEditCore/Highlighting/DirtyRange.swift
+@@ -0,0 +1,52 @@
++import Foundation
++
++/// Accumulates the region of a text storage that has been edited but not yet
++/// re-highlighted.
++///
++/// Highlighting is debounced, so several edits can happen before it runs. The
++/// naive approach (remember only the *last* edit's range) loses earlier edits,
++/// and a stale range can also point past the end of a document that has since
++/// shrunk. `DirtyRange` keeps one range that covers every pending edit and
++/// shifts it as later edits insert or delete text before it.
++struct DirtyRange: Equatable {
++    /// The pending region in current-document coordinates, if any.
++    private(set) var range: NSRange?
++
++    /// Records an edit as reported by `NSTextStorageDelegate`.
++    ///
++    /// - Parameters:
++    ///   - edited: The edited range **after** the edit.
++    ///   - delta: Change in document length caused by the edit.
++    mutating func record(edited: NSRange, delta: Int) {
++        guard let existing = range else {
++            range = edited
++            return
++        }
++        // End of the replaced text in *pre-edit* coordinates.
++        let oldEditedEnd = NSMaxRange(edited) - delta
++
++        // Map a pre-edit position to its post-edit position.
++        func shift(_ position: Int) -> Int {
++            if position >= oldEditedEnd { return position + delta }   // after the edit
++            if position > edited.location { return edited.location }  // swallowed by it
++            return position                                           // before the edit
++        }
++
++        let lower = shift(existing.location)
++        let upper = max(shift(NSMaxRange(existing)), lower)
++        range = NSUnionRange(NSRange(location: lower, length: upper - lower), edited)
++    }
++
++    /// Returns the pending region clamped to a document of `length` UTF-16
++    /// units, and clears it. Returns `nil` when there is nothing to do.
++    ///
++    /// A zero-length result is meaningful (a pure deletion still requires its
++    /// line to be re-highlighted), so it is returned rather than dropped.
++    mutating func take(clampedTo length: Int) -> NSRange? {
++        defer { range = nil }
++        guard let pending = range, length > 0 else { return nil }
++        let start = min(pending.location, length)
++        let end = min(max(NSMaxRange(pending), start), length)
++        return NSRange(location: start, length: end - start)
++    }
++}
+diff --git a/Sources/ModEditCore/Highlighting/EditorTheme.swift b/Sources/ModEditCore/Highlighting/EditorTheme.swift
+new file mode 100644
+index 0000000..2388255
+--- /dev/null
++++ b/Sources/ModEditCore/Highlighting/EditorTheme.swift
+@@ -0,0 +1,43 @@
++import AppKit
++
++/// Maps semantic `TokenKind`s to fonts and colours.
++///
++/// Uses dynamic system colours, so light/dark mode works without extra code.
++struct EditorTheme {
++    let baseFont: NSFont
++    let boldFont: NSFont
++
++    init(fontSize: CGFloat = 13) {
++        baseFont = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
++        boldFont = .monospacedSystemFont(ofSize: fontSize, weight: .bold)
++    }
++
++    /// Attributes applied to all text before token attributes are layered on.
++    var baseAttributes: [NSAttributedString.Key: Any] {
++        [.font: baseFont, .foregroundColor: NSColor.textColor]
++    }
++
++    func attributes(for kind: TokenKind) -> [NSAttributedString.Key: Any] {
++        switch kind {
++        case .comment, .quote:
++            return [.foregroundColor: NSColor.secondaryLabelColor]
++        case .tag, .argument:
++            return [.foregroundColor: NSColor.systemBlue]
++        case .attributeName, .command:
++            return [.foregroundColor: NSColor.systemPurple]
++        case .string, .optionalArgument, .listMarker:
++            return [.foregroundColor: NSColor.systemOrange]
++        case .math:
++            return [.foregroundColor: NSColor.systemTeal]
++        case .heading:
++            return [.foregroundColor: NSColor.systemBlue, .font: boldFont]
++        case .strong:
++            return [.font: boldFont]
++        case .code:
++            return [.foregroundColor: NSColor.systemPink]
++        case .link:
++            return [.foregroundColor: NSColor.linkColor,
++                    .underlineStyle: NSUnderlineStyle.single.rawValue]
++        }
++    }
++}
+diff --git a/Sources/ModEditCore/Highlighting/RuleBasedHighlighter.swift b/Sources/ModEditCore/Highlighting/RuleBasedHighlighter.swift
+deleted file mode 100644
+index 0d363de..0000000
+--- a/Sources/ModEditCore/Highlighting/RuleBasedHighlighter.swift
++++ /dev/null
+@@ -1,34 +0,0 @@
+-import AppKit
+-
+-struct HighlightRule {
+-    let regex: NSRegularExpression
+-    let attributes: [NSAttributedString.Key: Any]
+-
+-    init(_ pattern: String, _ attributes: [NSAttributedString.Key: Any]) throws {
+-        self.regex = try NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+-        self.attributes = attributes
+-    }
+-}
+-
+-final class RuleBasedHighlighter: SyntaxHighlighter {
+-    let baseAttributes: [NSAttributedString.Key: Any]
+-    let rules: [HighlightRule]
+-
+-    init(base: [NSAttributedString.Key: Any], rules: [HighlightRule]) {
+-        self.baseAttributes = base
+-        self.rules = rules
+-    }
+-
+-    func highlight(_ storage: NSTextStorage, in requestedRange: NSRange) {
+-        let ns = storage.string as NSString
+-        let range = ns.lineRange(for: requestedRange)
+-        storage.beginEditing()
+-        storage.setAttributes(baseAttributes, range: range)
+-        for rule in rules {
+-            rule.regex.enumerateMatches(in: storage.string, range: range) { match, _, _ in
+-                if let r = match?.range { storage.addAttributes(rule.attributes, range: r) }
+-            }
+-        }
+-        storage.endEditing()
+-    }
+-}
+diff --git a/Sources/ModEditCore/Highlighting/StorageHighlighter.swift b/Sources/ModEditCore/Highlighting/StorageHighlighter.swift
+new file mode 100644
+index 0000000..0a696ad
+--- /dev/null
++++ b/Sources/ModEditCore/Highlighting/StorageHighlighter.swift
+@@ -0,0 +1,42 @@
++import AppKit
++
++/// Applies a format's highlighting to an `NSTextStorage`.
++///
++/// Create one per format and keep it: construction compiles every regular
++/// expression, which is far too expensive to repeat on each keystroke (the
++/// previous design rebuilt all rules for every highlight pass).
++@MainActor
++final class StorageHighlighter {
++    private let tokenizer: Tokenizer
++    private let theme: EditorTheme
++
++    /// - Throws: if a rule's pattern is invalid.
++    init(rules: [HighlightRule], theme: EditorTheme) throws {
++        self.tokenizer = try Tokenizer(rules: rules)
++        self.theme = theme
++    }
++
++    /// Re-highlights the whole lines touched by `requested`.
++    ///
++    /// The range is clamped to the storage, so a stale range can never raise
++    /// `NSRangeException`. Only attributes are modified, never characters, so
++    /// this does not register undo actions or alter the text.
++    func apply(to storage: NSTextStorage, in requested: NSRange) {
++        let length = storage.length
++        guard length > 0 else { return }
++
++        let location = min(max(requested.location, 0), length)
++        let end = min(max(NSMaxRange(requested), location), length)
++
++        let text = storage.string
++        let lines = (text as NSString).lineRange(for: NSRange(location: location, length: end - location))
++        let tokens = tokenizer.tokens(in: text, range: lines)
++
++        storage.beginEditing()
++        storage.setAttributes(theme.baseAttributes, range: lines)
++        for token in tokens {
++            storage.addAttributes(theme.attributes(for: token.kind), range: token.range)
++        }
++        storage.endEditing()
++    }
++}
+diff --git a/Sources/ModEditCore/Highlighting/Token.swift b/Sources/ModEditCore/Highlighting/Token.swift
+new file mode 100644
+index 0000000..a58aec9
+--- /dev/null
++++ b/Sources/ModEditCore/Highlighting/Token.swift
+@@ -0,0 +1,87 @@
++import Foundation
++
++/// What a piece of text *is*, independent of how it is drawn.
++///
++/// Formats classify text into kinds; `EditorTheme` decides fonts and colours.
++/// Keeping the two apart makes rules testable without AppKit and makes
++/// re-theming trivial.
++enum TokenKind: Sendable, Hashable, CaseIterable {
++    case comment
++    case tag
++    case attributeName
++    case string
++    case command
++    case math
++    case argument
++    case optionalArgument
++    case heading
++    case strong
++    case code
++    case link
++    case quote
++    case listMarker
++}
++
++/// A regular expression that classifies the text it matches.
++///
++/// Holds only a pattern string so it is `Sendable`; compilation happens in
++/// `Tokenizer`, which reports invalid patterns by throwing (and the test suite
++/// compiles every shipped rule, so a typo cannot silently disable highlighting).
++struct HighlightRule: Sendable {
++    let pattern: String
++    let kind: TokenKind
++
++    init(_ pattern: String, _ kind: TokenKind) {
++        self.pattern = pattern
++        self.kind = kind
++    }
++}
++
++/// A classified range. Ranges are UTF-16 offsets (`NSRange`).
++struct Token: Equatable, Sendable {
++    let range: NSRange
++    let kind: TokenKind
++}
++
++/// Finds tokens by running a format's rules over (part of) a string.
++///
++/// Tokens are returned **in rule order**. Applying them in that order, later
++/// rules overwrite earlier ones, which is the priority scheme documented on
++/// `DocumentFormat.highlightRules`.
++///
++/// This is deliberately a line-oriented regular-expression tokenizer: simple
++/// and fast, but it cannot see constructs that span lines (fenced code blocks,
++/// multi-line HTML comments). Replacing it with a stateful lexer is on the
++/// roadmap; the `HighlightRule` -> `TokenKind` boundary is designed so that
++/// swap does not touch the formats' public shape.
++struct Tokenizer {
++    private struct CompiledRule {
++        let regex: NSRegularExpression
++        let kind: TokenKind
++    }
++
++    private let rules: [CompiledRule]
++
++    /// - Throws: if any rule's pattern is not a valid regular expression.
++    init(rules: [HighlightRule]) throws {
++        self.rules = try rules.map {
++            CompiledRule(
++                regex: try NSRegularExpression(pattern: $0.pattern, options: [.anchorsMatchLines]),
++                kind: $0.kind)
++        }
++    }
++
++    /// Tokens whose matches lie within `range` of `text`.
++    ///
++    /// `range` should start and end on line boundaries so `^` and `$` behave.
++    func tokens(in text: String, range: NSRange) -> [Token] {
++        var result: [Token] = []
++        for rule in rules {
++            rule.regex.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
++                guard let match, match.range.length > 0 else { return }
++                result.append(Token(range: match.range, kind: rule.kind))
++            }
++        }
++        return result
++    }
++}
+diff --git a/Sources/ModEditCore/IO/TextIO.swift b/Sources/ModEditCore/IO/TextIO.swift
+index 6acd261..a5c3908 100644
+--- a/Sources/ModEditCore/IO/TextIO.swift
++++ b/Sources/ModEditCore/IO/TextIO.swift
+@@ -1,23 +1,70 @@
+ import Foundation
+ 
++/// Decoding and encoding of text files, preserving the original encoding so a
++/// file is written back the way it was read.
+ enum TextIO {
+-    static func decode(_ data: Data) -> (text: String, encoding: String.Encoding) {
+-        if data.count >= 3, data[0] == 0xEF, data[1] == 0xBB, data[2] == 0xBF {
+-            return (String(decoding: data.dropFirst(3), as: UTF8.self), .utf8)
++
++    /// The result of decoding a file.
++    struct Decoded: Equatable, Sendable {
++        var text: String
++        var encoding: String.Encoding
++        /// Whether the file started with a UTF-8 byte-order mark, so it can be
++        /// written back (dropping it silently would change the file).
++        var hasUTF8BOM: Bool
++    }
++
++    private static let utf8BOM: [UInt8] = [0xEF, 0xBB, 0xBF]
++
++    /// Decodes `data`, detecting the encoding.
++    ///
++    /// Order: UTF-8 BOM, UTF-16 BOM, *strict* UTF-8, then Foundation's
++    /// heuristic detector. Strict UTF-8 comes before the heuristic because the
++    /// detector can misjudge valid UTF-8.
++    ///
++    /// - Throws: `CocoaError(.fileReadInapplicableStringEncoding)` rather than
++    ///   returning replacement characters, which would corrupt the file on save.
++    static func decode(_ data: Data) throws -> Decoded {
++        if data.isEmpty {
++            return Decoded(text: "", encoding: .utf8, hasUTF8BOM: false)
++        }
++        if data.starts(with: utf8BOM) {
++            guard let text = String(data: data.dropFirst(utf8BOM.count), encoding: .utf8) else {
++                throw CocoaError(.fileReadInapplicableStringEncoding)
++            }
++            return Decoded(text: text, encoding: .utf8, hasUTF8BOM: true)
+         }
+-        var used: NSString.Encoding = .utf8
+-        if NSString.stringEncoding(for: data, encodingOptions: nil,
+-                                   convertedString: nil, usedEncoding: &used),
+-           let s = String(data: data, encoding: String.Encoding(rawValue: used.rawValue)) {
+-            return (s, String.Encoding(rawValue: used.rawValue))
++        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]),
++           let text = String(data: data, encoding: .utf16) {
++            return Decoded(text: text, encoding: .utf16, hasUTF8BOM: false)
+         }
+-        return (String(decoding: data, as: UTF8.self), .utf8)
++        if let text = String(data: data, encoding: .utf8) {
++            return Decoded(text: text, encoding: .utf8, hasUTF8BOM: false)
++        }
++
++        var converted: NSString?
++        var lossy = ObjCBool(false)
++        let raw = NSString.stringEncoding(for: data,
++                                          encodingOptions: nil,
++                                          convertedString: &converted,
++                                          usedLossyConversion: &lossy)
++        if raw != 0, !lossy.boolValue, let converted {
++            return Decoded(text: converted as String,
++                           encoding: String.Encoding(rawValue: raw),
++                           hasUTF8BOM: false)
++        }
++        throw CocoaError(.fileReadInapplicableStringEncoding)
+     }
+ 
+-    static func encode(_ text: String, as encoding: String.Encoding) throws -> Data {
+-        guard let data = text.data(using: encoding, allowLossyConversion: false) else {
++    /// Encodes `text`, failing instead of losing characters.
++    static func encode(_ text: String,
++                       as encoding: String.Encoding,
++                       withUTF8BOM: Bool = false) throws -> Data {
++        guard var data = text.data(using: encoding, allowLossyConversion: false) else {
+             throw CocoaError(.fileWriteInapplicableStringEncoding)
+         }
++        if withUTF8BOM && encoding == .utf8 {
++            data.insert(contentsOf: utf8BOM, at: 0)
++        }
+         return data
+     }
+ }
+diff --git a/Sources/ModEditCore/ModEditScene.swift b/Sources/ModEditCore/ModEditScene.swift
+new file mode 100644
+index 0000000..f274ee8
+--- /dev/null
++++ b/Sources/ModEditCore/ModEditScene.swift
+@@ -0,0 +1,16 @@
++import SwiftUI
++
++/// The document scene of the editor and the **only public entry point** of
++/// `ModEditCore`.
++///
++/// Everything else in the module is internal on purpose: a small public surface
++/// keeps the app target honest and leaves the core free to change.
++public struct ModEditScene: Scene {
++    public init() {}
++
++    public var body: some Scene {
++        DocumentGroup(newDocument: EditorDocument()) { configuration in
++            EditorRootView(document: configuration.document)
++        }
++    }
++}
+diff --git a/Sources/ModEditCore/Model/EditorDocument.swift b/Sources/ModEditCore/Model/EditorDocument.swift
+index 923519a..db068ad 100644
+--- a/Sources/ModEditCore/Model/EditorDocument.swift
++++ b/Sources/ModEditCore/Model/EditorDocument.swift
+@@ -1,30 +1,82 @@
+ import SwiftUI
+ import UniformTypeIdentifiers
+ 
+-final class EditorDocument: ReferenceFileDocument {
+-    static var readableContentTypes: [UTType] {
+-        [.plainText, .utf8PlainText, .markdown, .html, .xml, .json, .yaml]
++/// The persisted document: text, encoding and format.
++///
++/// ## Why this type looks the way it does
++///
++/// `ReferenceFileDocument` requires conforming types to be `Sendable`, and
++/// SwiftUI calls `snapshot` and `fileWrapper` on different threads (Apple:
++/// "don't perform serialization on the main actor"). The document therefore:
++///
++/// * keeps its state behind a lock (`@unchecked Sendable` is justified by that
++///   lock being the *only* access path);
++/// * hands SwiftUI a **value-type snapshot**, not itself. Returning the live
++///   model, as the previous version did, races with ongoing typing.
++///
++/// UI state (published text, the preview) lives in the main-actor `EditorModel`,
++/// which writes edits back here.
++final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
++
++    /// Everything that is saved, plus the chosen format.
++    struct Content: Sendable {
++        var text: String
++        var encoding: String.Encoding
++        var hasUTF8BOM: Bool
++        var format: any DocumentFormat
++    }
++
++    /// An immutable copy of what must be written to disk.
++    struct Snapshot: Sendable {
++        let text: String
++        let encoding: String.Encoding
++        let hasUTF8BOM: Bool
+     }
++
++    static var readableContentTypes: [UTType] { FormatRegistry.standard.readableContentTypes }
+     static var writableContentTypes: [UTType] { readableContentTypes }
+ 
+-    @Published var model: EditorModel
++    private let lock = NSLock()
++    private var storage: Content
++
++    /// A thread-safe copy of the current content.
++    var content: Content { lock.withLock { storage } }
+ 
++    /// A new, empty plain-text document.
+     init() {
+-        model = EditorModel(text: "", format: PlainTextFormat())
++        storage = Content(text: "", encoding: .utf8, hasUTF8BOM: false,
++                          format: FormatRegistry.standard.fallback)
+     }
+ 
+-    init(configuration: ReadConfiguration) throws {
++    required init(configuration: ReadConfiguration) throws {
+         guard let data = configuration.file.regularFileContents else {
+-            throw CocoaError(.fileReadNoPermission)
++            throw CocoaError(.fileReadCorruptFile)
+         }
+-        let format = FormatRegistry.shared.format(for: configuration.contentType)
+-        model = try EditorModel(data: data, format: format)
++        let decoded = try TextIO.decode(data)
++        storage = Content(text: decoded.text,
++                          encoding: decoded.encoding,
++                          hasUTF8BOM: decoded.hasUTF8BOM,
++                          format: FormatRegistry.standard.format(for: configuration.contentType))
+     }
+ 
+-    func snapshot(contentType: UTType) throws -> EditorModel { model }
++    // MARK: Mutation (called by EditorModel)
++
++    func setText(_ text: String) { lock.withLock { storage.text = text } }
++    func setFormat(_ format: any DocumentFormat) { lock.withLock { storage.format = format } }
++
++    // MARK: ReferenceFileDocument
++
++    func snapshot(contentType: UTType) throws -> Snapshot {
++        let current = content
++        return Snapshot(text: current.text,
++                        encoding: current.encoding,
++                        hasUTF8BOM: current.hasUTF8BOM)
++    }
+ 
+-    func fileWrapper(snapshot: EditorModel,
+-                     configuration: WriteConfiguration) throws -> FileWrapper {
+-        FileWrapper(regularFileWithContents: try snapshot.saveData())
++    func fileWrapper(snapshot: Snapshot, configuration: WriteConfiguration) throws -> FileWrapper {
++        let data = try TextIO.encode(snapshot.text,
++                                     as: snapshot.encoding,
++                                     withUTF8BOM: snapshot.hasUTF8BOM)
++        return FileWrapper(regularFileWithContents: data)
+     }
+ }
+diff --git a/Sources/ModEditCore/Model/EditorModel.swift b/Sources/ModEditCore/Model/EditorModel.swift
+index 5d063f2..59ad6bc 100644
+--- a/Sources/ModEditCore/Model/EditorModel.swift
++++ b/Sources/ModEditCore/Model/EditorModel.swift
+@@ -1,27 +1,38 @@
++import Combine
+ import Foundation
+ 
++/// Main-actor view model for one editor window.
++///
++/// Owns the *published* state SwiftUI observes (the text for the preview, the
++/// current format) and forwards every change to the thread-safe
++/// `EditorDocument` that gets saved.
++///
++/// Note: the `NSTextView`'s text storage remains the live source of truth while
++/// typing; `text` here is a copy synchronised on each edit (see "Known
++/// limitations" in the README for the cost of that).
+ @MainActor
+ final class EditorModel: ObservableObject {
+     @Published private(set) var text: String
+-    @Published var format: any DocumentFormat
++    @Published private(set) var format: any DocumentFormat
+ 
+-    var encoding: String.Encoding = .utf8
++    private let document: EditorDocument
+ 
+-    init(text: String, format: any DocumentFormat) {
+-        self.text = text
+-        self.format = format
++    init(document: EditorDocument) {
++        let content = document.content
++        self.document = document
++        self.text = content.text
++        self.format = content.format
+     }
+ 
+-    init(data: Data, format: any DocumentFormat) throws {
+-        let decoded = TextIO.decode(data)
+-        self.text = decoded.text
+-        self.encoding = decoded.encoding
+-        self.format = format
++    /// Called by the text view after every user edit.
++    func textDidChange(_ newText: String) {
++        text = newText
++        document.setText(newText)
+     }
+ 
+-    func syncText(_ newText: String) { text = newText }
+-
+-    func saveData() throws -> Data {
+-        try TextIO.encode(text, as: encoding)
++    /// Switches the document's format (highlighting and preview).
++    func setFormat(_ newFormat: any DocumentFormat) {
++        format = newFormat
++        document.setFormat(newFormat)
+     }
+ }
+diff --git a/Sources/ModEditCore/Preview/HTMLEscaping.swift b/Sources/ModEditCore/Preview/HTMLEscaping.swift
+new file mode 100644
+index 0000000..4ff2693
+--- /dev/null
++++ b/Sources/ModEditCore/Preview/HTMLEscaping.swift
+@@ -0,0 +1,57 @@
++import Foundation
++
++/// Escaping for text that is inserted into HTML.
++enum HTMLEscaping {
++    /// Escapes `& < > " '` so `text` is inert in element content *and* in
++    /// quoted attribute values.
++    static func escape(_ text: String) -> String {
++        var out = ""
++        out.reserveCapacity(text.count)
++        for character in text {
++            switch character {
++            case "&":  out += "&amp;"
++            case "<":  out += "&lt;"
++            case ">":  out += "&gt;"
++            case "\"": out += "&quot;"
++            case "'":  out += "&#39;"
++            default:   out.append(character)
++            }
++        }
++        return out
++    }
++}
++
++/// The HTML page that wraps rendered preview bodies.
++enum PreviewPage {
++    /// Wraps `body` in a complete document with shared styling.
++    ///
++    /// The Content-Security-Policy forbids scripts, remote loads and frames, so
++    /// even if an escaping bug let markup through it could not execute code.
++    /// `color-scheme` makes the preview follow light/dark mode.
++    static func wrap(body: String) -> String {
++        """
++        <!DOCTYPE html>
++        <html>
++        <head>
++        <meta charset="utf-8">
++        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
++        <style>
++        :root { color-scheme: light dark; }
++        body { font-family: -apple-system, sans-serif; line-height: 1.5; padding: 20px; }
++        h1, h2, h3, h4, h5, h6 { line-height: 1.25; }
++        code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; }
++        code { background: rgba(127,127,127,0.15); padding: 1px 5px; border-radius: 3px; }
++        pre { background: rgba(127,127,127,0.12); padding: 12px; border-radius: 6px; overflow-x: auto; }
++        pre code { background: none; padding: 0; }
++        blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid rgba(127,127,127,0.5); color: gray; }
++        .math { font-family: "STIX Two Math", "Times New Roman", serif; font-style: italic; }
++        .math.display { display: block; text-align: center; margin: 1em 0; }
++        </style>
++        </head>
++        <body>
++        \(body)
++        </body>
++        </html>
++        """
++    }
++}
+diff --git a/Sources/ModEditCore/Preview/LaTeXHTML.swift b/Sources/ModEditCore/Preview/LaTeXHTML.swift
+new file mode 100644
+index 0000000..7a97885
+--- /dev/null
++++ b/Sources/ModEditCore/Preview/LaTeXHTML.swift
+@@ -0,0 +1,92 @@
++import Foundation
++
++/// A lightweight LaTeX preview: it *renders* common constructs differently from
++/// the ASCII source (the editor's headline feature) without being a TeX engine.
++///
++/// Supported: `\section`/`\subsection`/`\subsubsection`, `\textbf`, `\emph`,
++/// `\textit`, `\texttt`, `\\`, `--`/`---`, `~`, `%` comments, inline `$...$`
++/// and display `$$...$$` math with Greek letters and common operators
++/// (see `symbols`), and `^`/`_` super- and subscripts.
++///
++/// Not supported: environments, `\frac`, `\sqrt`, macros, packages, citations.
++/// For typeset-quality maths, bundle KaTeX (see the README roadmap).
++///
++/// Everything is HTML-escaped first, so source such as `a < b` or `<script>`
++/// is displayed, never interpreted.
++enum LaTeXHTML {
++
++    /// `\name` -> symbol.
++    static let symbols: [String: String] = [
++        "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
++        "varepsilon": "ε", "theta": "θ", "lambda": "λ", "mu": "μ", "pi": "π",
++        "rho": "ρ", "sigma": "σ", "tau": "τ", "phi": "φ", "omega": "ω",
++        "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ", "Lambda": "Λ", "Pi": "Π",
++        "Sigma": "Σ", "Phi": "Φ", "Omega": "Ω",
++        "times": "×", "cdot": "·", "pm": "±", "infty": "∞", "sum": "∑",
++        "prod": "∏", "int": "∫", "partial": "∂", "nabla": "∇",
++        "leq": "≤", "geq": "≥", "neq": "≠", "approx": "≈", "equiv": "≡",
++        "to": "→", "rightarrow": "→", "leftarrow": "←", "Rightarrow": "⇒",
++        "Leftarrow": "⇐", "in": "∈", "subset": "⊂", "forall": "∀", "exists": "∃",
++        "ldots": "…", "dots": "…",
++    ]
++
++    private static let blockBreak = "\u{E001}"
++
++    static func render(_ source: String) -> String {
++        var text = source
++
++        // With a preamble, preview only the document body.
++        if let begin = text.range(of: "\\begin{document}") {
++            text = String(text[begin.upperBound...])
++            if let end = text.range(of: "\\end{document}") {
++                text = String(text[..<end.lowerBound])
++            }
++        }
++
++        // Strip comments (an unescaped % to end of line), then escape.
++        text = text.replacingOccurrences(of: #"(?m)(?<!\\)%.*$"#, with: "", options: .regularExpression)
++        text = HTMLEscaping.escape(text)
++
++        // Sectioning commands become headings set apart by blank lines.
++        text = text.replacingMatches(
++            of: #"(?m)^[ \t]*\\(section|subsection|subsubsection)\*?\{([^}\n]*)\}"#
++        ) { groups in
++            let level = groups[1] == "section" ? 2 : (groups[1] == "subsection" ? 3 : 4)
++            return "\n\n<h\(level)>\(inline(groups[2]))</h\(level)>\n\n"
++        }
++
++        let blocks = text
++            .replacingOccurrences(of: #"\n\s*\n"#, with: blockBreak, options: .regularExpression)
++            .components(separatedBy: blockBreak)
++            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
++            .filter { !$0.isEmpty }
++
++        return blocks
++            .map { $0.hasPrefix("<h") ? $0 : "<p>\(inline($0))</p>" }   // escaped text never starts with "<"
++            .joined(separator: "\n")
++    }
++
++    /// Inline constructs. Input is already HTML-escaped.
++    private static func inline(_ text: String) -> String {
++        var s = text
++        s = s.replacingMatches(of: #"(?s)\$\$(.+?)\$\$"#) { "<span class=\"math display\">\(math($0[1]))</span>" }
++        s = s.replacingMatches(of: #"\$([^$\n]+)\$"#) { "<span class=\"math\">\(math($0[1]))</span>" }
++        s = s.replacingMatches(of: #"\\textbf\{([^{}]*)\}"#) { "<strong>\($0[1])</strong>" }
++        s = s.replacingMatches(of: #"\\(?:emph|textit)\{([^{}]*)\}"#) { "<em>\($0[1])</em>" }
++        s = s.replacingMatches(of: #"\\texttt\{([^{}]*)\}"#) { "<code>\($0[1])</code>" }
++        s = s.replacingOccurrences(of: #"\\\\"#, with: "<br>", options: .regularExpression)
++        s = s.replacingMatches(of: #"\\([A-Za-z]+)"#) { symbols[$0[1]] ?? $0[0] }
++        s = s.replacingOccurrences(of: "---", with: "\u{2014}")
++        s = s.replacingOccurrences(of: "--", with: "\u{2013}")
++        return s.replacingOccurrences(of: "~", with: "\u{00A0}")
++    }
++
++    /// Math content: symbols, then `^{..}`/`^x` and `_{..}`/`_x` scripts.
++    private static func math(_ text: String) -> String {
++        var s = text
++        s = s.replacingMatches(of: #"\\([A-Za-z]+)"#) { symbols[$0[1]] ?? $0[0] }
++        s = s.replacingMatches(of: #"\^\{([^{}]*)\}|\^(\w)"#) { "<sup>\($0[1].isEmpty ? $0[2] : $0[1])</sup>" }
++        s = s.replacingMatches(of: #"_\{([^{}]*)\}|_(\w)"#) { "<sub>\($0[1].isEmpty ? $0[2] : $0[1])</sub>" }
++        return s
++    }
++}
+diff --git a/Sources/ModEditCore/Preview/MarkdownHTML.swift b/Sources/ModEditCore/Preview/MarkdownHTML.swift
+new file mode 100644
+index 0000000..0158262
+--- /dev/null
++++ b/Sources/ModEditCore/Preview/MarkdownHTML.swift
+@@ -0,0 +1,152 @@
++import Foundation
++
++/// A small Markdown-to-HTML converter for the live preview.
++///
++/// Supported: ATX headings (`#`..`######`), paragraphs, fenced code blocks,
++/// block quotes, bullet and numbered lists (flat), and the inline forms
++/// `` `code` ``, `**bold**`, `*italic*` and `[text](http(s)/mailto URL)`.
++///
++/// Not supported (yet): nested lists, tables, images, setext headings, HTML
++/// pass-through, `_underscore_` emphasis. For full CommonMark/GFM, replace this
++/// with `swift-markdown` (see the README roadmap).
++///
++/// ## Safety
++///
++/// All text is HTML-escaped *before* any markup is introduced, link targets are
++/// restricted to `http`, `https` and `mailto`, and code content is never
++/// re-interpreted. Raw HTML in the source is shown as text, not executed.
++enum MarkdownHTML {
++
++    static func render(_ source: String) -> String {
++        // "\r\n" is a single Character in Swift, so normalise before splitting.
++        let normalized = source
++            .replacingOccurrences(of: "\r\n", with: "\n")
++            .replacingOccurrences(of: "\r", with: "\n")
++
++        var out: [String] = []
++        var paragraph: [String] = []
++        var listTag: String?
++        var inFence = false
++        var fence: [String] = []
++
++        func flushParagraph() {
++            guard !paragraph.isEmpty else { return }
++            out.append("<p>" + inline(paragraph.joined(separator: "\n")) + "</p>")
++            paragraph.removeAll()
++        }
++        func closeList() {
++            guard let tag = listTag else { return }
++            out.append("</\(tag)>")
++            listTag = nil
++        }
++        func flushFence() {
++            out.append("<pre><code>" + HTMLEscaping.escape(fence.joined(separator: "\n")) + "</code></pre>")
++            fence.removeAll()
++        }
++
++        for line in normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
++            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
++                if inFence {
++                    flushFence()
++                    inFence = false
++                } else {
++                    flushParagraph()
++                    closeList()
++                    inFence = true
++                }
++                continue
++            }
++            if inFence {
++                fence.append(line)
++                continue
++            }
++            if line.trimmingCharacters(in: .whitespaces).isEmpty {
++                flushParagraph()
++                closeList()
++                continue
++            }
++            if let level = headingLevel(line) {
++                flushParagraph()
++                closeList()
++                let title = String(line.dropFirst(level).drop(while: { $0 == " " }))
++                out.append("<h\(level)>\(inline(title))</h\(level)>")
++                continue
++            }
++            if line.hasPrefix(">") {
++                flushParagraph()
++                closeList()
++                let quoted = String(line.dropFirst().drop(while: { $0 == " " }))
++                out.append("<blockquote>\(inline(quoted))</blockquote>")
++                continue
++            }
++            if let item = listItem(line) {
++                flushParagraph()
++                if listTag != item.tag {
++                    closeList()
++                    out.append("<\(item.tag)>")
++                    listTag = item.tag
++                }
++                out.append("<li>\(inline(item.content))</li>")
++                continue
++            }
++            closeList()
++            paragraph.append(line)
++        }
++        if inFence { flushFence() }   // unterminated fence: still show the code
++        flushParagraph()
++        closeList()
++        return out.joined(separator: "\n")
++    }
++
++    // MARK: Blocks
++
++    /// `1...6` if `line` is an ATX heading (hashes followed by a space).
++    private static func headingLevel(_ line: String) -> Int? {
++        let hashes = line.prefix(while: { $0 == "#" }).count
++        guard (1...6).contains(hashes), line.dropFirst(hashes).first == " " else { return nil }
++        return hashes
++    }
++
++    private static func listItem(_ line: String) -> (tag: String, content: String)? {
++        for marker in ["- ", "* ", "+ "] where line.hasPrefix(marker) {
++            return ("ul", String(line.dropFirst(marker.count)))
++        }
++        let digits = line.prefix(while: { $0.isASCII && $0.isNumber })
++        if !digits.isEmpty, line.dropFirst(digits.count).hasPrefix(". ") {
++            return ("ol", String(line.dropFirst(digits.count + 2)))
++        }
++        return nil
++    }
++
++    // MARK: Inline
++
++    /// Private-use character delimiting code-span placeholders.
++    private static let marker = "\u{E000}"
++
++    static func inline(_ text: String) -> String {
++        var s = HTMLEscaping.escape(text)
++
++        // Code spans first, parked behind placeholders so that emphasis and
++        // link syntax inside them is left alone.
++        var codeSpans: [String] = []
++        s = s.replacingMatches(of: #"`([^`\n]+)`"#) { groups in
++            codeSpans.append("<code>\(groups[1])</code>")
++            return "\(marker)\(codeSpans.count - 1)\(marker)"
++        }
++
++        s = s.replacingMatches(of: #"\[([^\]\n]+)\]\(([^)\s]+)\)"#) { groups in
++            let scheme = groups[2].lowercased()
++            guard scheme.hasPrefix("http://") || scheme.hasPrefix("https://") || scheme.hasPrefix("mailto:")
++            else { return groups[0] }   // e.g. javascript: stays inert text
++            // The URL was already escaped above, so it is safe inside quotes.
++            return "<a href=\"\(groups[2])\">\(groups[1])</a>"
++        }
++        s = s.replacingMatches(of: #"(?s)\*\*(?=\S)(.+?)(?<=\S)\*\*"#) { "<strong>\($0[1])</strong>" }
++        s = s.replacingMatches(of: #"\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*"#) { "<em>\($0[1])</em>" }
++
++        return s.replacingMatches(of: "\(marker)(\\d+)\(marker)") { groups in
++            guard let index = Int(groups[1]), codeSpans.indices.contains(index) else { return "" }
++            return codeSpans[index]
++        }
++    }
++}
+diff --git a/Sources/ModEditCore/Preview/PreviewRenderer.swift b/Sources/ModEditCore/Preview/PreviewRenderer.swift
+index f380458..4cb80fc 100644
+--- a/Sources/ModEditCore/Preview/PreviewRenderer.swift
++++ b/Sources/ModEditCore/Preview/PreviewRenderer.swift
+@@ -1,51 +1,25 @@
+ import Foundation
+ 
+-final class MarkdownPreviewRenderer: PreviewRenderer {
++/// Markdown preview: converts with `MarkdownHTML` and wraps in the shared page.
++struct MarkdownPreviewRenderer: PreviewRenderer {
+     func renderHTML(from source: String) async throws -> String {
+-        let escaped = source
+-            .replacingOccurrences(of: "&", with: "&amp;")
+-            .replacingOccurrences(of: "<", with: "&lt;")
+-            .replacingOccurrences(of: ">", with: "&gt;")
+-        let html = escaped
+-            .replacingOccurrences(of: "### (.*)", with: "<h3>$1</h3>", options: .regularExpression)
+-            .replacingOccurrences(of: "## (.*)", with: "<h2>$1</h2>", options: .regularExpression)
+-            .replacingOccurrences(of: "# (.*)", with: "<h1>$1</h1>", options: .regularExpression)
+-            .replacingOccurrences(of: "\\*\\*(.*?)\\*\\*", with: "<strong>$1</strong>", options: .regularExpression)
+-            .replacingOccurrences(of: "\\*(.*?)\\*", with: "<em>$1</em>", options: .regularExpression)
+-            .replacingOccurrences(of: "`(.*?)`", with: "<code>$1</code>", options: .regularExpression)
+-            .replacingOccurrences(of: "\n", with: "<br>")
+-        return """
+-        <!DOCTYPE html>
+-        <html>
+-        <head>
+-        <style>
+-        body { font-family: -apple-system, sans-serif; padding: 20px; color: #333; }
+-        h1, h2, h3 { color: #1a73e8; }
+-        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
+-        </style>
+-        </head>
+-        <body>\(html)</body>
+-        </html>
+-        """
++        PreviewPage.wrap(body: MarkdownHTML.render(source))
+     }
+ }
+ 
+-final class LaTeXPreviewRenderer: PreviewRenderer {
++/// LaTeX preview: a lightweight rendering of common constructs (see `LaTeXHTML`).
++struct LaTeXPreviewRenderer: PreviewRenderer {
+     func renderHTML(from source: String) async throws -> String {
+-        return """
+-        <!DOCTYPE html>
+-        <html>
+-        <head>
+-        <style>body { font-family: monospace; padding: 20px; white-space: pre-wrap; }</style>
+-        </head>
+-        <body>\(source)</body>
+-        </html>
+-        """
++        PreviewPage.wrap(body: LaTeXHTML.render(source))
+     }
+ }
+ 
+-final class HTMLPreviewRenderer: PreviewRenderer {
+-    func renderHTML(from source: String) async throws -> String {
+-        return source
+-    }
++/// HTML preview: shows the user's own page as written.
++///
++/// The preview web view runs with JavaScript disabled and blocks navigation
++/// (see `PreviewPane`), so scripts in the document do not execute. Relative
++/// resources (images, stylesheets) do not resolve because `DocumentGroup` does
++/// not expose the file URL; that needs an `NSDocument`-based app.
++struct HTMLPreviewRenderer: PreviewRenderer {
++    func renderHTML(from source: String) async throws -> String { source }
+ }
+diff --git a/Sources/ModEditCore/Preview/RegexReplace.swift b/Sources/ModEditCore/Preview/RegexReplace.swift
+new file mode 100644
+index 0000000..1e6fe00
+--- /dev/null
++++ b/Sources/ModEditCore/Preview/RegexReplace.swift
+@@ -0,0 +1,34 @@
++import Foundation
++
++extension String {
++    /// Replaces every match of `pattern` with the result of `transform`.
++    ///
++    /// `transform` receives the capture groups: index 0 is the whole match,
++    /// 1... are the groups, and a group that did not participate is `""`.
++    /// Needed because `replacingOccurrences(options: .regularExpression)` only
++    /// supports static templates, not computed replacements.
++    ///
++    /// Patterns are compile-time constants in this codebase, so an invalid one
++    /// is a programmer error: it trips `assertionFailure` in debug builds and
++    /// returns the string unchanged in release builds.
++    func replacingMatches(of pattern: String, with transform: ([String]) -> String) -> String {
++        guard let regex = try? NSRegularExpression(pattern: pattern) else {
++            assertionFailure("Invalid regular expression: \(pattern)")
++            return self
++        }
++        let ns = self as NSString
++        var result = ""
++        var cursor = 0
++        for match in regex.matches(in: self, range: NSRange(location: 0, length: ns.length)) {
++            result += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
++            let groups = (0..<match.numberOfRanges).map { index -> String in
++                let range = match.range(at: index)
++                return range.location == NSNotFound ? "" : ns.substring(with: range)
++            }
++            result += transform(groups)
++            cursor = NSMaxRange(match.range)
++        }
++        result += ns.substring(from: cursor)
++        return result
++    }
++}
+diff --git a/Sources/ModEditCore/UI/EditorRootView.swift b/Sources/ModEditCore/UI/EditorRootView.swift
+index ef31dc5..da4f9f1 100644
+--- a/Sources/ModEditCore/UI/EditorRootView.swift
++++ b/Sources/ModEditCore/UI/EditorRootView.swift
+@@ -1,22 +1,50 @@
+ import SwiftUI
+ 
++/// One editor window: source editor on the left, optional live preview on the right.
++@MainActor
+ struct EditorRootView: View {
+-    @ObservedObject var document: EditorDocument
++    /// `@StateObject` (not `@ObservedObject` on the document): the view must
++    /// observe the *model*, whose `text` changes on every keystroke. Observing
++    /// only the document, as before, meant the preview never refreshed.
++    @StateObject private var model: EditorModel
+     @State private var showPreview = true
+-    private var model: EditorModel { document.model }
++
++    init(document: EditorDocument) {
++        _model = StateObject(wrappedValue: EditorModel(document: document))
++    }
+ 
+     var body: some View {
++        let renderer = model.format.makePreviewRenderer()
+         HSplitView {
+             EditorTextView(model: model).frame(minWidth: 300)
+-            if showPreview, let renderer = model.format.makePreviewRenderer() {
++            if showPreview, let renderer {
+                 PreviewPane(renderer: renderer, source: model.text).frame(minWidth: 300)
+             }
+         }
+         .toolbar {
+-            Button { showPreview.toggle() } label: {
+-                Label("Preview", systemImage: "sidebar.right")
++            ToolbarItem {
++                Picker("Format", selection: formatID) {
++                    ForEach(FormatRegistry.standard.allFormats, id: \.id) { format in
++                        Text(format.displayName).tag(format.id)
++                    }
++                }
++            }
++            ToolbarItem {
++                Button { showPreview.toggle() } label: {
++                    Label("Preview", systemImage: "sidebar.right")
++                }
++                .disabled(renderer == nil)
+             }
+-            .disabled(model.format.makePreviewRenderer() == nil)
+         }
+     }
++
++    private var formatID: Binding<String> {
++        Binding(
++            get: { model.format.id },
++            set: { id in
++                if let format = FormatRegistry.standard.format(withID: id) {
++                    model.setFormat(format)
++                }
++            })
++    }
+ }
+diff --git a/Sources/ModEditCore/UI/EditorTextView.swift b/Sources/ModEditCore/UI/EditorTextView.swift
+index d6bd3e4..bfd7f5a 100644
+--- a/Sources/ModEditCore/UI/EditorTextView.swift
++++ b/Sources/ModEditCore/UI/EditorTextView.swift
+@@ -1,6 +1,7 @@
+ import SwiftUI
+ import AppKit
+ 
++/// SwiftUI wrapper around a TextKit 2 `NSTextView`.
+ struct EditorTextView: NSViewRepresentable {
+     @ObservedObject var model: EditorModel
+ 
+@@ -12,7 +13,6 @@ struct EditorTextView: NSViewRepresentable {
+         scrollView.borderType = .noBorder
+ 
+         let textView = NSTextView(frame: .zero, usingTextLayoutManager: true)
+-        textView.delegate = context.coordinator
+         textView.isEditable = true
+         textView.isSelectable = true
+         textView.allowsUndo = true
+@@ -20,79 +20,161 @@ struct EditorTextView: NSViewRepresentable {
+         textView.usesFindBar = true
+         textView.isIncrementalSearchingEnabled = true
+ 
++        // This is a source editor: never "fix" the user's characters.
+         textView.isAutomaticQuoteSubstitutionEnabled = false
+         textView.isAutomaticDashSubstitutionEnabled = false
+         textView.isAutomaticTextReplacementEnabled = false
+         textView.isAutomaticSpellingCorrectionEnabled = false
++        textView.isAutomaticLinkDetectionEnabled = false
++        textView.isAutomaticDataDetectionEnabled = false
++        textView.smartInsertDeleteEnabled = false
+ 
+         textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+         textView.textContainerInset = NSSize(width: 10, height: 12)
+         textView.isVerticallyResizable = true
+         textView.isHorizontallyResizable = false
+         textView.autoresizingMask = [.width]
++        textView.textContainer?.widthTracksTextView = true
+         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                   height: CGFloat.greatestFiniteMagnitude)
+ 
+         scrollView.documentView = textView
+-        context.coordinator.attach(to: textView)
++
++        // Order matters: load the text *before* attaching the storage delegate.
++        // Otherwise the initial load is reported as one giant edit and the
++        // whole document is highlighted synchronously, freezing large files.
++        // The coordinator instead runs a chunked, cancellable pass.
+         textView.string = model.text
+-        context.coordinator.highlightEntireDocument()
++        context.coordinator.attach(to: textView)
++        context.coordinator.modelDidChange()
+         return scrollView
+     }
+ 
+     func updateNSView(_ scrollView: NSScrollView, context: Context) {
++        // The text view is the live source of truth for the text; only a
++        // format change needs action here.
++        context.coordinator.modelDidChange()
+     }
+ }
+ 
+ extension EditorTextView {
+-    @MainActor final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
+-        let model: EditorModel
+-        weak var textView: NSTextView?
++    @MainActor
++    final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
++        private static let debounce: Duration = .milliseconds(80)
++        private static let chunkSize = 50_000
++
++        private let model: EditorModel
++        private weak var textView: NSTextView?
++        private let theme = EditorTheme()
++
++        /// Highlighter cache: compiling the regular expressions is expensive,
++        /// so build once per format instead of once per pass.
++        private var highlighter: StorageHighlighter?
++        private var highlighterFormatID: String?
++
++        /// Format for which a whole-document pass was last started.
++        private var fullPassFormatID: String?
++
++        private var dirty = DirtyRange()
+         private var highlightTask: Task<Void, Never>?
++        private var fullPassTask: Task<Void, Never>?
++
++        init(model: EditorModel) {
++            self.model = model
++            super.init()
++        }
+ 
+-        init(model: EditorModel) { self.model = model }
++        deinit {
++            highlightTask?.cancel()
++            fullPassTask?.cancel()
++        }
+ 
+         func attach(to textView: NSTextView) {
+             self.textView = textView
++            textView.delegate = self
+             textView.textStorage?.delegate = self
+         }
+ 
++        /// Called from `updateNSView`; starts a full pass when the format changed.
++        func modelDidChange() {
++            guard textView != nil, fullPassFormatID != model.format.id else { return }
++            fullPassFormatID = model.format.id
++            highlightWholeDocument()
++        }
++
++        // MARK: NSTextViewDelegate
++
+         func textDidChange(_ notification: Notification) {
+             guard let textView else { return }
+-            model.syncText(textView.string)
++            model.textDidChange(textView.string)
+         }
+ 
++        // MARK: NSTextStorageDelegate
++
+         func textStorage(_ textStorage: NSTextStorage,
+                          didProcessEditing editedMask: NSTextStorageEditActions,
+                          range editedRange: NSRange, changeInLength delta: Int) {
++            // Highlighting only changes attributes; ignoring those edits
++            // prevents a feedback loop.
+             guard editedMask.contains(.editedCharacters) else { return }
+-            scheduleHighlight(around: editedRange)
++            dirty.record(edited: editedRange, delta: delta)
++            scheduleHighlight()
+         }
+ 
+-        private func scheduleHighlight(around range: NSRange) {
++        // MARK: Highlighting
++
++        private func scheduleHighlight() {
+             highlightTask?.cancel()
+-            highlightTask = Task { @MainActor [weak self] in
+-                try? await Task.sleep(for: .milliseconds(80))
++            highlightTask = Task { [weak self] in
++                try? await Task.sleep(for: Self.debounce)
+                 guard !Task.isCancelled else { return }
+-                self?.highlight(range: range)
++                self?.flushDirtyRange()
+             }
+         }
+ 
+-        private func highlight(range: NSRange) {
+-            guard let storage = textView?.textStorage,
+-                  let highlighter = model.format.makeHighlighter() else { return }
+-            highlighter.highlight(storage, in: range)
++        private func flushDirtyRange() {
++            guard let textView, let storage = textView.textStorage else { return }
++            // Rewriting attributes while an input method is composing (Japanese,
++            // Chinese, Korean...) would wipe the marked-text styling. Wait.
++            if textView.hasMarkedText() {
++                scheduleHighlight()
++                return
++            }
++            guard let range = dirty.take(clampedTo: storage.length),
++                  let highlighter = currentHighlighter() else { return }
++            highlighter.apply(to: storage, in: range)
++        }
++
++        private func currentHighlighter() -> StorageHighlighter? {
++            let format = model.format
++            if highlighterFormatID != format.id {
++                highlighterFormatID = format.id
++                do {
++                    highlighter = try StorageHighlighter(rules: format.highlightRules, theme: theme)
++                } catch {
++                    highlighter = nil
++                    assertionFailure("Invalid highlight rule in format \(format.id): \(error)")
++                }
++            }
++            return highlighter
+         }
+ 
+-        func highlightEntireDocument() {
+-            guard let storage = textView?.textStorage,
+-                  let highlighter = model.format.makeHighlighter() else { return }
+-            let length = (storage.string as NSString).length
+-            let chunk = 50_000
+-            Task { @MainActor in
+-                for start in stride(from: 0, to: length, by: chunk) {
+-                    let r = NSRange(location: start, length: min(chunk, length - start))
+-                    highlighter.highlight(storage, in: r)
++        /// Highlights the document in chunks, yielding between them so the UI
++        /// stays responsive. Re-reads the storage length every iteration, so
++        /// edits made during the pass cannot produce an out-of-range request.
++        private func highlightWholeDocument() {
++            fullPassTask?.cancel()
++            fullPassTask = Task { [weak self] in
++                var start = 0
++                while !Task.isCancelled {
++                    guard let self,
++                          let storage = self.textView?.textStorage,
++                          let highlighter = self.currentHighlighter() else { return }
++                    let length = storage.length
++                    guard start < length else { return }
++                    let end = min(start + Self.chunkSize, length)
++                    highlighter.apply(to: storage, in: NSRange(location: start, length: end - start))
++                    start = end
+                     await Task.yield()
+                 }
+             }
+diff --git a/Sources/ModEditCore/UI/PreviewPane.swift b/Sources/ModEditCore/UI/PreviewPane.swift
+index abfe1dc..a7f2b3d 100644
+--- a/Sources/ModEditCore/UI/PreviewPane.swift
++++ b/Sources/ModEditCore/UI/PreviewPane.swift
+@@ -1,26 +1,81 @@
+ import SwiftUI
+ import WebKit
++import AppKit
+ 
++/// Live preview of the document, rendered by a format's `PreviewRenderer`.
++///
++/// Security: the previewed text is untrusted (it is whatever file the user
++/// opened), so the web view runs with **JavaScript disabled** and **navigation
++/// blocked**. Links open in the default browser instead of replacing the preview.
+ struct PreviewPane: NSViewRepresentable {
+     let renderer: any PreviewRenderer
+     let source: String
+ 
+     func makeCoordinator() -> Coordinator { Coordinator() }
+-    func makeNSView(context: Context) -> WKWebView { WKWebView() }
++
++    func makeNSView(context: Context) -> WKWebView {
++        let configuration = WKWebViewConfiguration()
++        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
++        let webView = WKWebView(frame: .zero, configuration: configuration)
++        webView.navigationDelegate = context.coordinator
++        return webView
++    }
++
+     func updateNSView(_ webView: WKWebView, context: Context) {
+         context.coordinator.render(source, with: renderer, into: webView)
+     }
+ 
+-    @MainActor final class Coordinator {
++    @MainActor
++    final class Coordinator: NSObject, WKNavigationDelegate {
+         private var task: Task<Void, Never>?
++        private var lastHTML: String?
++        private var pendingScrollY: Double = 0
++
++        deinit { task?.cancel() }
++
++        /// Debounced render. Skips identical output and restores the scroll
++        /// position afterwards (reloading used to jump the preview to the top
++        /// on every keystroke).
+         func render(_ source: String, with renderer: any PreviewRenderer, into webView: WKWebView) {
+             task?.cancel()
+-            task = Task {
++            task = Task { [weak self, weak webView] in
+                 try? await Task.sleep(for: .milliseconds(250))
+                 guard !Task.isCancelled else { return }
+-                guard let html = try? await renderer.renderHTML(from: source) else { return }
++
++                let html: String
++                do {
++                    html = try await renderer.renderHTML(from: source)
++                } catch {
++                    html = PreviewPage.wrap(body: "<pre>\(HTMLEscaping.escape("Preview failed: \(error)"))</pre>")
++                }
++                guard !Task.isCancelled, let self, let webView, html != self.lastHTML else { return }
++                self.lastHTML = html
++
++                // App-injected scripts still work with page JavaScript disabled.
++                let value = try? await webView.evaluateJavaScript("window.scrollY")
++                self.pendingScrollY = (value as? Double) ?? 0
+                 webView.loadHTMLString(html, baseURL: nil)
+             }
+         }
++
++        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
++            guard pendingScrollY > 0 else { return }
++            webView.evaluateJavaScript("window.scrollTo(0, \(pendingScrollY))", completionHandler: nil)
++        }
++
++        func webView(_ webView: WKWebView,
++                     decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
++            // `loadHTMLString` is reported as `.other`; anything the user
++            // clicks is not allowed to navigate the preview itself.
++            if navigationAction.navigationType == .linkActivated {
++                if let url = navigationAction.request.url,
++                   let scheme = url.scheme?.lowercased(),
++                   ["http", "https", "mailto"].contains(scheme) {
++                    NSWorkspace.shared.open(url)
++                }
++                return .cancel
++            }
++            return .allow
++        }
+     }
+ }
+diff --git a/Tests/ModEditTests/DirtyRangeTests.swift b/Tests/ModEditTests/DirtyRangeTests.swift
+new file mode 100644
+index 0000000..d40fe8b
+--- /dev/null
++++ b/Tests/ModEditTests/DirtyRangeTests.swift
+@@ -0,0 +1,42 @@
++import Testing
++import Foundation
++@testable import ModEditCore
++
++@Suite("DirtyRange")
++struct DirtyRangeTests {
++
++    @Test func firstEditIsRecordedAsIs() {
++        var dirty = DirtyRange()
++        dirty.record(edited: NSRange(location: 10, length: 1), delta: 1)
++        #expect(dirty.range == NSRange(location: 10, length: 1))
++    }
++
++    @Test func laterEditBeforeShiftsEarlierRange() {
++        var dirty = DirtyRange()
++        dirty.record(edited: NSRange(location: 10, length: 1), delta: 1)
++        // Two characters inserted at the start push the earlier edit to 12...13.
++        dirty.record(edited: NSRange(location: 0, length: 2), delta: 2)
++        #expect(dirty.range == NSRange(location: 0, length: 13))
++    }
++
++    @Test func deletionShiftsEarlierRangeLeft() {
++        var dirty = DirtyRange()
++        dirty.record(edited: NSRange(location: 5, length: 0), delta: -3)
++        dirty.record(edited: NSRange(location: 2, length: 0), delta: -1)
++        #expect(dirty.range == NSRange(location: 2, length: 2))
++    }
++
++    @Test func takeClampsAndClears() {
++        var dirty = DirtyRange()
++        dirty.record(edited: NSRange(location: 5, length: 100), delta: 100)
++        #expect(dirty.take(clampedTo: 20) == NSRange(location: 5, length: 15))
++        #expect(dirty.range == nil)
++        #expect(dirty.take(clampedTo: 20) == nil)
++    }
++
++    @Test func emptyDocumentHasNothingToHighlight() {
++        var dirty = DirtyRange()
++        dirty.record(edited: NSRange(location: 0, length: 0), delta: -4)
++        #expect(dirty.take(clampedTo: 0) == nil)
++    }
++}
+diff --git a/Tests/ModEditTests/FormatTests.swift b/Tests/ModEditTests/FormatTests.swift
+new file mode 100644
+index 0000000..20957da
+--- /dev/null
++++ b/Tests/ModEditTests/FormatTests.swift
+@@ -0,0 +1,88 @@
++import Testing
++import AppKit
++import UniformTypeIdentifiers
++@testable import ModEditCore
++
++@Suite("FormatRegistry")
++struct FormatRegistryTests {
++    let registry = FormatRegistry.standard
++
++    @Test func exactMatchesPickTheirOwnFormat() {
++        #expect(registry.format(for: .markdownText).id == "markdown")
++        #expect(registry.format(for: .latex).id == "latex")
++        #expect(registry.format(for: .html).id == "html")
++        #expect(registry.format(for: .plainText).id == "plaintext")
++    }
++
++    @Test func unknownTypesFallBackToPlainText() {
++        #expect(registry.format(for: .json).id == "plaintext")
++    }
++
++    @Test func idsAreUnique() {
++        let ids = registry.allFormats.map(\.id)
++        #expect(Set(ids).count == ids.count)
++    }
++
++    @Test func lookupByID() {
++        #expect(registry.format(withID: "latex")?.displayName == "LaTeX")
++        #expect(registry.format(withID: "nope") == nil)
++    }
++}
++
++@Suite("Highlighting")
++struct HighlightingTests {
++
++    @Test func everyShippedRuleCompiles() throws {
++        for format in FormatRegistry.standard.allFormats {
++            _ = try Tokenizer(rules: format.highlightRules)
++        }
++    }
++
++    @Test func invalidPatternThrows() {
++        #expect(throws: (any Error).self) {
++            _ = try Tokenizer(rules: [HighlightRule("(", .code)])
++        }
++    }
++
++    @Test func markdownTokens() throws {
++        let tokenizer = try Tokenizer(rules: MarkdownFormat().highlightRules)
++        let text = "# Title\n`code`"
++        let tokens = tokenizer.tokens(in: text, range: NSRange(location: 0, length: (text as NSString).length))
++        #expect(tokens.contains(Token(range: NSRange(location: 0, length: 7), kind: .heading)))
++        #expect(tokens.contains(Token(range: NSRange(location: 8, length: 6), kind: .code)))
++    }
++
++    @Test func latexCommentsComeLastSoTheyWin() throws {
++        let rules = LaTeXFormat().highlightRules
++        #expect(rules.last?.kind == .comment)
++
++        let tokenizer = try Tokenizer(rules: rules)
++        let text = "\\alpha % note"
++        let tokens = tokenizer.tokens(in: text, range: NSRange(location: 0, length: (text as NSString).length))
++        #expect(tokens.contains(Token(range: NSRange(location: 0, length: 6), kind: .command)))
++        #expect(tokens.contains(Token(range: NSRange(location: 7, length: 6), kind: .comment)))
++    }
++
++    @MainActor
++    @Test func highlighterOnlyTouchesWholeLinesInRange() throws {
++        let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
++                                                 theme: EditorTheme())
++        let storage = NSTextStorage(string: "# Title\nplain")
++
++        highlighter.apply(to: storage, in: NSRange(location: 0, length: 1))
++        #expect(storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemBlue)
++        #expect(storage.attribute(.foregroundColor, at: 9, effectiveRange: nil) == nil)
++
++        highlighter.apply(to: storage, in: NSRange(location: 0, length: storage.length))
++        #expect(storage.attribute(.foregroundColor, at: 9, effectiveRange: nil) as? NSColor == .textColor)
++    }
++
++    @MainActor
++    @Test func staleRangesAreClampedInsteadOfCrashing() throws {
++        let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
++                                                 theme: EditorTheme())
++        let storage = NSTextStorage(string: "short")
++        highlighter.apply(to: storage, in: NSRange(location: 500, length: 500))
++        highlighter.apply(to: NSTextStorage(string: ""), in: NSRange(location: 3, length: 3))
++    }
++}
+diff --git a/Tests/ModEditTests/ModEditTests.swift b/Tests/ModEditTests/ModEditTests.swift
+deleted file mode 100644
+index 0710db3..0000000
+--- a/Tests/ModEditTests/ModEditTests.swift
++++ /dev/null
+@@ -1,6 +0,0 @@
+-import Testing
+-@testable import ModEdit
+-
+-@Test func example() async throws {
+-    // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+-}
+diff --git a/Tests/ModEditTests/PreviewTests.swift b/Tests/ModEditTests/PreviewTests.swift
+new file mode 100644
+index 0000000..e567862
+--- /dev/null
++++ b/Tests/ModEditTests/PreviewTests.swift
+@@ -0,0 +1,110 @@
++import Testing
++@testable import ModEditCore
++
++@Suite("HTMLEscaping")
++struct HTMLEscapingTests {
++    @Test func escapesAllSpecialCharacters() {
++        #expect(HTMLEscaping.escape("a<b>&\"'") == "a&lt;b&gt;&amp;&quot;&#39;")
++    }
++}
++
++@Suite("MarkdownHTML")
++struct MarkdownHTMLTests {
++
++    @Test func headings() {
++        #expect(MarkdownHTML.render("# Title").contains("<h1>Title</h1>"))
++        #expect(MarkdownHTML.render("### Deep").contains("<h3>Deep</h3>"))
++    }
++
++    @Test func hashInsideAWordIsNotAHeading() {
++        let html = MarkdownHTML.render("C# (language)")
++        #expect(!html.contains("<h1>"))
++        #expect(html.contains("<p>C# (language)</p>"))
++    }
++
++    @Test func emphasis() {
++        let html = MarkdownHTML.render("**bold** and *it*")
++        #expect(html.contains("<strong>bold</strong>"))
++        #expect(html.contains("<em>it</em>"))
++    }
++
++    @Test func spacedAsterisksAreLiteral() {
++        #expect(MarkdownHTML.render("2 * 3 * 4").contains("2 * 3 * 4"))
++    }
++
++    @Test func codeSpansAreNotReinterpreted() {
++        let html = MarkdownHTML.render("`*x*`")
++        #expect(html.contains("<code>*x*</code>"))
++        #expect(!html.contains("<em>"))
++    }
++
++    @Test func rawHTMLIsEscaped() {
++        let html = MarkdownHTML.render("<script>alert(1)</script>")
++        #expect(html.contains("&lt;script&gt;"))
++        #expect(!html.contains("<script>"))
++    }
++
++    @Test func listsAndParagraphs() {
++        let html = MarkdownHTML.render("- a\n- b\n\ntext")
++        #expect(html == "<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n<p>text</p>")
++    }
++
++    @Test func fencedCodeIsEscapedVerbatim() {
++        let html = MarkdownHTML.render("```\n<b>\n```")
++        #expect(html == "<pre><code>&lt;b&gt;</code></pre>")
++    }
++
++    @Test func blockQuote() {
++        #expect(MarkdownHTML.render("> hi").contains("<blockquote>hi</blockquote>"))
++    }
++
++    @Test func onlySafeLinkSchemesBecomeLinks() {
++        #expect(MarkdownHTML.render("[x](https://a.b)").contains("<a href=\"https://a.b\">x</a>"))
++        #expect(!MarkdownHTML.render("[x](javascript:alert(1))").contains("<a "))
++    }
++
++    @Test func windowsLineEndings() {
++        let html = MarkdownHTML.render("# A\r\n\r\ntext")
++        #expect(html.contains("<h1>A</h1>"))
++        #expect(html.contains("<p>text</p>"))
++    }
++}
++
++@Suite("LaTeXHTML")
++struct LaTeXHTMLTests {
++
++    @Test func mathSymbolsAndScripts() {
++        let html = LaTeXHTML.render("Let $\\alpha^2$.")
++        #expect(html.contains("α<sup>2</sup>"))
++    }
++
++    @Test func braceScripts() {
++        let html = LaTeXHTML.render("$\\sum_{i=1}^{n} x_i$")
++        #expect(html.contains("∑<sub>i=1</sub><sup>n</sup>"))
++        #expect(html.contains("x<sub>i</sub>"))
++    }
++
++    @Test func commentsAreStripped() {
++        let html = LaTeXHTML.render("visible % hidden")
++        #expect(html.contains("visible"))
++        #expect(!html.contains("hidden"))
++    }
++
++    @Test func sourceIsEscaped() {
++        let html = LaTeXHTML.render("<script>alert(1)</script>")
++        #expect(html.contains("&lt;script&gt;"))
++        #expect(!html.contains("<script>"))
++    }
++
++    @Test func sectionsAndTextStyles() {
++        let html = LaTeXHTML.render("\\section{Intro}\nSome \\textbf{bold} text.")
++        #expect(html.contains("<h2>Intro</h2>"))
++        #expect(html.contains("<strong>bold</strong>"))
++    }
++
++    @Test func onlyTheDocumentBodyIsShown() {
++        let html = LaTeXHTML.render("\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}")
++        #expect(html.contains("Hello"))
++        #expect(!html.contains("documentclass"))
++    }
++}
+diff --git a/Tests/ModEditTests/TextIOTests.swift b/Tests/ModEditTests/TextIOTests.swift
+new file mode 100644
+index 0000000..57320a5
+--- /dev/null
++++ b/Tests/ModEditTests/TextIOTests.swift
+@@ -0,0 +1,43 @@
++import Testing
++import Foundation
++@testable import ModEditCore
++
++@Suite("TextIO")
++struct TextIOTests {
++
++    @Test func plainUTF8() throws {
++        let decoded = try TextIO.decode(Data("héllo".utf8))
++        #expect(decoded.text == "héllo")
++        #expect(decoded.encoding == .utf8)
++        #expect(!decoded.hasUTF8BOM)
++    }
++
++    @Test func utf8BOMIsRemembered() throws {
++        let original = Data([0xEF, 0xBB, 0xBF]) + Data("héllo".utf8)
++        let decoded = try TextIO.decode(original)
++        #expect(decoded.text == "héllo")
++        #expect(decoded.hasUTF8BOM)
++
++        let written = try TextIO.encode(decoded.text, as: decoded.encoding,
++                                        withUTF8BOM: decoded.hasUTF8BOM)
++        #expect(written == original)
++    }
++
++    @Test func utf16WithBOM() throws {
++        let data = try #require("hi".data(using: .utf16))
++        let decoded = try TextIO.decode(data)
++        #expect(decoded.text == "hi")
++        #expect(decoded.encoding == .utf16)
++    }
++
++    @Test func emptyData() throws {
++        let decoded = try TextIO.decode(Data())
++        #expect(decoded.text.isEmpty)
++    }
++
++    @Test func lossyEncodingIsRefused() {
++        #expect(throws: (any Error).self) {
++            _ = try TextIO.encode("日本語", as: .ascii)
++        }
++    }
++}
+diff --git a/scripts/make-app.sh b/scripts/make-app.sh
+new file mode 100755
+index 0000000..7f6519d
+--- /dev/null
++++ b/scripts/make-app.sh
+@@ -0,0 +1,27 @@
++#!/bin/sh
++# Assembles ModEdit.app from the SwiftPM build.
++#
++# `swift run` starts the executable without an app bundle, so the document types
++# and identifiers in Info.plist are never registered and Finder cannot open files
++# with it. This script wraps the binary in a minimal bundle.
++#
++# Usage: scripts/make-app.sh [debug|release]
++set -eu
++
++CONFIG="${1:-debug}"
++cd "$(dirname "$0")/.."
++
++swift build -c "$CONFIG"
++BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
++APP="$BIN_DIR/ModEdit.app"
++
++rm -rf "$APP"
++mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
++cp "$BIN_DIR/ModEdit" "$APP/Contents/MacOS/ModEdit"
++cp Sources/ModEditApp/Resources/Info.plist "$APP/Contents/Info.plist"
++
++# Ad-hoc signature so Gatekeeper/launch services accept the bundle locally.
++codesign --force --sign - "$APP" >/dev/null 2>&1 || echo "warning: codesign failed (continuing)"
++
++echo "Built: $APP"
++echo "Run:   open \"$APP\""

@@ -1,0 +1,16 @@
+# Build and test on macOS (the app depends on AppKit, SwiftUI and WebKit, so
+# Linux is not supported). Written without a local toolchain: verify first run.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build
+      - run: swift test

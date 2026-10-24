@@ -1,9 +1,4 @@
-import AppKit
 import UniformTypeIdentifiers
-
-extension UTType {
-    static let latex = UTType(importedAs: "org.tug.tex")
-}
 
 struct LaTeXFormat: DocumentFormat {
     let id = "latex"
@@ -11,18 +6,16 @@ struct LaTeXFormat: DocumentFormat {
     let contentTypes: [UTType] = [.latex]
     let fileExtensions = ["tex", "sty", "cls", "ltx"]
 
-    func makeHighlighter() -> (any SyntaxHighlighter)? {
-        let base: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: NSColor.textColor]
-        let rules = (try? [
-            HighlightRule(#"%.*$"#, [.foregroundColor: NSColor.secondaryLabelColor]),
-            HighlightRule(#"\\[a-zA-Z]+"#, [.foregroundColor: NSColor.systemPurple]),
-            HighlightRule(#"\$[^$\n]+\$"#, [.foregroundColor: NSColor.systemTeal]),
-            HighlightRule(#"\[([^\]\n]+)\]"#, [.foregroundColor: NSColor.systemOrange]),
-            HighlightRule(#"\{([^\}\n]+)\}"#, [.foregroundColor: NSColor.systemBlue]),
-        ]) ?? []
-        return RuleBasedHighlighter(base: base, rules: rules)
+    /// Lowest priority first. Comments come *last*: anything inside a `%`
+    /// comment must look like a comment, not like a command or an argument.
+    var highlightRules: [HighlightRule] {
+        [
+            HighlightRule(#"\{([^\}\n]+)\}"#, .argument),
+            HighlightRule(#"\[([^\]\n]+)\]"#, .optionalArgument),
+            HighlightRule(#"\\[a-zA-Z]+"#, .command),
+            HighlightRule(#"\$[^$\n]+\$"#, .math),
+            HighlightRule(#"(?<!\\)%.*$"#, .comment),
+        ]
     }
 
     func makePreviewRenderer() -> (any PreviewRenderer)? { LaTeXPreviewRenderer() }

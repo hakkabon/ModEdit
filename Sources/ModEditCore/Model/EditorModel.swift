@@ -1,27 +1,38 @@
+import Combine
 import Foundation
 
+/// Main-actor view model for one editor window.
+///
+/// Owns the *published* state SwiftUI observes (the text for the preview, the
+/// current format) and forwards every change to the thread-safe
+/// `EditorDocument` that gets saved.
+///
+/// Note: the `NSTextView`'s text storage remains the live source of truth while
+/// typing; `text` here is a copy synchronised on each edit (see "Known
+/// limitations" in the README for the cost of that).
 @MainActor
 final class EditorModel: ObservableObject {
     @Published private(set) var text: String
-    @Published var format: any DocumentFormat
+    @Published private(set) var format: any DocumentFormat
 
-    var encoding: String.Encoding = .utf8
+    private let document: EditorDocument
 
-    init(text: String, format: any DocumentFormat) {
-        self.text = text
-        self.format = format
+    init(document: EditorDocument) {
+        let content = document.content
+        self.document = document
+        self.text = content.text
+        self.format = content.format
     }
 
-    init(data: Data, format: any DocumentFormat) throws {
-        let decoded = TextIO.decode(data)
-        self.text = decoded.text
-        self.encoding = decoded.encoding
-        self.format = format
+    /// Called by the text view after every user edit.
+    func textDidChange(_ newText: String) {
+        text = newText
+        document.setText(newText)
     }
 
-    func syncText(_ newText: String) { text = newText }
-
-    func saveData() throws -> Data {
-        try TextIO.encode(text, as: encoding)
+    /// Switches the document's format (highlighting and preview).
+    func setFormat(_ newFormat: any DocumentFormat) {
+        format = newFormat
+        document.setFormat(newFormat)
     }
 }

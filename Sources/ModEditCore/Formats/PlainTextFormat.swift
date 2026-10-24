@@ -1,4 +1,3 @@
-import AppKit
 import UniformTypeIdentifiers
 
 struct PlainTextFormat: DocumentFormat {
@@ -7,6 +6,6 @@ struct PlainTextFormat: DocumentFormat {
     let contentTypes: [UTType] = [.plainText, .utf8PlainText]
     let fileExtensions = ["txt", "text", "log"]
 
-    func makeHighlighter() -> (any SyntaxHighlighter)? { nil }
+    var highlightRules: [HighlightRule] { [] }
     func makePreviewRenderer() -> (any PreviewRenderer)? { nil }
 }

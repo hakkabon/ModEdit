@@ -8,8 +8,10 @@
     <string>ModEdit</string>
     <key>CFBundleExecutable</key>
     <string>ModEdit</string>
+    <!-- A literal identifier: $(PRODUCT_BUNDLE_IDENTIFIER) is only substituted by
+         Xcode, and scripts/make-app.sh copies this file verbatim. -->
     <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <string>io.github.hakkabon.ModEdit</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -17,18 +19,24 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>0.1.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
-    <key>NSMainStoryboardFile</key>
-    <string></string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
+            <key>CFBundleTypeName</key>
+            <string>Text Document</string>
             <key>CFBundleTypeRole</key>
             <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.plain-text</string>
@@ -38,17 +46,56 @@
             </array>
         </dict>
     </array>
+    <!-- net.daringfireball.markdown is only a *system* type from macOS 27; on
+         earlier systems the app must declare it itself. -->
     <key>UTImportedTypeDeclarations</key>
     <array>
         <dict>
             <key>UTTypeIdentifier</key>
-            <string>org.tug.tex</string>
+            <string>net.daringfireball.markdown</string>
+            <key>UTTypeDescription</key>
+            <string>Markdown Document</string>
             <key>UTTypeConformsTo</key>
             <array>
                 <string>public.plain-text</string>
             </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>md</string>
+                    <string>markdown</string>
+                    <string>mdown</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>text/markdown</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.tug.tex</string>
             <key>UTTypeDescription</key>
             <string>LaTeX Document</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.plain-text</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>tex</string>
+                    <string>sty</string>
+                    <string>cls</string>
+                    <string>ltx</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/x-tex</string>
+                </array>
+            </dict>
         </dict>
     </array>
 </dict>

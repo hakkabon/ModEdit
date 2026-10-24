@@ -19,7 +19,10 @@ let package = Package(
             name: "ModEditCore"),
         .executableTarget(
             name: "ModEditApp",
-            dependencies: ["ModEditCore"]),
+            dependencies: ["ModEditCore"],
+            // Info.plist is consumed by scripts/make-app.sh when assembling the
+            // .app bundle; SwiftPM must not treat it as a target resource.
+            exclude: ["Resources/Info.plist"]),
         .testTarget(
             name: "ModEditTests",
             dependencies: ["ModEditCore"]),

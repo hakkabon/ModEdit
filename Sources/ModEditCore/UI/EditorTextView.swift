@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 
+/// SwiftUI wrapper around a TextKit 2 `NSTextView`.
 struct EditorTextView: NSViewRepresentable {
     @ObservedObject var model: EditorModel
 
@@ -12,7 +13,6 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.borderType = .noBorder
 
         let textView = NSTextView(frame: .zero, usingTextLayoutManager: true)
-        textView.delegate = context.coordinator
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -20,79 +20,161 @@ struct EditorTextView: NSViewRepresentable {
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
 
+        // This is a source editor: never "fix" the user's characters.
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.smartInsertDeleteEnabled = false
 
         textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         textView.textContainerInset = NSSize(width: 10, height: 12)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                   height: CGFloat.greatestFiniteMagnitude)
 
         scrollView.documentView = textView
-        context.coordinator.attach(to: textView)
+
+        // Order matters: load the text *before* attaching the storage delegate.
+        // Otherwise the initial load is reported as one giant edit and the
+        // whole document is highlighted synchronously, freezing large files.
+        // The coordinator instead runs a chunked, cancellable pass.
         textView.string = model.text
-        context.coordinator.highlightEntireDocument()
+        context.coordinator.attach(to: textView)
+        context.coordinator.modelDidChange()
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        // The text view is the live source of truth for the text; only a
+        // format change needs action here.
+        context.coordinator.modelDidChange()
     }
 }
 
 extension EditorTextView {
-    @MainActor final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
-        let model: EditorModel
-        weak var textView: NSTextView?
-        private var highlightTask: Task<Void, Never>?
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
+        private static let debounce: Duration = .milliseconds(80)
+        private static let chunkSize = 50_000
 
-        init(model: EditorModel) { self.model = model }
+        private let model: EditorModel
+        private weak var textView: NSTextView?
+        private let theme = EditorTheme()
+
+        /// Highlighter cache: compiling the regular expressions is expensive,
+        /// so build once per format instead of once per pass.
+        private var highlighter: StorageHighlighter?
+        private var highlighterFormatID: String?
+
+        /// Format for which a whole-document pass was last started.
+        private var fullPassFormatID: String?
+
+        private var dirty = DirtyRange()
+        private var highlightTask: Task<Void, Never>?
+        private var fullPassTask: Task<Void, Never>?
+
+        init(model: EditorModel) {
+            self.model = model
+            super.init()
+        }
+
+        deinit {
+            highlightTask?.cancel()
+            fullPassTask?.cancel()
+        }
 
         func attach(to textView: NSTextView) {
             self.textView = textView
+            textView.delegate = self
             textView.textStorage?.delegate = self
         }
 
+        /// Called from `updateNSView`; starts a full pass when the format changed.
+        func modelDidChange() {
+            guard textView != nil, fullPassFormatID != model.format.id else { return }
+            fullPassFormatID = model.format.id
+            highlightWholeDocument()
+        }
+
+        // MARK: NSTextViewDelegate
+
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            model.syncText(textView.string)
+            model.textDidChange(textView.string)
         }
+
+        // MARK: NSTextStorageDelegate
 
         func textStorage(_ textStorage: NSTextStorage,
                          didProcessEditing editedMask: NSTextStorageEditActions,
                          range editedRange: NSRange, changeInLength delta: Int) {
+            // Highlighting only changes attributes; ignoring those edits
+            // prevents a feedback loop.
             guard editedMask.contains(.editedCharacters) else { return }
-            scheduleHighlight(around: editedRange)
+            dirty.record(edited: editedRange, delta: delta)
+            scheduleHighlight()
         }
 
-        private func scheduleHighlight(around range: NSRange) {
+        // MARK: Highlighting
+
+        private func scheduleHighlight() {
             highlightTask?.cancel()
-            highlightTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(80))
+            highlightTask = Task { [weak self] in
+                try? await Task.sleep(for: Self.debounce)
                 guard !Task.isCancelled else { return }
-                self?.highlight(range: range)
+                self?.flushDirtyRange()
             }
         }
 
-        private func highlight(range: NSRange) {
-            guard let storage = textView?.textStorage,
-                  let highlighter = model.format.makeHighlighter() else { return }
-            highlighter.highlight(storage, in: range)
+        private func flushDirtyRange() {
+            guard let textView, let storage = textView.textStorage else { return }
+            // Rewriting attributes while an input method is composing (Japanese,
+            // Chinese, Korean...) would wipe the marked-text styling. Wait.
+            if textView.hasMarkedText() {
+                scheduleHighlight()
+                return
+            }
+            guard let range = dirty.take(clampedTo: storage.length),
+                  let highlighter = currentHighlighter() else { return }
+            highlighter.apply(to: storage, in: range)
         }
 
-        func highlightEntireDocument() {
-            guard let storage = textView?.textStorage,
-                  let highlighter = model.format.makeHighlighter() else { return }
-            let length = (storage.string as NSString).length
-            let chunk = 50_000
-            Task { @MainActor in
-                for start in stride(from: 0, to: length, by: chunk) {
-                    let r = NSRange(location: start, length: min(chunk, length - start))
-                    highlighter.highlight(storage, in: r)
+        private func currentHighlighter() -> StorageHighlighter? {
+            let format = model.format
+            if highlighterFormatID != format.id {
+                highlighterFormatID = format.id
+                do {
+                    highlighter = try StorageHighlighter(rules: format.highlightRules, theme: theme)
+                } catch {
+                    highlighter = nil
+                    assertionFailure("Invalid highlight rule in format \(format.id): \(error)")
+                }
+            }
+            return highlighter
+        }
+
+        /// Highlights the document in chunks, yielding between them so the UI
+        /// stays responsive. Re-reads the storage length every iteration, so
+        /// edits made during the pass cannot produce an out-of-range request.
+        private func highlightWholeDocument() {
+            fullPassTask?.cancel()
+            fullPassTask = Task { [weak self] in
+                var start = 0
+                while !Task.isCancelled {
+                    guard let self,
+                          let storage = self.textView?.textStorage,
+                          let highlighter = self.currentHighlighter() else { return }
+                    let length = storage.length
+                    guard start < length else { return }
+                    let end = min(start + Self.chunkSize, length)
+                    highlighter.apply(to: storage, in: NSRange(location: start, length: end - start))
+                    start = end
                     await Task.yield()
                 }
             }

@@ -1,4 +1,3 @@
-import AppKit
 import UniformTypeIdentifiers
 
 struct HTMLFormat: DocumentFormat {
@@ -7,17 +6,18 @@ struct HTMLFormat: DocumentFormat {
     let contentTypes: [UTType] = [.html]
     let fileExtensions = ["html", "htm", "xhtml"]
 
-    func makeHighlighter() -> (any SyntaxHighlighter)? {
-        let base: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: NSColor.textColor]
-        let rules = (try? [
-            HighlightRule(#"<!--.*?-->"#, [.foregroundColor: NSColor.secondaryLabelColor]),
-            HighlightRule(#"<[^>]+>"#, [.foregroundColor: NSColor.systemBlue]),
-            HighlightRule(#"[a-zA-Z-]+="#, [.foregroundColor: NSColor.systemPurple]),
-            HighlightRule(#""[^"]*""#, [.foregroundColor: NSColor.systemOrange]),
-        ]) ?? []
-        return RuleBasedHighlighter(base: base, rules: rules)
+    /// Lowest priority first; comments last.
+    ///
+    /// Known limitation: the attribute-name rule matches `name=` anywhere, not
+    /// only inside tags, and nothing here understands multi-line constructs
+    /// (see "Known limitations" in the README).
+    var highlightRules: [HighlightRule] {
+        [
+            HighlightRule(#"<[^>]+>"#, .tag),
+            HighlightRule(#"[a-zA-Z-]+(?==)"#, .attributeName),
+            HighlightRule(#""[^"\n]*""#, .string),
+            HighlightRule(#"<!--.*?-->"#, .comment),
+        ]
     }
 
     func makePreviewRenderer() -> (any PreviewRenderer)? { HTMLPreviewRenderer() }

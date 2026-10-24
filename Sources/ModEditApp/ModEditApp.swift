@@ -1,18 +1,13 @@
 import SwiftUI
 import ModEditCore
 
+/// Application entry point.
+///
+/// All behaviour lives in `ModEditCore`; the app target only hosts the scene so
+/// that the core stays a reusable (and testable) library.
 @main
 struct ModEditApp: App {
-    init() {
-        FormatRegistry.shared.register(PlainTextFormat())
-        FormatRegistry.shared.register(MarkdownFormat())
-        FormatRegistry.shared.register(LaTeXFormat())
-        FormatRegistry.shared.register(HTMLFormat())
-    }
-
     var body: some Scene {
-        DocumentGroup(newDocument: EditorDocument()) { config in
-            EditorRootView(document: config.document)
-        }
+        ModEditScene()
     }
 }

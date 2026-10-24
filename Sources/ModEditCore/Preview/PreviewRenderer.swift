@@ -1,51 +1,25 @@
 import Foundation
 
-final class MarkdownPreviewRenderer: PreviewRenderer {
+/// Markdown preview: converts with `MarkdownHTML` and wraps in the shared page.
+struct MarkdownPreviewRenderer: PreviewRenderer {
     func renderHTML(from source: String) async throws -> String {
-        let escaped = source
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-        let html = escaped
-            .replacingOccurrences(of: "### (.*)", with: "<h3>$1</h3>", options: .regularExpression)
-            .replacingOccurrences(of: "## (.*)", with: "<h2>$1</h2>", options: .regularExpression)
-            .replacingOccurrences(of: "# (.*)", with: "<h1>$1</h1>", options: .regularExpression)
-            .replacingOccurrences(of: "\\*\\*(.*?)\\*\\*", with: "<strong>$1</strong>", options: .regularExpression)
-            .replacingOccurrences(of: "\\*(.*?)\\*", with: "<em>$1</em>", options: .regularExpression)
-            .replacingOccurrences(of: "`(.*?)`", with: "<code>$1</code>", options: .regularExpression)
-            .replacingOccurrences(of: "\n", with: "<br>")
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <style>
-        body { font-family: -apple-system, sans-serif; padding: 20px; color: #333; }
-        h1, h2, h3 { color: #1a73e8; }
-        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
-        </style>
-        </head>
-        <body>\(html)</body>
-        </html>
-        """
+        PreviewPage.wrap(body: MarkdownHTML.render(source))
     }
 }
 
-final class LaTeXPreviewRenderer: PreviewRenderer {
+/// LaTeX preview: a lightweight rendering of common constructs (see `LaTeXHTML`).
+struct LaTeXPreviewRenderer: PreviewRenderer {
     func renderHTML(from source: String) async throws -> String {
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <style>body { font-family: monospace; padding: 20px; white-space: pre-wrap; }</style>
-        </head>
-        <body>\(source)</body>
-        </html>
-        """
+        PreviewPage.wrap(body: LaTeXHTML.render(source))
     }
 }
 
-final class HTMLPreviewRenderer: PreviewRenderer {
-    func renderHTML(from source: String) async throws -> String {
-        return source
-    }
+/// HTML preview: shows the user's own page as written.
+///
+/// The preview web view runs with JavaScript disabled and blocks navigation
+/// (see `PreviewPane`), so scripts in the document do not execute. Relative
+/// resources (images, stylesheets) do not resolve because `DocumentGroup` does
+/// not expose the file URL; that needs an `NSDocument`-based app.
+struct HTMLPreviewRenderer: PreviewRenderer {
+    func renderHTML(from source: String) async throws -> String { source }
 }
