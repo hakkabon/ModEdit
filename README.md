@@ -64,6 +64,10 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
+The current source is verified with `swift build` and `swift test` (38 tests)
+using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
+push and pull request.
+
 Why a script? `swift run` starts a bare executable without an app bundle, so the
 document types in `Info.plist` are not registered and Finder cannot open files
 with it. `make-app.sh` wraps the binary in a minimal bundle and ad-hoc signs it.
@@ -221,8 +225,6 @@ Tests/ModEditTests/                 Swift Testing suites
 * **Dirty tracking relies on `NSTextView`'s undo registration** to mark the
   document edited; verify this on your macOS version (see the review notes).
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
-* **Never compiled or run by the author of this patch** (no macOS toolchain was
-  available): expect small build fixes on first compile.
 
 ## Roadmap
 

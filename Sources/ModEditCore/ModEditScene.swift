@@ -9,7 +9,7 @@ public struct ModEditScene: Scene {
     public init() {}
 
     public var body: some Scene {
-        DocumentGroup(newDocument: EditorDocument()) { configuration in
+        DocumentGroup(newDocument: { EditorDocument() }) { configuration in
             EditorRootView(document: configuration.document)
         }
     }

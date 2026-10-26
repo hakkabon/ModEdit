@@ -12,7 +12,7 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .noBorder
 
-        let textView = NSTextView(frame: .zero, usingTextLayoutManager: true)
+        let textView = NSTextView(usingTextLayoutManager: true)
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -59,7 +59,7 @@ struct EditorTextView: NSViewRepresentable {
 
 extension EditorTextView {
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, @preconcurrency NSTextStorageDelegate {
         private static let debounce: Duration = .milliseconds(80)
         private static let chunkSize = 50_000
 
