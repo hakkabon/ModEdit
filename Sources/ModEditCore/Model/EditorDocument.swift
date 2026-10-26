@@ -89,9 +89,11 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
             precondition(range.location >= 0 && NSMaxRange(range) <= textStorage.length,
                          "Edit range is outside the document")
             let removed = textStorage.substring(with: range)
-            lineCount += replacement.filter { $0 == "\n" }.count
-                - removed.filter { $0 == "\n" }.count
             textStorage.replaceCharacters(in: range, with: replacement)
+            if removed.contains(where: \.isNewline)
+                || replacement.contains(where: \.isNewline) {
+                lineCount = Self.countLines(in: String(textStorage))
+            }
             generation &+= 1
             return generation
         }
@@ -109,7 +111,7 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
 
     private static func countLines(in text: String) -> Int {
         text.reduce(into: 1) { count, character in
-            if character == "\n" { count += 1 }
+            if character.isNewline { count += 1 }
         }
     }
 

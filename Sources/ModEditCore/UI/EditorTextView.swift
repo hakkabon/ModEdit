@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// SwiftUI wrapper around a TextKit 2 `NSTextView`.
+/// SwiftUI wrapper around an AppKit `NSTextView`.
 struct EditorTextView: NSViewRepresentable {
     @ObservedObject var model: EditorModel
 
@@ -12,7 +12,7 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .noBorder
 
-        let textView = EditorNSTextView(usingTextLayoutManager: true)
+        let textView = EditorNSTextView(frame: .zero)
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -43,6 +43,9 @@ struct EditorTextView: NSViewRepresentable {
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                   height: CGFloat.greatestFiniteMagnitude)
 
+        // Load before constructing the gutter so its initial line index is
+        // built from the opened document rather than an empty text view.
+        textView.string = model.textSnapshot()
         scrollView.documentView = textView
         scrollView.verticalRulerView = LineNumberRulerView(textView: textView,
                                                           scrollView: scrollView)
@@ -54,7 +57,6 @@ struct EditorTextView: NSViewRepresentable {
         // Otherwise the initial load is reported as one giant edit and the
         // whole document is highlighted synchronously, freezing large files.
         // The coordinator instead runs a chunked, cancellable pass.
-        textView.string = model.textSnapshot()
         context.coordinator.attach(to: textView)
         context.coordinator.modelDidChange()
         return scrollView
@@ -90,6 +92,7 @@ extension EditorTextView {
         private var fullPassTask: Task<Void, Never>?
         private var synchronizedGeneration: UInt64 = 0
         private var isSynchronizing = false
+        private var lineIndex = LineIndex()
 
         init(model: EditorModel) {
             self.model = model
@@ -104,6 +107,7 @@ extension EditorTextView {
         func attach(to textView: NSTextView) {
             self.textView = textView
             synchronizedGeneration = model.documentTextGeneration
+            lineIndex.rebuild(from: textView.string)
             textView.delegate = self
             textView.textStorage?.delegate = self
             updateCursorLocation()
@@ -118,6 +122,7 @@ extension EditorTextView {
             guard generation != synchronizedGeneration else { return }
             isSynchronizing = true
             textView.string = model.textSnapshot()
+            lineIndex.rebuild(from: textView.string)
             synchronizedGeneration = generation
             isSynchronizing = false
             dirty = DirtyRange()
@@ -142,17 +147,10 @@ extension EditorTextView {
             guard let textView else { return }
             let text = textView.string as NSString
             let location = min(textView.selectedRange().location, text.length)
-            var line = 1
-            var lineStart = 0
-            if location > 0 {
-                for index in 0..<location where text.character(at: index) == 0x0A {
-                    line += 1
-                    lineStart = index + 1
-                }
-            }
-            model.updateCursor(line: line, column: location - lineStart + 1)
+            let position = lineIndex.lineAndColumn(at: location)
+            model.updateCursor(line: position.line, column: position.column)
             (textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?
-                .updateCurrentLine(line)
+                .updateCurrentLine(position.line)
         }
 
         // MARK: NSTextStorageDelegate
@@ -165,8 +163,12 @@ extension EditorTextView {
             guard editedMask.contains(.editedCharacters) else { return }
             if !isSynchronizing {
                 let replacement = (textStorage.string as NSString).substring(with: editedRange)
+                let previousLineCount = model.lineCount
                 synchronizedGeneration = model.applyTextEdit(
                     editedRange: editedRange, delta: delta, replacement: replacement)
+                if model.lineCount != previousLineCount {
+                    lineIndex.rebuild(from: textStorage.string)
+                }
             }
             dirty.record(edited: editedRange, delta: delta)
             scheduleHighlight()

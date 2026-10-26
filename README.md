@@ -30,11 +30,11 @@ the right shows it as headings, emphasis, symbols and mathematics.
 
 * Document-based app (open, save, autosave, versions) built on SwiftUI
   `DocumentGroup`.
-* TextKit 2 `NSTextView` editor with find bar, undo/redo and **all automatic
+* TextKit-backed `NSTextView` editor with find bar, undo/redo and **all automatic
   text "corrections" disabled** (smart quotes, dashes, replacement), because this
   is a source editor.
 * Adaptive **line-number gutter** with a distinct background, plus synchronized
-  current-line highlighting in the gutter and editor. The bottom status bar
+  very-light-gray current-line highlighting in the gutter and editor. The bottom status bar
   shows the one-based cursor position, active text format, tab size and a
   high-contrast clean/dirty document indicator.
 * **Syntax colouring** for Markdown, LaTeX and HTML: debounced, incremental
@@ -69,7 +69,7 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (55 tests)
+The current source is verified with `swift build` and `swift test` (60 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
 push and pull request.
 
@@ -121,6 +121,11 @@ Data flow while typing:
 5. Selection changes update the status bar's one-based `line:column` location.
    Successful writes record the exact saved generation; the document becomes
    clean only when no newer edit exists.
+
+Navigation uses a cached UTF-16 line-start index: line/column lookup is binary
+search rather than a scan from the beginning. The gutter asks the layout manager
+only for visible line fragments. The index is rebuilt only when an edit changes
+the number of lines.
 
 ## Formats
 

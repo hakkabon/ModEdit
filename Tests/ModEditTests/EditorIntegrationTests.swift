@@ -94,7 +94,7 @@ struct EditorIntegrationTests {
         harness.textView.setSelectedRange(NSRange(location: 9, length: 0))
 
         #expect(harness.model.cursorLine == 2)
-        #expect(harness.model.cursorColumn == 4)
+        #expect(harness.model.cursorColumn == 3)
     }
 
     @Test func endOfBufferStaysOnLastExistingLine() {
@@ -104,7 +104,7 @@ struct EditorIntegrationTests {
                                                    length: 0))
 
         #expect(harness.model.cursorLine == 2)
-        #expect(harness.model.cursorColumn == 7)
+        #expect(harness.model.cursorColumn == 6)
     }
 
     @Test func trailingNewlineCreatesARealEmptyLine() {
@@ -113,6 +113,46 @@ struct EditorIntegrationTests {
                                                    length: 0))
         #expect(harness.model.cursorLine == 2)
         #expect(harness.model.cursorColumn == 1)
+    }
+
+    @Test func gutterDoesNotInventLineAfterUnterminatedLastRow() {
+        let text = "one\ntwo\nthree" as NSString
+        #expect(!LineNumberRulerView.lineStarts(at: text.length, in: text))
+    }
+
+    @Test func gutterIncludesEmptyRowAfterTrailingNewline() {
+        let text = "one\ntwo\nthree\n" as NSString
+        #expect(LineNumberRulerView.lineStarts(at: text.length, in: text))
+    }
+
+    @Test func carriageReturnDocumentsHaveCorrectFinalPosition() {
+        let harness = makeHarness(text: "one\rtwo\rthree")
+        harness.textView.setSelectedRange(NSRange(location: harness.textView.string.utf16.count,
+                                                   length: 0))
+        #expect(harness.model.lineCount == 3)
+        #expect(harness.model.cursorLine == 3)
+        #expect(harness.model.cursorColumn == 5)
+    }
+
+    @Test func gutterCurrentRowFollowsSelection() {
+        let harness = makeHarness(text: "one\ntwo\nthree")
+        let scrollView = NSScrollView()
+        scrollView.documentView = harness.textView
+        let gutter = LineNumberRulerView(textView: harness.textView, scrollView: scrollView)
+        scrollView.verticalRulerView = gutter
+
+        harness.textView.setSelectedRange(NSRange(location: 5, length: 0))
+        #expect(gutter.currentLine == 2)
+        harness.textView.setSelectedRange(NSRange(location: 9, length: 0))
+        #expect(gutter.currentLine == 3)
+    }
+
+    @Test func lineIndexMapsOpenedDocumentRows() {
+        let index = LineIndex(text: "one\ntwo\nthree")
+        #expect(index.starts == [0, 4, 8])
+        #expect(index.lineAndColumn(at: 0).line == 1)
+        #expect(index.lineAndColumn(at: 4).line == 2)
+        #expect(index.lineAndColumn(at: 8).line == 3)
     }
 
     @Test func insertedLinesUpdateModelAndForceGutterRedraw() {
