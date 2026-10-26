@@ -30,6 +30,11 @@ struct EditorTextView: NSViewRepresentable {
         textView.smartInsertDeleteEnabled = false
 
         textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        let paragraphStyle = NSMutableParagraphStyle()
+        let spaceWidth = textView.font?.maximumAdvancement.width ?? 8
+        paragraphStyle.defaultTabInterval = spaceWidth * CGFloat(model.tabSize)
+        paragraphStyle.tabStops = []
+        textView.defaultParagraphStyle = paragraphStyle
         textView.textContainerInset = NSSize(width: 10, height: 12)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -39,6 +44,11 @@ struct EditorTextView: NSViewRepresentable {
                                   height: CGFloat.greatestFiniteMagnitude)
 
         scrollView.documentView = textView
+        scrollView.verticalRulerView = LineNumberRulerView(textView: textView,
+                                                          scrollView: scrollView)
+        (scrollView.verticalRulerView as? LineNumberRulerView)?.updateLineCount(model.lineCount)
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
 
         // Order matters: load the text *before* attaching the storage delegate.
         // Otherwise the initial load is reported as one giant edit and the
@@ -51,6 +61,7 @@ struct EditorTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        (scrollView.verticalRulerView as? LineNumberRulerView)?.updateLineCount(model.lineCount)
         context.coordinator.synchronizeFromDocumentIfNeeded()
         context.coordinator.modelDidChange()
     }
@@ -95,6 +106,7 @@ extension EditorTextView {
             synchronizedGeneration = model.documentTextGeneration
             textView.delegate = self
             textView.textStorage?.delegate = self
+            updateCursorLocation()
         }
 
         /// Pulls replacements such as Revert to Saved into the AppKit view.
@@ -120,6 +132,30 @@ extension EditorTextView {
         }
 
         // MARK: NSTextViewDelegate
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            updateCursorLocation()
+        }
+
+        private func updateCursorLocation() {
+            guard let textView else { return }
+            let text = textView.string as NSString
+            let location = min(textView.selectedRange().location, text.length)
+            var lineStart = 0
+            var line = 1
+            var cursor = 0
+            while cursor < location {
+                let lineRange = text.lineRange(for: NSRange(location: cursor, length: 0))
+                if NSMaxRange(lineRange) > location {
+                    lineStart = lineRange.location
+                    break
+                }
+                line += 1
+                cursor = NSMaxRange(lineRange)
+                lineStart = cursor
+            }
+            model.updateCursor(line: line, column: location - lineStart + 1)
+        }
 
         // MARK: NSTextStorageDelegate
 

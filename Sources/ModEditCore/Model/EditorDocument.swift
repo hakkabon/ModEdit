@@ -31,6 +31,7 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         let text: String
         let encoding: String.Encoding
         let hasUTF8BOM: Bool
+        let generation: UInt64
     }
 
     static var readableContentTypes: [UTType] { FormatRegistry.standard.readableContentTypes }
@@ -42,6 +43,9 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
     private var hasUTF8BOM: Bool
     private var format: any DocumentFormat
     private var generation: UInt64 = 0
+    private var savedGeneration: UInt64 = 0
+    private var saveObserver: (@Sendable (UInt64) -> Void)?
+    private var lineCount: Int
 
     /// A thread-safe copy of the current content.
     var content: Content {
@@ -53,6 +57,8 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
 
     var text: String { lock.withLock { String(textStorage) } }
     var textGeneration: UInt64 { lock.withLock { generation } }
+    var isDirty: Bool { lock.withLock { generation != savedGeneration } }
+    var numberOfLines: Int { lock.withLock { lineCount } }
 
     /// A new, empty plain-text document.
     init() {
@@ -60,6 +66,7 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         encoding = .utf8
         hasUTF8BOM = false
         format = FormatRegistry.standard.fallback
+        lineCount = 1
     }
 
     required init(configuration: ReadConfiguration) throws {
@@ -71,6 +78,7 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         encoding = decoded.encoding
         hasUTF8BOM = decoded.hasUTF8BOM
         format = FormatRegistry.standard.format(for: configuration.contentType)
+        lineCount = Self.countLines(in: decoded.text)
     }
 
     // MARK: Mutation (called by EditorModel)
@@ -80,6 +88,9 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         lock.withLock {
             precondition(range.location >= 0 && NSMaxRange(range) <= textStorage.length,
                          "Edit range is outside the document")
+            let removed = textStorage.substring(with: range)
+            lineCount += replacement.filter { $0 == "\n" }.count
+                - removed.filter { $0 == "\n" }.count
             textStorage.replaceCharacters(in: range, with: replacement)
             generation &+= 1
             return generation
@@ -89,11 +100,31 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
     func setText(_ text: String) {
         lock.withLock {
             textStorage.setString(text)
+            lineCount = Self.countLines(in: text)
             generation &+= 1
         }
     }
 
     func setFormat(_ newFormat: any DocumentFormat) { lock.withLock { format = newFormat } }
+
+    private static func countLines(in text: String) -> Int {
+        text.reduce(into: 1) { count, character in
+            if character == "\n" { count += 1 }
+        }
+    }
+
+    func setSaveObserver(_ observer: (@Sendable (UInt64) -> Void)?) {
+        lock.withLock { saveObserver = observer }
+    }
+
+    /// Records a successful write without clearing a newer unsaved edit.
+    func recordSuccessfulWrite(generation writtenGeneration: UInt64) {
+        let observer = lock.withLock { () -> (@Sendable (UInt64) -> Void)? in
+            savedGeneration = max(savedGeneration, writtenGeneration)
+            return saveObserver
+        }
+        observer?(writtenGeneration)
+    }
 
     // MARK: ReferenceFileDocument
 
@@ -101,13 +132,15 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         let current = content
         return Snapshot(text: current.text,
                         encoding: current.encoding,
-                        hasUTF8BOM: current.hasUTF8BOM)
+                        hasUTF8BOM: current.hasUTF8BOM,
+                        generation: textGeneration)
     }
 
     func fileWrapper(snapshot: Snapshot, configuration: WriteConfiguration) throws -> FileWrapper {
         let data = try TextIO.encode(snapshot.text,
                                      as: snapshot.encoding,
                                      withUTF8BOM: snapshot.hasUTF8BOM)
+        recordSuccessfulWrite(generation: snapshot.generation)
         return FileWrapper(regularFileWithContents: data)
     }
 }

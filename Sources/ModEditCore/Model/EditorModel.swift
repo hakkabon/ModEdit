@@ -10,6 +10,12 @@ import Foundation
 final class EditorModel: ObservableObject {
     @Published private(set) var textRevision: UInt64
     @Published private(set) var format: any DocumentFormat
+    @Published private(set) var cursorLine = 1
+    @Published private(set) var cursorColumn = 1
+    @Published private(set) var isDocumentDirty: Bool
+    @Published private(set) var lineCount: Int
+
+    let tabSize = 4
 
     private let document: EditorDocument
 
@@ -18,7 +24,16 @@ final class EditorModel: ObservableObject {
         self.document = document
         self.textRevision = document.textGeneration
         self.format = content.format
+        self.isDocumentDirty = document.isDirty
+        self.lineCount = document.numberOfLines
+        document.setSaveObserver { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshDocumentState()
+            }
+        }
     }
+
+    deinit { document.setSaveObserver(nil) }
 
     func textSnapshot() -> String { document.text }
 
@@ -35,7 +50,18 @@ final class EditorModel: ObservableObject {
         document.objectWillChange.send()
         let generation = document.replaceText(in: oldRange, with: replacement)
         textRevision = generation
+        lineCount = document.numberOfLines
+        isDocumentDirty = document.isDirty
         return generation
+    }
+
+    func updateCursor(line: Int, column: Int) {
+        cursorLine = max(1, line)
+        cursorColumn = max(1, column)
+    }
+
+    private func refreshDocumentState() {
+        isDocumentDirty = document.isDirty
     }
 
     /// Switches the document's format (highlighting and preview).

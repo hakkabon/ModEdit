@@ -33,6 +33,9 @@ the right shows it as headings, emphasis, symbols and mathematics.
 * TextKit 2 `NSTextView` editor with find bar, undo/redo and **all automatic
   text "corrections" disabled** (smart quotes, dashes, replacement), because this
   is a source editor.
+* Adaptive **line-number gutter** and a bottom status bar showing the one-based
+  cursor position, active text format, tab size and a high-contrast clean/dirty
+  document indicator.
 * **Syntax colouring** for Markdown, LaTeX and HTML: debounced, incremental
   (only the edited lines), chunked on load so large files do not freeze the UI,
   state-aware for multiline Markdown fences and HTML tags/comments, and safe
@@ -65,7 +68,7 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (49 tests)
+The current source is verified with `swift build` and `swift test` (52 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
 push and pull request.
 
@@ -83,6 +86,7 @@ ModEditApp (executable)           thin: @main App { ModEditScene() }
 ModEditCore (library)
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
+│                 status bar       └ LineNumberRulerView       (WKWebView) │
 │                    │                  │  ▲ edits           (WKWebView)    │
 │ Model         EditorModel (@MainActor, @Published revision/format)       │
 │                    │ writes through                                       │
@@ -113,6 +117,9 @@ Data flow while typing:
    takes one immutable snapshot, renders it, skips identical output, and restores
    the scroll position. Fast typing therefore does not copy the complete file
    for every keystroke.
+5. Selection changes update the status bar's one-based `line:column` location.
+   Successful writes record the exact saved generation; the document becomes
+   clean only when no newer edit exists.
 
 ## Formats
 
@@ -191,7 +198,7 @@ Sources/
     IO/TextIO.swift
     Model/                          EditorDocument (persisted), EditorModel (UI state)
     Preview/                        PreviewRenderer, MarkdownHTML, LaTeXHTML, escaping, page
-    UI/                             EditorRootView, EditorTextView, PreviewPane
+    UI/                             root/status bar, editor/gutter, preview
 Tests/ModEditTests/                 Swift Testing suites
 .github/workflows/ci.yml            macOS build + test
 ```
@@ -214,6 +221,8 @@ Tests/ModEditTests/                 Swift Testing suites
 * **Generation-based view synchronization.** Editor-originated mutations record
   the document generation immediately. A different generation is treated as an
   external replacement and pulled into the text view, covering reload/revert.
+* **Generation-based save status.** Save snapshots carry their source generation.
+  A completed older autosave cannot incorrectly mark a newer edit clean.
 * **Small public surface.** Only `ModEditScene` is public.
 
 ## Known limitations
@@ -230,6 +239,8 @@ Tests/ModEditTests/                 Swift Testing suites
 * **Edits still move suffix bytes.** The document uses `NSMutableString`, so it
   avoids a second full-file model copy but insertion near the beginning of a very
   large file remains O(n). A piece table or rope is the next scaling step.
+* **Status columns use UTF-16 offsets.** This matches AppKit and LSP position
+  accounting, but a grapheme such as a composed emoji can occupy several columns.
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
 
 ## Roadmap

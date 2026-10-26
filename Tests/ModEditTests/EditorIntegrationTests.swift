@@ -88,6 +88,45 @@ struct EditorIntegrationTests {
         withExtendedLifetime(subscription) {}
     }
 
+    @Test func cursorLocationIsOneBased() {
+        let harness = makeHarness(text: "first\nsecond")
+
+        harness.textView.setSelectedRange(NSRange(location: 9, length: 0))
+
+        #expect(harness.model.cursorLine == 2)
+        #expect(harness.model.cursorColumn == 4)
+    }
+
+    @Test func cleanStateTracksSavedGenerationWithoutHidingNewerEdits() async throws {
+        let harness = makeHarness(text: "one")
+        harness.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 3, length: 0), with: " two")
+        let firstSnapshot = try harness.document.snapshot(contentType: .plainText)
+        harness.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 7, length: 0), with: " three")
+
+        harness.document.recordSuccessfulWrite(generation: firstSnapshot.generation)
+        await Task.yield()
+        #expect(harness.model.isDocumentDirty)
+
+        let latestSnapshot = try harness.document.snapshot(contentType: .plainText)
+        harness.document.recordSuccessfulWrite(generation: latestSnapshot.generation)
+        await Task.yield()
+        #expect(!harness.model.isDocumentDirty)
+    }
+
+    @Test func lineNumberGutterExpandsForMoreDigits() {
+        let textView = NSTextView(usingTextLayoutManager: true)
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        let gutter = LineNumberRulerView(textView: textView, scrollView: scrollView)
+        let initialWidth = gutter.ruleThickness
+
+        gutter.updateLineCount(10_001)
+
+        #expect(gutter.ruleThickness > initialWidth)
+    }
+
     private func makeHarness(text: String) -> Harness {
         let document = EditorDocument()
         document.setText(text)
