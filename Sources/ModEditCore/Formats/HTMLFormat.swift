@@ -5,18 +5,13 @@ struct HTMLFormat: DocumentFormat {
     let displayName = "HTML"
     let contentTypes: [UTType] = [.html]
     let fileExtensions = ["html", "htm", "xhtml"]
+    let highlightingMode: HighlightingMode = .html
 
-    /// Lowest priority first; comments last.
-    ///
-    /// Known limitation: the attribute-name rule matches `name=` anywhere, not
-    /// only inside tags, and nothing here understands multi-line constructs
-    /// (see "Known limitations" in the README).
+    /// Attribute rules are combined with the stateful tag/comment scanner.
     var highlightRules: [HighlightRule] {
         [
-            HighlightRule(#"<[^>]+>"#, .tag),
             HighlightRule(#"[a-zA-Z-]+(?==)"#, .attributeName),
             HighlightRule(#""[^"\n]*""#, .string),
-            HighlightRule(#"<!--.*?-->"#, .comment),
         ]
     }
 

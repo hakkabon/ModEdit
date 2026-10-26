@@ -18,7 +18,10 @@ struct EditorRootView: View {
         HSplitView {
             EditorTextView(model: model).frame(minWidth: 300)
             if showPreview, let renderer {
-                PreviewPane(renderer: renderer, source: model.text).frame(minWidth: 300)
+                PreviewPane(renderer: renderer,
+                            revision: model.textRevision,
+                            source: { model.textSnapshot() })
+                    .frame(minWidth: 300)
             }
         }
         .toolbar {

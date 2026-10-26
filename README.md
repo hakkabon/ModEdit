@@ -35,7 +35,8 @@ the right shows it as headings, emphasis, symbols and mathematics.
   is a source editor.
 * **Syntax colouring** for Markdown, LaTeX and HTML: debounced, incremental
   (only the edited lines), chunked on load so large files do not freeze the UI,
-  and safe with input methods (Japanese/Chinese/Korean composition).
+  state-aware for multiline Markdown fences and HTML tags/comments, and safe
+  with input methods (Japanese/Chinese/Korean composition).
 * **Live preview** (WebKit) that keeps its scroll position while you type:
   * *Markdown* — headings, paragraphs, lists, block quotes, fenced code,
     `**bold**`, `*italic*`, `` `code` ``, links.
@@ -64,7 +65,7 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (38 tests)
+The current source is verified with `swift build` and `swift test` (49 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
 push and pull request.
 
@@ -83,14 +84,14 @@ ModEditCore (library)
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
 │                    │                  │  ▲ edits           (WKWebView)    │
-│ Model         EditorModel (@MainActor, @Published text/format)           │
+│ Model         EditorModel (@MainActor, @Published revision/format)       │
 │                    │ writes through                                       │
-│               EditorDocument  (Sendable, lock-protected; snapshots)      │
+│               EditorDocument (locked mutable text; immutable snapshots)  │
 │ IO            TextIO (decode/encode, BOM, encoding detection)            │
 │                                                                          │
 │ Formats       DocumentFormat ── FormatRegistry (immutable)               │
 │                 • id, content types                                      │
-│                 • highlightRules: [HighlightRule(pattern, TokenKind)]    │
+│                 • highlightRules + optional stateful highlighting mode   │
 │                 • makePreviewRenderer()                                  │
 │ Highlighting  Tokenizer → Token(range, kind)   (pure, platform-neutral)  │
 │               EditorTheme: TokenKind → fonts/colours (AppKit)            │
@@ -105,10 +106,13 @@ Data flow while typing:
 1. `NSTextView` edits its text storage.
 2. The storage delegate reports the edit → `DirtyRange` accumulates it → after an
    80 ms debounce `StorageHighlighter` re-colours **only the touched lines**.
-3. `textDidChange` copies the text into `EditorModel`, which publishes it and
-   writes it to `EditorDocument` (what gets saved).
-4. SwiftUI re-evaluates `EditorRootView`; `PreviewPane` re-renders after a 250 ms
-   debounce, skipping identical output and restoring the scroll position.
+3. The storage delegate applies only the replacement range to the document's
+   locked `NSMutableString`, increments a cheap published revision, and notifies
+   `ReferenceFileDocument` so autosave sees the change.
+4. SwiftUI re-evaluates `EditorRootView`; after a 250 ms debounce `PreviewPane`
+   takes one immutable snapshot, renders it, skips identical output, and restores
+   the scroll position. Fast typing therefore does not copy the complete file
+   for every keystroke.
 
 ## Formats
 
@@ -204,26 +208,28 @@ Tests/ModEditTests/                 Swift Testing suites
   via a value snapshot; UI state lives in a `@MainActor` model.
 * **Rules are ordered by priority** ("later wins") so comments and code spans
   reliably override anything matching inside them.
+* **State machines for multiline syntax.** Markdown fences and HTML tags and
+  comments are scanned with explicit state; regex rules remain useful for local
+  tokens. Tokens are clipped to the dirty lines before AppKit attributes change.
+* **Generation-based view synchronization.** Editor-originated mutations record
+  the document generation immediately. A different generation is treated as an
+  external replacement and pulled into the text view, covering reload/revert.
 * **Small public surface.** Only `ModEditScene` is public.
 
 ## Known limitations
 
-* **Line-oriented highlighting.** Constructs spanning lines (fenced code blocks,
-  multi-line HTML comments or tags) are not recognised. A stateful lexer would fix
-  this.
-* **HTML attribute-name colouring** matches `name=` anywhere, not only in tags.
+* **Partial language grammars.** The stateful scanner handles multiline Markdown
+  fences and HTML tags/comments, but it is not a complete CommonMark or HTML
+  parser (for example, tilde fences and embedded languages are not recognised).
 * **Preview is a separate pane.** The caret and scroll position are not
   synchronised with the source.
 * **Markdown subset only** (no nested lists, tables, images, setext headings).
   **LaTeX subset only** (no environments, `\frac`, `\sqrt`, macros).
 * **HTML preview cannot load relative resources** (images, CSS) because
   `DocumentGroup` does not expose the document's URL.
-* **The text is copied** from the text view into the model on every edit (O(n)
-  per keystroke); fine for ordinary files, costly for very large ones.
-* **External changes are not pushed into the text view** (for example *Revert to
-  Saved*): `EditorTextView.updateNSView` only reacts to format changes.
-* **Dirty tracking relies on `NSTextView`'s undo registration** to mark the
-  document edited; verify this on your macOS version (see the review notes).
+* **Edits still move suffix bytes.** The document uses `NSMutableString`, so it
+  avoids a second full-file model copy but insertion near the beginning of a very
+  large file remains O(n). A piece table or rope is the next scaling step.
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
 
 ## Roadmap
@@ -236,8 +242,8 @@ Tests/ModEditTests/                 Swift Testing suites
    the caret move through rendered text.
 2. **Scroll and caret synchronisation** between source and preview (needs the
    same source map).
-3. **Real parsers:** `swift-markdown` for CommonMark/GFM, a bundled KaTeX for
-   typeset maths, and a stateful lexer for multi-line highlighting.
+3. **Real parsers:** `swift-markdown` for CommonMark/GFM and a bundled KaTeX for
+   typeset maths; expand stateful highlighting to embedded languages.
 4. **NSDocument-based shell** if relative resources or finer control over saving
    are needed. Note SwiftUI's new `WritableDocument` API (SDK 27) is the intended
    successor to `ReferenceFileDocument`.

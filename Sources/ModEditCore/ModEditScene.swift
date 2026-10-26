@@ -11,6 +11,7 @@ public struct ModEditScene: Scene {
     public var body: some Scene {
         DocumentGroup(newDocument: { EditorDocument() }) { configuration in
             EditorRootView(document: configuration.document)
+                .id(ObjectIdentifier(configuration.document))
         }
     }
 }

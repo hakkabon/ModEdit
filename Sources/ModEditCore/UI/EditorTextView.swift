@@ -44,15 +44,14 @@ struct EditorTextView: NSViewRepresentable {
         // Otherwise the initial load is reported as one giant edit and the
         // whole document is highlighted synchronously, freezing large files.
         // The coordinator instead runs a chunked, cancellable pass.
-        textView.string = model.text
+        textView.string = model.textSnapshot()
         context.coordinator.attach(to: textView)
         context.coordinator.modelDidChange()
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        // The text view is the live source of truth for the text; only a
-        // format change needs action here.
+        context.coordinator.synchronizeFromDocumentIfNeeded()
         context.coordinator.modelDidChange()
     }
 }
@@ -78,6 +77,8 @@ extension EditorTextView {
         private var dirty = DirtyRange()
         private var highlightTask: Task<Void, Never>?
         private var fullPassTask: Task<Void, Never>?
+        private var synchronizedGeneration: UInt64 = 0
+        private var isSynchronizing = false
 
         init(model: EditorModel) {
             self.model = model
@@ -91,8 +92,24 @@ extension EditorTextView {
 
         func attach(to textView: NSTextView) {
             self.textView = textView
+            synchronizedGeneration = model.documentTextGeneration
             textView.delegate = self
             textView.textStorage?.delegate = self
+        }
+
+        /// Pulls replacements such as Revert to Saved into the AppKit view.
+        /// Edits originating in this view update `synchronizedGeneration`
+        /// immediately and therefore do not cause a full-string comparison.
+        func synchronizeFromDocumentIfNeeded() {
+            guard let textView else { return }
+            let generation = model.documentTextGeneration
+            guard generation != synchronizedGeneration else { return }
+            isSynchronizing = true
+            textView.string = model.textSnapshot()
+            synchronizedGeneration = generation
+            isSynchronizing = false
+            dirty = DirtyRange()
+            highlightWholeDocument()
         }
 
         /// Called from `updateNSView`; starts a full pass when the format changed.
@@ -104,11 +121,6 @@ extension EditorTextView {
 
         // MARK: NSTextViewDelegate
 
-        func textDidChange(_ notification: Notification) {
-            guard let textView else { return }
-            model.textDidChange(textView.string)
-        }
-
         // MARK: NSTextStorageDelegate
 
         func textStorage(_ textStorage: NSTextStorage,
@@ -117,6 +129,11 @@ extension EditorTextView {
             // Highlighting only changes attributes; ignoring those edits
             // prevents a feedback loop.
             guard editedMask.contains(.editedCharacters) else { return }
+            if !isSynchronizing {
+                let replacement = (textStorage.string as NSString).substring(with: editedRange)
+                synchronizedGeneration = model.applyTextEdit(
+                    editedRange: editedRange, delta: delta, replacement: replacement)
+            }
             dirty.record(edited: editedRange, delta: delta)
             scheduleHighlight()
         }
@@ -150,7 +167,9 @@ extension EditorTextView {
             if highlighterFormatID != format.id {
                 highlighterFormatID = format.id
                 do {
-                    highlighter = try StorageHighlighter(rules: format.highlightRules, theme: theme)
+                    highlighter = try StorageHighlighter(rules: format.highlightRules,
+                                                         mode: format.highlightingMode,
+                                                         theme: theme)
                 } catch {
                     highlighter = nil
                     assertionFailure("Invalid highlight rule in format \(format.id): \(error)")

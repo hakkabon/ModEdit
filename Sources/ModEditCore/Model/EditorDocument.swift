@@ -18,7 +18,7 @@ import UniformTypeIdentifiers
 /// which writes edits back here.
 final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
 
-    /// Everything that is saved, plus the chosen format.
+    /// A consistent copy of the current document state.
     struct Content: Sendable {
         var text: String
         var encoding: String.Encoding
@@ -37,15 +37,29 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
     static var writableContentTypes: [UTType] { readableContentTypes }
 
     private let lock = NSLock()
-    private var storage: Content
+    private var textStorage: NSMutableString
+    private var encoding: String.Encoding
+    private var hasUTF8BOM: Bool
+    private var format: any DocumentFormat
+    private var generation: UInt64 = 0
 
     /// A thread-safe copy of the current content.
-    var content: Content { lock.withLock { storage } }
+    var content: Content {
+        lock.withLock {
+            Content(text: String(textStorage), encoding: encoding,
+                    hasUTF8BOM: hasUTF8BOM, format: format)
+        }
+    }
+
+    var text: String { lock.withLock { String(textStorage) } }
+    var textGeneration: UInt64 { lock.withLock { generation } }
 
     /// A new, empty plain-text document.
     init() {
-        storage = Content(text: "", encoding: .utf8, hasUTF8BOM: false,
-                          format: FormatRegistry.standard.fallback)
+        textStorage = NSMutableString()
+        encoding = .utf8
+        hasUTF8BOM = false
+        format = FormatRegistry.standard.fallback
     }
 
     required init(configuration: ReadConfiguration) throws {
@@ -53,16 +67,33 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
             throw CocoaError(.fileReadCorruptFile)
         }
         let decoded = try TextIO.decode(data)
-        storage = Content(text: decoded.text,
-                          encoding: decoded.encoding,
-                          hasUTF8BOM: decoded.hasUTF8BOM,
-                          format: FormatRegistry.standard.format(for: configuration.contentType))
+        textStorage = NSMutableString(string: decoded.text)
+        encoding = decoded.encoding
+        hasUTF8BOM = decoded.hasUTF8BOM
+        format = FormatRegistry.standard.format(for: configuration.contentType)
     }
 
     // MARK: Mutation (called by EditorModel)
 
-    func setText(_ text: String) { lock.withLock { storage.text = text } }
-    func setFormat(_ format: any DocumentFormat) { lock.withLock { storage.format = format } }
+    @discardableResult
+    func replaceText(in range: NSRange, with replacement: String) -> UInt64 {
+        lock.withLock {
+            precondition(range.location >= 0 && NSMaxRange(range) <= textStorage.length,
+                         "Edit range is outside the document")
+            textStorage.replaceCharacters(in: range, with: replacement)
+            generation &+= 1
+            return generation
+        }
+    }
+
+    func setText(_ text: String) {
+        lock.withLock {
+            textStorage.setString(text)
+            generation &+= 1
+        }
+    }
+
+    func setFormat(_ newFormat: any DocumentFormat) { lock.withLock { format = newFormat } }
 
     // MARK: ReferenceFileDocument
 

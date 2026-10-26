@@ -5,6 +5,7 @@ struct MarkdownFormat: DocumentFormat {
     let displayName = "Markdown"
     let contentTypes: [UTType] = [.markdownText]
     let fileExtensions = ["md", "markdown", "mdown"]
+    let highlightingMode: HighlightingMode = .markdown
 
     /// Lowest priority first; code spans last so their colour wins over
     /// anything that happens to match inside them.

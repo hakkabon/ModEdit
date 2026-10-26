@@ -1,5 +1,5 @@
 # Build and test on macOS (the app depends on AppKit, SwiftUI and WebKit, so
-# Linux is not supported). Written without a local toolchain: verify first run.
+# Linux is not supported).
 name: CI
 
 on:

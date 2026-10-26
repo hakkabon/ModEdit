@@ -34,7 +34,7 @@ struct HighlightingTests {
 
     @Test func everyShippedRuleCompiles() throws {
         for format in FormatRegistry.standard.allFormats {
-            _ = try Tokenizer(rules: format.highlightRules)
+            _ = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
         }
     }
 
@@ -45,11 +45,56 @@ struct HighlightingTests {
     }
 
     @Test func markdownTokens() throws {
-        let tokenizer = try Tokenizer(rules: MarkdownFormat().highlightRules)
+        let format = MarkdownFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
         let text = "# Title\n`code`"
         let tokens = tokenizer.tokens(in: text, range: NSRange(location: 0, length: (text as NSString).length))
         #expect(tokens.contains(Token(range: NSRange(location: 0, length: 7), kind: .heading)))
         #expect(tokens.contains(Token(range: NSRange(location: 8, length: 6), kind: .code)))
+    }
+
+    @Test func multilineMarkdownFenceIsOpaque() throws {
+        let format = MarkdownFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let text = "before\n```swift\n# not a heading\n```\nafter"
+        let ns = text as NSString
+        let inside = ns.range(of: "# not a heading")
+        let tokens = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        #expect(tokens.contains { $0.kind == .code && NSLocationInRange(inside.location, $0.range) })
+        // The heading regex may also match, but the later opaque code token wins.
+        #expect(tokens.last { NSLocationInRange(inside.location, $0.range) }?.kind == .code)
+    }
+
+    @Test func multilineHTMLStatesHandleQuotedGreaterThanAndComments() throws {
+        let format = HTMLFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let text = "<div\n title=\"a > b\">x</div>\n<!-- one\n two -->"
+        let ns = text as NSString
+        let tagRange = ns.range(of: "<div\n title=\"a > b\">")
+        let commentRange = ns.range(of: "<!-- one\n two -->")
+        let tokens = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        #expect(tokens.contains(Token(range: tagRange, kind: .tag)))
+        #expect(tokens.contains(Token(range: commentRange, kind: .comment)))
+    }
+
+    @Test func htmlAttributeNamesAreScopedToTags() throws {
+        let format = HTMLFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let text = "outside=value <div inside=value>"
+        let ns = text as NSString
+        let tokens = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        #expect(!tokens.contains(Token(range: ns.range(of: "outside"), kind: .attributeName)))
+        #expect(tokens.contains(Token(range: ns.range(of: "inside"), kind: .attributeName)))
+    }
+
+    @Test func statefulTokensWorkWhenRequestedRangeStartsInsideConstruct() throws {
+        let format = MarkdownFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let text = "```\nline one\nline two\n```"
+        let ns = text as NSString
+        let requested = ns.lineRange(for: ns.range(of: "line two"))
+        let tokens = tokenizer.tokens(in: text, range: requested)
+        #expect(tokens.contains(Token(range: requested, kind: .code)))
     }
 
     @Test func latexCommentsComeLastSoTheyWin() throws {

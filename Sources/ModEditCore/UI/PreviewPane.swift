@@ -9,7 +9,8 @@ import AppKit
 /// blocked**. Links open in the default browser instead of replacing the preview.
 struct PreviewPane: NSViewRepresentable {
     let renderer: any PreviewRenderer
-    let source: String
+    let revision: UInt64
+    let source: @MainActor () -> String
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -22,7 +23,8 @@ struct PreviewPane: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.render(source, with: renderer, into: webView)
+        context.coordinator.render(revision: revision, source: source,
+                                   with: renderer, into: webView)
     }
 
     @MainActor
@@ -36,7 +38,10 @@ struct PreviewPane: NSViewRepresentable {
         /// Debounced render. Skips identical output and restores the scroll
         /// position afterwards (reloading used to jump the preview to the top
         /// on every keystroke).
-        func render(_ source: String, with renderer: any PreviewRenderer, into webView: WKWebView) {
+        func render(revision: UInt64,
+                    source: @escaping @MainActor () -> String,
+                    with renderer: any PreviewRenderer,
+                    into webView: WKWebView) {
             task?.cancel()
             task = Task { [weak self, weak webView] in
                 try? await Task.sleep(for: .milliseconds(250))
@@ -44,7 +49,9 @@ struct PreviewPane: NSViewRepresentable {
 
                 let html: String
                 do {
-                    html = try await renderer.renderHTML(from: source)
+                    // Materialize the complete document only after the debounce,
+                    // not once for every key event.
+                    html = try await renderer.renderHTML(from: source())
                 } catch {
                     html = PreviewPage.wrap(body: "<pre>\(HTMLEscaping.escape("Preview failed: \(error)"))</pre>")
                 }

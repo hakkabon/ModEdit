@@ -11,8 +11,10 @@ final class StorageHighlighter {
     private let theme: EditorTheme
 
     /// - Throws: if a rule's pattern is invalid.
-    init(rules: [HighlightRule], theme: EditorTheme) throws {
-        self.tokenizer = try Tokenizer(rules: rules)
+    init(rules: [HighlightRule],
+         mode: HighlightingMode = .regularExpressions,
+         theme: EditorTheme) throws {
+        self.tokenizer = try Tokenizer(rules: rules, mode: mode)
         self.theme = theme
     }
 

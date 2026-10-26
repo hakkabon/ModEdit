@@ -27,8 +27,16 @@ protocol DocumentFormat: Sendable {
     /// structural rules first and "opaque" ones (comments, code spans) last.
     var highlightRules: [HighlightRule] { get }
 
+    /// Stateful syntax handling layered around the regular-expression rules.
+    /// This is used for constructs whose meaning crosses line boundaries.
+    var highlightingMode: HighlightingMode { get }
+
     /// A renderer for the live preview, or `nil` if the format has none.
     func makePreviewRenderer() -> (any PreviewRenderer)?
+}
+
+extension DocumentFormat {
+    var highlightingMode: HighlightingMode { .regularExpressions }
 }
 
 /// Turns document source into an HTML page for the preview pane.
