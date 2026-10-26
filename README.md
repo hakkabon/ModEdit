@@ -33,9 +33,10 @@ the right shows it as headings, emphasis, symbols and mathematics.
 * TextKit 2 `NSTextView` editor with find bar, undo/redo and **all automatic
   text "corrections" disabled** (smart quotes, dashes, replacement), because this
   is a source editor.
-* Adaptive **line-number gutter** and a bottom status bar showing the one-based
-  cursor position, active text format, tab size and a high-contrast clean/dirty
-  document indicator.
+* Adaptive **line-number gutter** with a distinct background, plus synchronized
+  current-line highlighting in the gutter and editor. The bottom status bar
+  shows the one-based cursor position, active text format, tab size and a
+  high-contrast clean/dirty document indicator.
 * **Syntax colouring** for Markdown, LaTeX and HTML: debounced, incremental
   (only the edited lines), chunked on load so large files do not freeze the UI,
   state-aware for multiline Markdown fences and HTML tags/comments, and safe
@@ -68,7 +69,7 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (52 tests)
+The current source is verified with `swift build` and `swift test` (55 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
 push and pull request.
 

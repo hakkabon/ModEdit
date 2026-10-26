@@ -6,6 +6,8 @@ import AppKit
 @MainActor
 final class LineNumberRulerView: NSRulerView {
     private weak var textView: NSTextView?
+    private(set) var currentLine = 1
+    private(set) var displayedLineCount = 1
 
     init(textView: NSTextView, scrollView: NSScrollView) {
         self.textView = textView
@@ -26,16 +28,25 @@ final class LineNumberRulerView: NSRulerView {
     @objc private func boundsDidChange() { needsDisplay = true }
 
     func updateLineCount(_ lineCount: Int) {
-        let digits = String(max(1, lineCount)).count
+        displayedLineCount = max(1, lineCount)
+        let digits = String(displayedLineCount).count
         let width = max(44, CGFloat(digits * 8 + 18))
-        guard width != ruleThickness else { return }
-        ruleThickness = width
+        if width != ruleThickness { ruleThickness = width }
+        // The width commonly stays unchanged when a line is inserted. We must
+        // still repaint so the newly created line number becomes visible.
+        needsDisplay = true
+    }
+
+    func updateCurrentLine(_ line: Int) {
+        currentLine = max(1, line)
         needsDisplay = true
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
         guard let textView, let window = textView.window else { return }
-        NSColor.controlBackgroundColor.setFill()
+        let gutterColor = NSColor.controlBackgroundColor.blended(
+            withFraction: 0.12, of: NSColor.secondaryLabelColor) ?? .controlBackgroundColor
+        gutterColor.setFill()
         bounds.fill()
 
         let visible = textView.visibleRect
@@ -70,10 +81,18 @@ final class LineNumberRulerView: NSRulerView {
             let windowRect = window.convertFromScreen(screenRect)
             let localRect = convert(windowRect, from: nil)
             let label = "\(lineNumber)" as NSString
-            let size = label.size(withAttributes: attributes)
+            var lineAttributes = attributes
+            if lineNumber == currentLine {
+                NSColor.selectedContentBackgroundColor.withAlphaComponent(0.18).setFill()
+                NSRect(x: bounds.minX, y: localRect.minY,
+                       width: bounds.width, height: screenRect.height).fill()
+                lineAttributes[.foregroundColor] = NSColor.controlAccentColor
+                lineAttributes[.font] = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+            }
+            let size = label.size(withAttributes: lineAttributes)
             label.draw(at: NSPoint(x: ruleThickness - size.width - 9,
                                    y: localRect.minY + max(0, (screenRect.height - size.height) / 2)),
-                       withAttributes: attributes)
+                       withAttributes: lineAttributes)
 
             let next = NSMaxRange(lineRange)
             guard next > location else { break }

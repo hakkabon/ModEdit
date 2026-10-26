@@ -12,7 +12,7 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .noBorder
 
-        let textView = NSTextView(usingTextLayoutManager: true)
+        let textView = EditorNSTextView(usingTextLayoutManager: true)
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -135,26 +135,24 @@ extension EditorTextView {
 
         func textViewDidChangeSelection(_ notification: Notification) {
             updateCursorLocation()
+            textView?.needsDisplay = true
         }
 
         private func updateCursorLocation() {
             guard let textView else { return }
             let text = textView.string as NSString
             let location = min(textView.selectedRange().location, text.length)
-            var lineStart = 0
             var line = 1
-            var cursor = 0
-            while cursor < location {
-                let lineRange = text.lineRange(for: NSRange(location: cursor, length: 0))
-                if NSMaxRange(lineRange) > location {
-                    lineStart = lineRange.location
-                    break
+            var lineStart = 0
+            if location > 0 {
+                for index in 0..<location where text.character(at: index) == 0x0A {
+                    line += 1
+                    lineStart = index + 1
                 }
-                line += 1
-                cursor = NSMaxRange(lineRange)
-                lineStart = cursor
             }
             model.updateCursor(line: line, column: location - lineStart + 1)
+            (textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?
+                .updateCurrentLine(line)
         }
 
         // MARK: NSTextStorageDelegate

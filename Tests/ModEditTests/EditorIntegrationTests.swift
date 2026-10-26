@@ -97,6 +97,37 @@ struct EditorIntegrationTests {
         #expect(harness.model.cursorColumn == 4)
     }
 
+    @Test func endOfBufferStaysOnLastExistingLine() {
+        let harness = makeHarness(text: "first\nsecond")
+
+        harness.textView.setSelectedRange(NSRange(location: harness.textView.string.utf16.count,
+                                                   length: 0))
+
+        #expect(harness.model.cursorLine == 2)
+        #expect(harness.model.cursorColumn == 7)
+    }
+
+    @Test func trailingNewlineCreatesARealEmptyLine() {
+        let harness = makeHarness(text: "first\n")
+        harness.textView.setSelectedRange(NSRange(location: harness.textView.string.utf16.count,
+                                                   length: 0))
+        #expect(harness.model.cursorLine == 2)
+        #expect(harness.model.cursorColumn == 1)
+    }
+
+    @Test func insertedLinesUpdateModelAndForceGutterRedraw() {
+        let harness = makeHarness(text: "one")
+        let scrollView = NSScrollView()
+        scrollView.documentView = harness.textView
+        let gutter = LineNumberRulerView(textView: harness.textView, scrollView: scrollView)
+        harness.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 3, length: 0), with: "\n\nthree")
+        gutter.updateLineCount(harness.model.lineCount)
+
+        #expect(harness.model.lineCount == 3)
+        #expect(gutter.displayedLineCount == 3)
+    }
+
     @Test func cleanStateTracksSavedGenerationWithoutHidingNewerEdits() async throws {
         let harness = makeHarness(text: "one")
         harness.textView.textStorage?.replaceCharacters(
