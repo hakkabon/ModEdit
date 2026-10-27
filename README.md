@@ -69,7 +69,7 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (60 tests)
+The current source is verified with `swift build` and `swift test` (67 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
 push and pull request.
 
@@ -92,6 +92,7 @@ ModEditCore (library)
 │ Model         EditorModel (@MainActor, @Published revision/format)       │
 │                    │ writes through                                       │
 │               EditorDocument (locked mutable text; immutable snapshots)  │
+│                 └ LineIndex (shared, incrementally updated line starts)  │
 │ IO            TextIO (decode/encode, BOM, encoding detection)            │
 │                                                                          │
 │ Formats       DocumentFormat ── FormatRegistry (immutable)               │
@@ -122,10 +123,12 @@ Data flow while typing:
    Successful writes record the exact saved generation; the document becomes
    clean only when no newer edit exists.
 
-Navigation uses a cached UTF-16 line-start index: line/column lookup is binary
-search rather than a scan from the beginning. The gutter asks the layout manager
-only for visible line fragments. The index is rebuilt only when an edit changes
-the number of lines.
+Navigation uses one cached UTF-16 line-start index owned by the document. Both
+the status bar and the gutter query it, so they cannot disagree. The index is
+updated incrementally on every edit: only the edited line window is rescanned,
+later starts are shifted by the edit delta, and line/column lookup is binary
+search rather than a scan from the beginning. The gutter still asks the layout
+manager only for visible line fragments.
 
 ## Formats
 
@@ -202,7 +205,7 @@ Sources/
     Formats/                        DocumentFormat, FormatRegistry, formats, UTTypes
     Highlighting/                   Token, Tokenizer, DirtyRange, EditorTheme, StorageHighlighter
     IO/TextIO.swift
-    Model/                          EditorDocument (persisted), EditorModel (UI state)
+    Model/                          EditorDocument, EditorModel, LineIndex, LineNumberSource
     Preview/                        PreviewRenderer, MarkdownHTML, LaTeXHTML, escaping, page
     UI/                             root/status bar, editor/gutter, preview
 Tests/ModEditTests/                 Swift Testing suites
@@ -224,6 +227,10 @@ Tests/ModEditTests/                 Swift Testing suites
 * **State machines for multiline syntax.** Markdown fences and HTML tags and
   comments are scanned with explicit state; regex rules remain useful for local
   tokens. Tokens are clipped to the dirty lines before AppKit attributes change.
+* **One shared incremental line index.** The document owns the UTF-16 line
+  starts. A text edit rebuilds only the affected line window and shifts the
+  remaining starts; the status bar and gutter both read that index instead of
+  maintaining their own copies.
 * **Generation-based view synchronization.** Editor-originated mutations record
   the document generation immediately. A different generation is treated as an
   external replacement and pulled into the text view, covering reload/revert.

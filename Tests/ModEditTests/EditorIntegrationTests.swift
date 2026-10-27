@@ -115,14 +115,56 @@ struct EditorIntegrationTests {
         #expect(harness.model.cursorColumn == 1)
     }
 
+    @Test func sameLineCountDeletionKeepsCursorLineCorrect() {
+        let harness = makeHarness(text: "one\ntwo\nthree")
+
+        // Deleting inside the first line does not change the line count, but
+        // every later line start shifts one UTF-16 unit left.
+        harness.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 2, length: 1), with: "")
+        harness.textView.setSelectedRange(NSRange(location: 7, length: 0))
+
+        #expect(harness.document.content.text == "on\ntwo\nthree")
+        #expect(harness.model.lineCount == 3)
+        #expect(harness.model.cursorLine == 3)
+        #expect(harness.model.cursorColumn == 1)
+    }
+
+    @Test func sameLineCountInsertionKeepsCursorLineCorrect() {
+        let harness = makeHarness(text: "one\ntwo\nthree")
+
+        harness.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 0, length: 0), with: "abcde")
+        harness.textView.setSelectedRange(NSRange(location: 13, length: 0))
+
+        #expect(harness.model.lineCount == 3)
+        #expect(harness.model.cursorLine == 3)
+        #expect(harness.model.cursorColumn == 1)
+    }
+
+    @Test func externalReplacementWithSameLineCountRefreshesModel() async {
+        let harness = makeHarness(text: "aaa\nbbb\nccc")
+
+        harness.document.setText("a\nbb\nccc")
+        harness.coordinator.synchronizeFromDocumentIfNeeded()
+        await Task.yield()
+        harness.textView.setSelectedRange(NSRange(location: 5, length: 0))
+
+        #expect(harness.textView.string == "a\nbb\nccc")
+        #expect(harness.model.lineCount == 3)
+        #expect(harness.model.cursorLine == 3)
+        #expect(harness.model.cursorColumn == 1)
+        #expect(harness.model.textRevision == harness.document.textGeneration)
+    }
+
     @Test func gutterDoesNotInventLineAfterUnterminatedLastRow() {
-        let text = "one\ntwo\nthree" as NSString
-        #expect(!LineNumberRulerView.lineStarts(at: text.length, in: text))
+        let index = LineIndex(text: "one\ntwo\nthree")
+        #expect(!index.isLineStart(at: 13))
     }
 
     @Test func gutterIncludesEmptyRowAfterTrailingNewline() {
-        let text = "one\ntwo\nthree\n" as NSString
-        #expect(LineNumberRulerView.lineStarts(at: text.length, in: text))
+        let index = LineIndex(text: "one\ntwo\nthree\n")
+        #expect(index.isLineStart(at: 14))
     }
 
     @Test func carriageReturnDocumentsHaveCorrectFinalPosition() {
@@ -138,7 +180,9 @@ struct EditorIntegrationTests {
         let harness = makeHarness(text: "one\ntwo\nthree")
         let scrollView = NSScrollView()
         scrollView.documentView = harness.textView
-        let gutter = LineNumberRulerView(textView: harness.textView, scrollView: scrollView)
+        let gutter = LineNumberRulerView(textView: harness.textView,
+                                         scrollView: scrollView,
+                                         lineSource: harness.model)
         scrollView.verticalRulerView = gutter
 
         harness.textView.setSelectedRange(NSRange(location: 5, length: 0))
@@ -159,7 +203,9 @@ struct EditorIntegrationTests {
         let harness = makeHarness(text: "one")
         let scrollView = NSScrollView()
         scrollView.documentView = harness.textView
-        let gutter = LineNumberRulerView(textView: harness.textView, scrollView: scrollView)
+        let gutter = LineNumberRulerView(textView: harness.textView,
+                                         scrollView: scrollView,
+                                         lineSource: harness.model)
         harness.textView.textStorage?.replaceCharacters(
             in: NSRange(location: 3, length: 0), with: "\n\nthree")
         gutter.updateLineCount(harness.model.lineCount)
@@ -187,10 +233,14 @@ struct EditorIntegrationTests {
     }
 
     @Test func lineNumberGutterExpandsForMoreDigits() {
+        let document = EditorDocument()
+        let model = EditorModel(document: document)
         let textView = NSTextView(usingTextLayoutManager: true)
         let scrollView = NSScrollView()
         scrollView.documentView = textView
-        let gutter = LineNumberRulerView(textView: textView, scrollView: scrollView)
+        let gutter = LineNumberRulerView(textView: textView,
+                                         scrollView: scrollView,
+                                         lineSource: model)
         let initialWidth = gutter.ruleThickness
 
         gutter.updateLineCount(10_001)

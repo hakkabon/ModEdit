@@ -45,7 +45,8 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
     private var generation: UInt64 = 0
     private var savedGeneration: UInt64 = 0
     private var saveObserver: (@Sendable (UInt64) -> Void)?
-    private var lineCount: Int
+    /// Single source of truth for line starts, shared by the status bar and gutter.
+    private var lineIndex: LineIndex
 
     /// A thread-safe copy of the current content.
     var content: Content {
@@ -58,7 +59,24 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
     var text: String { lock.withLock { String(textStorage) } }
     var textGeneration: UInt64 { lock.withLock { generation } }
     var isDirty: Bool { lock.withLock { generation != savedGeneration } }
-    var numberOfLines: Int { lock.withLock { lineCount } }
+
+    /// Number of logical lines, at least one.
+    var numberOfLines: Int { lock.withLock { lineIndex.lineCount } }
+
+    /// One-based line and column for a UTF-16 offset, clamped to the document.
+    func lineAndColumn(at location: Int) -> (line: Int, column: Int) {
+        lock.withLock {
+            lineIndex.lineAndColumn(at: min(max(location, 0), textStorage.length))
+        }
+    }
+
+    /// Whether `location` is the start of a logical line.
+    func isLineStart(at location: Int) -> Bool {
+        lock.withLock {
+            guard location >= 0, location <= textStorage.length else { return false }
+            return lineIndex.isLineStart(at: location)
+        }
+    }
 
     /// A new, empty plain-text document.
     init() {
@@ -66,7 +84,7 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         encoding = .utf8
         hasUTF8BOM = false
         format = FormatRegistry.standard.fallback
-        lineCount = 1
+        lineIndex = LineIndex()
     }
 
     required init(configuration: ReadConfiguration) throws {
@@ -78,7 +96,7 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         encoding = decoded.encoding
         hasUTF8BOM = decoded.hasUTF8BOM
         format = FormatRegistry.standard.format(for: configuration.contentType)
-        lineCount = Self.countLines(in: decoded.text)
+        lineIndex = LineIndex(text: decoded.text)
     }
 
     // MARK: Mutation (called by EditorModel)
@@ -88,12 +106,9 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         lock.withLock {
             precondition(range.location >= 0 && NSMaxRange(range) <= textStorage.length,
                          "Edit range is outside the document")
-            let removed = textStorage.substring(with: range)
             textStorage.replaceCharacters(in: range, with: replacement)
-            if removed.contains(where: \.isNewline)
-                || replacement.contains(where: \.isNewline) {
-                lineCount = Self.countLines(in: String(textStorage))
-            }
+            let delta = (replacement as NSString).length - range.length
+            lineIndex.apply(editIn: range, delta: delta, in: textStorage)
             generation &+= 1
             return generation
         }
@@ -102,18 +117,12 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
     func setText(_ text: String) {
         lock.withLock {
             textStorage.setString(text)
-            lineCount = Self.countLines(in: text)
+            lineIndex.rebuild(from: text)
             generation &+= 1
         }
     }
 
     func setFormat(_ newFormat: any DocumentFormat) { lock.withLock { format = newFormat } }
-
-    private static func countLines(in text: String) -> Int {
-        text.reduce(into: 1) { count, character in
-            if character.isNewline { count += 1 }
-        }
-    }
 
     func setSaveObserver(_ observer: (@Sendable (UInt64) -> Void)?) {
         lock.withLock { saveObserver = observer }

@@ -43,13 +43,15 @@ struct EditorTextView: NSViewRepresentable {
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                   height: CGFloat.greatestFiniteMagnitude)
 
-        // Load before constructing the gutter so its initial line index is
-        // built from the opened document rather than an empty text view.
+        // Load before constructing the gutter so it starts from the opened
+        // document's text and line count rather than an empty text view.
         textView.string = model.textSnapshot()
         scrollView.documentView = textView
-        scrollView.verticalRulerView = LineNumberRulerView(textView: textView,
-                                                          scrollView: scrollView)
-        (scrollView.verticalRulerView as? LineNumberRulerView)?.updateLineCount(model.lineCount)
+        let ruler = LineNumberRulerView(textView: textView,
+                                        scrollView: scrollView,
+                                        lineSource: model)
+        scrollView.verticalRulerView = ruler
+        ruler.refreshLineCount()
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
 
@@ -63,8 +65,9 @@ struct EditorTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        (scrollView.verticalRulerView as? LineNumberRulerView)?.updateLineCount(model.lineCount)
+        // Synchronize first: the ruler must read the new text, not the old one.
         context.coordinator.synchronizeFromDocumentIfNeeded()
+        (scrollView.verticalRulerView as? LineNumberRulerView)?.refreshLineCount()
         context.coordinator.modelDidChange()
     }
 }
@@ -92,7 +95,6 @@ extension EditorTextView {
         private var fullPassTask: Task<Void, Never>?
         private var synchronizedGeneration: UInt64 = 0
         private var isSynchronizing = false
-        private var lineIndex = LineIndex()
 
         init(model: EditorModel) {
             self.model = model
@@ -107,7 +109,6 @@ extension EditorTextView {
         func attach(to textView: NSTextView) {
             self.textView = textView
             synchronizedGeneration = model.documentTextGeneration
-            lineIndex.rebuild(from: textView.string)
             textView.delegate = self
             textView.textStorage?.delegate = self
             updateCursorLocation()
@@ -122,10 +123,16 @@ extension EditorTextView {
             guard generation != synchronizedGeneration else { return }
             isSynchronizing = true
             textView.string = model.textSnapshot()
-            lineIndex.rebuild(from: textView.string)
             synchronizedGeneration = generation
             isSynchronizing = false
             dirty = DirtyRange()
+            // Do not publish model state from inside `updateNSView`; refresh
+            // after the current view update has finished.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.model.refreshAfterExternalChange()
+                self.updateCursorLocation()
+            }
             highlightWholeDocument()
         }
 
@@ -139,15 +146,17 @@ extension EditorTextView {
         // MARK: NSTextViewDelegate
 
         func textViewDidChangeSelection(_ notification: Notification) {
+            // The external-sync path refreshes the cursor after its view update.
+            guard !isSynchronizing else { return }
             updateCursorLocation()
             textView?.needsDisplay = true
         }
 
         private func updateCursorLocation() {
             guard let textView else { return }
-            let text = textView.string as NSString
-            let location = min(textView.selectedRange().location, text.length)
-            let position = lineIndex.lineAndColumn(at: location)
+            let length = textView.textStorage?.length ?? 0
+            let location = min(textView.selectedRange().location, length)
+            let position = model.lineAndColumn(at: location)
             model.updateCursor(line: position.line, column: position.column)
             (textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?
                 .updateCurrentLine(position.line)
@@ -162,13 +171,11 @@ extension EditorTextView {
             // prevents a feedback loop.
             guard editedMask.contains(.editedCharacters) else { return }
             if !isSynchronizing {
-                let replacement = (textStorage.string as NSString).substring(with: editedRange)
-                let previousLineCount = model.lineCount
+                // Read only the replacement; do not materialize the whole file.
+                let replacement = (textStorage.mutableString as NSString)
+                    .substring(with: editedRange)
                 synchronizedGeneration = model.applyTextEdit(
                     editedRange: editedRange, delta: delta, replacement: replacement)
-                if model.lineCount != previousLineCount {
-                    lineIndex.rebuild(from: textStorage.string)
-                }
             }
             dirty.record(edited: editedRange, delta: delta)
             scheduleHighlight()

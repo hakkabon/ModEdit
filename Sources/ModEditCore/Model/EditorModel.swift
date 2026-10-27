@@ -60,6 +60,19 @@ final class EditorModel: ObservableObject {
         cursorColumn = max(1, column)
     }
 
+    /// Shared line lookup used by the status bar and the gutter.
+    func lineAndColumn(at location: Int) -> (line: Int, column: Int) {
+        document.lineAndColumn(at: location)
+    }
+
+    /// Refreshes UI state after a document replacement that did not originate
+    /// in the text view (for example Revert to Saved).
+    func refreshAfterExternalChange() {
+        textRevision = document.textGeneration
+        lineCount = document.numberOfLines
+        isDocumentDirty = document.isDirty
+    }
+
     private func refreshDocumentState() {
         isDocumentDirty = document.isDirty
     }
@@ -68,5 +81,15 @@ final class EditorModel: ObservableObject {
     func setFormat(_ newFormat: any DocumentFormat) {
         format = newFormat
         document.setFormat(newFormat)
+    }
+}
+
+extension EditorModel: LineNumberSource {
+    func lineNumber(at location: Int) -> Int {
+        document.lineAndColumn(at: location).line
+    }
+
+    func isLineStart(at location: Int) -> Bool {
+        document.isLineStart(at: location)
     }
 }

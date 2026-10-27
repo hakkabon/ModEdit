@@ -1,21 +1,25 @@
 import AppKit
 
 /// A lightweight line-number gutter attached to the editor's scroll view.
-/// It asks TextKit for rectangles only for visible lines, so drawing cost is
-/// proportional to the viewport rather than the complete document.
+/// It asks TextKit for rectangles only for visible lines, and it reads logical
+/// line numbers from the document's shared `LineIndex` rather than keeping a
+/// second index that could go stale after an edit.
 @MainActor
 final class LineNumberRulerView: NSRulerView {
     private weak var textView: NSTextView?
+    private let lineSource: any LineNumberSource
     private(set) var currentLine = 1
     private(set) var displayedLineCount = 1
-    private var lineIndex: LineIndex
 
-    init(textView: NSTextView, scrollView: NSScrollView) {
+    init(textView: NSTextView,
+         scrollView: NSScrollView,
+         lineSource: any LineNumberSource) {
         self.textView = textView
-        self.lineIndex = LineIndex(text: textView.string)
+        self.lineSource = lineSource
         super.init(scrollView: scrollView, orientation: .verticalRuler)
         clientView = textView
         ruleThickness = 44
+        displayedLineCount = max(1, lineSource.lineCount)
 
         scrollView.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(boundsDidChange),
@@ -29,10 +33,13 @@ final class LineNumberRulerView: NSRulerView {
 
     @objc private func boundsDidChange() { needsDisplay = true }
 
+    /// Reads the current count from the shared line source.
+    func refreshLineCount() {
+        updateLineCount(lineSource.lineCount)
+    }
+
     func updateLineCount(_ lineCount: Int) {
-        let changed = displayedLineCount != max(1, lineCount)
         displayedLineCount = max(1, lineCount)
-        if changed, let textView { lineIndex.rebuild(from: textView.string) }
         let digits = String(displayedLineCount).count
         let width = max(44, CGFloat(digits * 8 + 18))
         if width != ruleThickness { ruleThickness = width }
@@ -81,30 +88,21 @@ final class LineNumberRulerView: NSRulerView {
         }
 
         layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
-            [lineIndex] _, usedRect, _, fragmentGlyphRange, _ in
+            [lineSource] _, usedRect, _, fragmentGlyphRange, _ in
             let character = layoutManager.characterIndexForGlyph(at: fragmentGlyphRange.location)
-            drawLabel(lineNumber: lineIndex.lineAndColumn(at: character).line,
+            drawLabel(lineNumber: lineSource.lineNumber(at: character),
                       fragment: usedRect)
         }
 
         // NSLayoutManager represents a real empty final row separately.
-        if lineIndex.starts.last == textView.string.utf16.count,
+        let textLength = textView.textStorage?.length ?? 0
+        if lineSource.isLineStart(at: textLength),
            layoutManager.extraLineFragmentRect.intersects(containerVisible) {
-            drawLabel(lineNumber: lineIndex.starts.count,
+            drawLabel(lineNumber: lineSource.lineNumber(at: textLength),
                       fragment: layoutManager.extraLineFragmentRect)
         }
 
         NSColor.separatorColor.setFill()
         NSRect(x: bounds.maxX - 1, y: bounds.minY, width: 1, height: bounds.height).fill()
-    }
-
-    /// `text.length` is a real line start only for an empty document or when a
-    /// newline terminates the preceding line. This prevents drawing a synthetic
-    /// n+1 row for ordinary files with no trailing newline.
-    static func lineStarts(at location: Int, in text: NSString) -> Bool {
-        guard location >= 0, location <= text.length else { return false }
-        if location == 0 { return true }
-        if location < text.length { return true }
-        return [0x0A, 0x0D].contains(text.character(at: text.length - 1))
     }
 }
