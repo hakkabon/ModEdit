@@ -44,10 +44,12 @@ the right shows it as headings, emphasis, symbols and mathematics.
   with input methods (Japanese/Chinese/Korean composition).
 * **Live preview** (WebKit) that keeps its scroll position while you type:
   * *Markdown* — headings, paragraphs, lists, block quotes, fenced code,
-    `**bold**`, `*italic*`, `` `code` ``, links.
+    `**bold**`, `*italic*`, `` `code` ``, links (including URLs with balanced
+    parentheses such as `/wiki/Foo_(bar)`).
   * *LaTeX* — `\section`, `\textbf`, `\emph`, math with Greek letters and
     operators (`\alpha` → α), super/subscripts (`x^2`, `x_{i}`), comments hidden.
-  * *HTML* — your page as written (scripts disabled).
+  * *HTML* — your page as written, with scripts, frames and remote loads
+    disabled by the preview policy.
 * **Encoding-faithful I/O**: UTF-8 (with/without BOM), UTF-16 and detected legacy
   encodings are written back the way they were read; saving never silently
   replaces characters.
@@ -70,7 +72,7 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (76 tests)
+The current source is verified with `swift build` and `swift test` (88 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
 push and pull request.
 
@@ -154,17 +156,25 @@ document). XML, JSON and YAML open as plain text.
 
 Previewed files are *untrusted input*, so the preview is hardened:
 
-* the web view runs with **JavaScript disabled**;
-* **navigation is blocked** — clicked links open in your browser, never in the
-  preview;
+* the web view runs with **JavaScript disabled** and a **non-persistent data
+  store**, so previews leave no cookies or cache behind;
+* **navigation is blocked** — only the initial in-memory load is allowed.
+  Clicked `http`, `https` and `mailto` links open in your browser or mail client;
+  every other scheme and every document-initiated navigation (redirect, form,
+  frame) is cancelled. Link previews and back/forward gestures are disabled;
 * all text is **HTML-escaped** before markup is added; raw HTML in a Markdown or
   LaTeX file is shown as text;
-* Markdown links are limited to `http`, `https` and `mailto`;
-* generated pages carry a **Content-Security-Policy** forbidding scripts, remote
-  loads and frames.
+* Markdown link destinations are parsed with balanced parentheses and escaped
+  before insertion, so emphasis cannot rewrite a URL. Only `http`, `https` and
+  `mailto` become links; `javascript:`, `data:` and `file:` stay literal text;
+* generated pages and user HTML files carry the same **Content-Security-Policy**:
+  no scripts, frames, objects, forms or connections, and no remote loads
+  (`data:` images and fonts still work). The policy is injected into a user
+  document's `<head>`, after `<html>`, after a doctype, or before a fragment.
 
-The previous implementation inserted LaTeX source into the page unescaped, so a
-`.tex` file containing `<script>` would execute it.
+Earlier versions inserted LaTeX source into the page unescaped (so a `.tex` file
+containing `<script>` would execute it) and parsed Markdown links with a regular
+expression that mishandled URLs containing `*` or parentheses.
 
 ## Adding a format
 

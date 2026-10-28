@@ -23,6 +23,18 @@ enum HTMLEscaping {
 
 /// The HTML page that wraps rendered preview bodies.
 enum PreviewPage {
+    /// The policy shared by generated and user-supplied HTML.
+    ///
+    /// It forbids scripts, remote loads, frames and form submissions. Inline
+    /// styles are allowed so documents still look like themselves; `data:`
+    /// images/fonts keep self-contained files working. `base-uri` prevents a
+    /// `<base>` tag from redirecting links elsewhere.
+    static let contentSecurityPolicy = """
+        default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; \
+        img-src data:; font-src data:; media-src data:; connect-src 'none'; \
+        frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'
+        """
+
     /// Wraps `body` in a complete document with shared styling.
     ///
     /// The Content-Security-Policy forbids scripts, remote loads and frames, so
@@ -34,7 +46,7 @@ enum PreviewPage {
         <html>
         <head>
         <meta charset="utf-8">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+        \(policyMeta)
         <style>
         :root { color-scheme: light dark; }
         body { font-family: -apple-system, sans-serif; line-height: 1.5; padding: 20px; }
@@ -54,4 +66,39 @@ enum PreviewPage {
         </html>
         """
     }
+
+    /// Injects the preview policy into a user-supplied HTML document.
+    ///
+    /// HTML files are shown as written, so they cannot use `wrap(body:)`
+    /// without breaking full documents. Injecting the policy as early as
+    /// possible keeps subsequent subresource loads and inline scripts inert.
+    static func hardenHTMLDocument(_ source: String) -> String {
+        let meta = policyMeta
+
+        if let head = source.range(of: #"(?i)<head\b[^>]*>"#,
+                                   options: .regularExpression) {
+            var result = source
+            result.insert(contentsOf: meta, at: head.upperBound)
+            return result
+        }
+
+        if let html = source.range(of: #"(?i)<html\b[^>]*>"#,
+                                   options: .regularExpression) {
+            var result = source
+            result.insert(contentsOf: "<head>\(meta)</head>", at: html.upperBound)
+            return result
+        }
+
+        if let doctype = source.range(of: #"(?i)<!doctype\b[^>]*>"#,
+                                      options: .regularExpression) {
+            var result = source
+            result.insert(contentsOf: meta, at: doctype.upperBound)
+            return result
+        }
+
+        return meta + source
+    }
+
+    private static let policyMeta =
+        #"<meta http-equiv="Content-Security-Policy" content="\#(contentSecurityPolicy)">"#
 }

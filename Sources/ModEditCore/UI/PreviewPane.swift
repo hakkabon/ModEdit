@@ -5,8 +5,9 @@ import AppKit
 /// Live preview of the document, rendered by a format's `PreviewRenderer`.
 ///
 /// Security: the previewed text is untrusted (it is whatever file the user
-/// opened), so the web view runs with **JavaScript disabled** and **navigation
-/// blocked**. Links open in the default browser instead of replacing the preview.
+/// opened), so the web view runs with **JavaScript disabled**, a
+/// **non-persistent data store**, and **navigation blocked**. Links open in the
+/// default browser instead of replacing the preview.
 struct PreviewPane: NSViewRepresentable {
     let renderer: any PreviewRenderer
     let revision: UInt64
@@ -17,8 +18,12 @@ struct PreviewPane: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        // No cookies, caches or other state survive between previews.
+        configuration.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        webView.allowsBackForwardNavigationGestures = false
+        webView.allowsLinkPreview = false
         return webView
     }
 
@@ -72,17 +77,19 @@ struct PreviewPane: NSViewRepresentable {
 
         func webView(_ webView: WKWebView,
                      decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-            // `loadHTMLString` is reported as `.other`; anything the user
-            // clicks is not allowed to navigate the preview itself.
-            if navigationAction.navigationType == .linkActivated {
-                if let url = navigationAction.request.url,
-                   let scheme = url.scheme?.lowercased(),
-                   ["http", "https", "mailto"].contains(scheme) {
-                    NSWorkspace.shared.open(url)
-                }
+            let action = PreviewNavigationPolicy.action(
+                for: navigationAction.request.url,
+                isLinkActivated: navigationAction.navigationType == .linkActivated)
+
+            switch action {
+            case .allow:
+                return .allow
+            case .cancel:
+                return .cancel
+            case .openExternally(let url):
+                NSWorkspace.shared.open(url)
                 return .cancel
             }
-            return .allow
         }
     }
 }

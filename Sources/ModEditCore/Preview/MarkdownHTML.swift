@@ -120,33 +120,161 @@ enum MarkdownHTML {
 
     // MARK: Inline
 
-    /// Private-use character delimiting code-span placeholders.
+    /// Private-use character delimiting protected spans.
     private static let marker = "\u{E000}"
 
     static func inline(_ text: String) -> String {
-        var s = HTMLEscaping.escape(text)
+        // Code spans are extracted first so link syntax inside them stays
+        // literal. Links are extracted next and their destinations are parked
+        // behind placeholders, so the emphasis pass can never edit a URL.
+        let code = replaceCodeSpans(in: text)
+        let links = replaceLinks(in: code.text, codeSpans: code.spans)
 
-        // Code spans first, parked behind placeholders so that emphasis and
-        // link syntax inside them is left alone.
-        var codeSpans: [String] = []
-        s = s.replacingMatches(of: #"`([^`\n]+)`"#) { groups in
-            codeSpans.append("<code>\(groups[1])</code>")
-            return "\(marker)\(codeSpans.count - 1)\(marker)"
+        var s = HTMLEscaping.escape(links.text)
+        s = applyEmphasis(to: s)
+        s = restorePlaceholders(in: s, kind: "C", values: code.spans)
+        s = restorePlaceholders(in: s, kind: "L", values: links.spans)
+        return s
+    }
+
+    private static func placeholder(_ kind: String, _ index: Int) -> String {
+        "\(marker)\(kind)\(index)\(marker)"
+    }
+
+    private static func replaceCodeSpans(in text: String) -> (text: String, spans: [String]) {
+        var spans: [String] = []
+        let result = text.replacingMatches(of: #"`([^`\n]+)`"#) { groups in
+            spans.append("<code>\(HTMLEscaping.escape(groups[1]))</code>")
+            return placeholder("C", spans.count - 1)
+        }
+        return (result, spans)
+    }
+
+    /// Replaces `[label](destination)` with protected link markup.
+    ///
+    /// A scanner rather than a regular expression: destinations may contain
+    /// balanced parentheses (for example `/wiki/Foo_(bar)`), and emphasis must
+    /// not see the generated `href` attribute.
+    private static func replaceLinks(in text: String,
+                                     codeSpans: [String]) -> (text: String, spans: [String]) {
+        var result = ""
+        var spans: [String] = []
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            guard text[index] == "[" else {
+                result.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+
+            let labelStart = text.index(after: index)
+            guard let closeBracket = text[labelStart...].firstIndex(where: {
+                      $0 == "]" || $0 == "\n"
+                  }),
+                  text[closeBracket] == "]",
+                  labelStart < closeBracket
+            else {
+                result.append(text[index])
+                index = labelStart
+                continue
+            }
+
+            let afterBracket = text.index(after: closeBracket)
+            guard afterBracket < text.endIndex, text[afterBracket] == "(" else {
+                result.append(text[index])
+                index = labelStart
+                continue
+            }
+
+            var cursor = text.index(after: afterBracket)
+            var depth = 0
+            var destination = ""
+            var closingParenthesis: String.Index?
+
+            while cursor < text.endIndex {
+                let character = text[cursor]
+                if character == "\n" { break }
+                if character == "(" {
+                    depth += 1
+                    destination.append(character)
+                } else if character == ")" {
+                    if depth == 0 {
+                        closingParenthesis = cursor
+                        break
+                    }
+                    depth -= 1
+                    destination.append(character)
+                } else {
+                    destination.append(character)
+                }
+                cursor = text.index(after: cursor)
+            }
+
+            guard let closingParenthesis,
+                  let href = safeLinkDestination(destination)
+            else {
+                // Not a valid link: leave the source text intact. The normal
+                // escaping pass will display it literally.
+                result.append(text[index])
+                index = labelStart
+                continue
+            }
+
+            let label = String(text[labelStart..<closeBracket])
+            let labelHTML = renderLinkLabel(label, codeSpans: codeSpans)
+            spans.append("<a href=\"\(href)\">\(labelHTML)</a>")
+            result += placeholder("L", spans.count - 1)
+            index = text.index(after: closingParenthesis)
         }
 
-        s = s.replacingMatches(of: #"\[([^\]\n]+)\]\(([^)\s]+)\)"#) { groups in
-            let scheme = groups[2].lowercased()
-            guard scheme.hasPrefix("http://") || scheme.hasPrefix("https://") || scheme.hasPrefix("mailto:")
-            else { return groups[0] }   // e.g. javascript: stays inert text
-            // The URL was already escaped above, so it is safe inside quotes.
-            return "<a href=\"\(groups[2])\">\(groups[1])</a>"
-        }
-        s = s.replacingMatches(of: #"(?s)\*\*(?=\S)(.+?)(?<=\S)\*\*"#) { "<strong>\($0[1])</strong>" }
-        s = s.replacingMatches(of: #"\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*"#) { "<em>\($0[1])</em>" }
+        return (result, spans)
+    }
 
-        return s.replacingMatches(of: "\(marker)(\\d+)\(marker)") { groups in
-            guard let index = Int(groups[1]), codeSpans.indices.contains(index) else { return "" }
-            return codeSpans[index]
+    private static func safeLinkDestination(_ raw: String) -> String? {
+        let destination = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty,
+              !destination.contains(where: \.isWhitespace),
+              let colon = destination.firstIndex(of: ":")
+        else { return nil }
+
+        let scheme = destination[..<colon].lowercased()
+        guard scheme == "http" || scheme == "https" || scheme == "mailto" else {
+            return nil
+        }
+
+        // Escaping the attribute value here means emphasis and escaping later
+        // cannot alter the URL.
+        return HTMLEscaping.escape(destination)
+    }
+
+    private static func renderLinkLabel(_ label: String,
+                                        codeSpans: [String]) -> String {
+        var s = HTMLEscaping.escape(label)
+        s = applyEmphasis(to: s)
+        return restorePlaceholders(in: s, kind: "C", values: codeSpans)
+    }
+
+    private static func applyEmphasis(to text: String) -> String {
+        var s = text.replacingMatches(of: #"(?s)\*\*(?=\S)(.+?)(?<=\S)\*\*"#) {
+            "<strong>\($0[1])</strong>"
+        }
+        s = s.replacingMatches(of: #"\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*"#) {
+            "<em>\($0[1])</em>"
+        }
+        return s
+    }
+
+    private static func restorePlaceholders(in text: String,
+                                            kind: String,
+                                            values: [String]) -> String {
+        guard !values.isEmpty else { return text }
+        let pattern = "\(marker)\(kind)(\\d+)\(marker)"
+        return text.replacingMatches(of: pattern) { groups in
+            guard let index = Int(groups[1]), values.indices.contains(index) else {
+                return ""
+            }
+            return values[index]
         }
     }
 }
