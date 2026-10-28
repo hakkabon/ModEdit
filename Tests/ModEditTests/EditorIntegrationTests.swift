@@ -1,6 +1,5 @@
 import Testing
 import AppKit
-import Combine
 @testable import ModEditCore
 
 @Suite("Editor integration", .serialized)
@@ -70,22 +69,21 @@ struct EditorIntegrationTests {
         harness.textView.textStorage?.replaceCharacters(
             in: NSRange(location: 5, length: 0), with: " second")
 
-        let snapshot = try harness.document.snapshot(contentType: .plainText)
+        let snapshot = harness.document.snapshot()
 
         #expect(snapshot.text == "first second")
         #expect(snapshot.encoding == .utf8)
     }
 
-    @Test func editsNotifyDocumentForAutosave() {
+    @Test func editsNotifyTheDocumentShellForAutosave() {
         let harness = makeHarness(text: "before")
         var changeCount = 0
-        let subscription = harness.document.objectWillChange.sink { changeCount += 1 }
+        harness.model.onTextChange = { changeCount += 1 }
 
         harness.textView.textStorage?.replaceCharacters(
             in: NSRange(location: 0, length: 6), with: "after")
 
         #expect(changeCount == 1)
-        withExtendedLifetime(subscription) {}
     }
 
     @Test func cursorLocationIsOneBased() {
@@ -218,7 +216,7 @@ struct EditorIntegrationTests {
         let harness = makeHarness(text: "one")
         harness.textView.textStorage?.replaceCharacters(
             in: NSRange(location: 3, length: 0), with: " two")
-        let firstSnapshot = try harness.document.snapshot(contentType: .plainText)
+        let firstSnapshot = harness.document.snapshot()
         harness.textView.textStorage?.replaceCharacters(
             in: NSRange(location: 7, length: 0), with: " three")
 
@@ -226,7 +224,7 @@ struct EditorIntegrationTests {
         await Task.yield()
         #expect(harness.model.isDocumentDirty)
 
-        let latestSnapshot = try harness.document.snapshot(contentType: .plainText)
+        let latestSnapshot = harness.document.snapshot()
         harness.document.recordSuccessfulWrite(generation: latestSnapshot.generation)
         await Task.yield()
         #expect(!harness.model.isDocumentDirty)

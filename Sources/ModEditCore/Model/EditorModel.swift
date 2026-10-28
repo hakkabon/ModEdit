@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Publishes a cheap revision counter instead of a complete `String` on every
 /// keystroke. Preview and saving request a snapshot only after their debounce
-/// or when SwiftUI asks for a file snapshot.
+/// or when the document is written.
 @MainActor
 final class EditorModel: ObservableObject {
     @Published private(set) var textRevision: UInt64
@@ -14,16 +14,25 @@ final class EditorModel: ObservableObject {
     @Published private(set) var cursorColumn = 1
     @Published private(set) var isDocumentDirty: Bool
     @Published private(set) var lineCount: Int
+    /// Whether the live-preview pane is shown. Owned here rather than in the
+    /// view so the window's toolbar can toggle it.
+    @Published var showPreview = true
 
     let tabSize = 4
+
+    /// Called after an edit has been applied to the buffer. The `NSDocument`
+    /// shell uses this to record a change for autosave and the window's edited
+    /// indicator.
+    var onTextChange: (() -> Void)?
+    /// Called when the user picks a different format.
+    var onFormatChange: ((any DocumentFormat) -> Void)?
 
     private let document: EditorDocument
 
     init(document: EditorDocument) {
-        let content = document.content
         self.document = document
         self.textRevision = document.textGeneration
-        self.format = content.format
+        self.format = document.currentFormat
         self.isDocumentDirty = document.isDirty
         self.lineCount = document.numberOfLines
         document.setSaveObserver { [weak self] _ in
@@ -31,9 +40,17 @@ final class EditorModel: ObservableObject {
                 self?.refreshDocumentState()
             }
         }
+        document.setExternalChangeObserver { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshAfterExternalChange()
+            }
+        }
     }
 
-    deinit { document.setSaveObserver(nil) }
+    deinit {
+        document.setSaveObserver(nil)
+        document.setExternalChangeObserver(nil)
+    }
 
     func textSnapshot() -> String { document.text }
 
@@ -45,13 +62,11 @@ final class EditorModel: ObservableObject {
     func applyTextEdit(editedRange: NSRange, delta: Int, replacement: String) -> UInt64 {
         let oldLength = editedRange.length - delta
         let oldRange = NSRange(location: editedRange.location, length: oldLength)
-        // ReferenceFileDocument uses this publisher to schedule autosave and
-        // update the edited-state indicator in the window title.
-        document.objectWillChange.send()
         let generation = document.replaceText(in: oldRange, with: replacement)
         textRevision = generation
         lineCount = document.numberOfLines
         isDocumentDirty = document.isDirty
+        onTextChange?()
         return generation
     }
 
@@ -68,6 +83,7 @@ final class EditorModel: ObservableObject {
     /// Refreshes UI state after a document replacement that did not originate
     /// in the text view (for example Revert to Saved).
     func refreshAfterExternalChange() {
+        format = document.currentFormat
         textRevision = document.textGeneration
         lineCount = document.numberOfLines
         isDocumentDirty = document.isDirty
@@ -81,6 +97,7 @@ final class EditorModel: ObservableObject {
     func setFormat(_ newFormat: any DocumentFormat) {
         format = newFormat
         document.setFormat(newFormat)
+        onFormatChange?(newFormat)
     }
 }
 

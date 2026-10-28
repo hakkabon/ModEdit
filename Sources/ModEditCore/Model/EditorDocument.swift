@@ -1,22 +1,26 @@
-import SwiftUI
-import UniformTypeIdentifiers
+import Foundation
 
-/// The persisted document: text, encoding and format.
+/// The persisted document state: text, encoding, line index and format.
 ///
-/// ## Why this type looks the way it does
+/// ## Why this type is not an `NSDocument`
 ///
-/// `ReferenceFileDocument` requires conforming types to be `Sendable`, and
-/// SwiftUI calls `snapshot` and `fileWrapper` on different threads (Apple:
-/// "don't perform serialization on the main actor"). The document therefore:
+/// `NSDocument` owns the window, save panels, undo integration and the *actual*
+/// write to disk. This type owns only the mutable text buffer. Keeping the two
+/// apart means the buffer can stay a small, lock-protected, `Sendable` value
+/// store that is safe to snapshot from the background thread `NSDocument` uses
+/// for saving, while all AppKit state stays on the main actor in
+/// `ModEditDocument`.
 ///
-/// * keeps its state behind a lock (`@unchecked Sendable` is justified by that
-///   lock being the *only* access path);
-/// * hands SwiftUI a **value-type snapshot**, not itself. Returning the live
-///   model, as the previous version did, races with ongoing typing.
+/// ## Locking invariant
 ///
-/// UI state (published text, the preview) lives in the main-actor `EditorModel`,
-/// which writes edits back here.
-final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
+/// Every field below is read and written while `lock` is held. A snapshot (text,
+/// encoding, BOM and generation) is therefore captured atomically: the encoded
+/// bytes can never pair older text with a newer generation, or vice versa.
+///
+/// Observers are always invoked *after* the lock is released. This avoids
+/// re-entrancy and lets an observer publish UI state or schedule main-actor work
+/// without deadlocking.
+final class EditorDocument: @unchecked Sendable {
 
     /// A consistent copy of the current document state.
     struct Content: Sendable {
@@ -26,16 +30,17 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         var format: any DocumentFormat
     }
 
-    /// An immutable copy of what must be written to disk.
+    /// An immutable copy of exactly what must be written to disk.
+    ///
+    /// `generation` identifies the edit state the text was taken from. A save
+    /// completion records this value, so a write that was overtaken by newer
+    /// edits cannot mark those edits clean.
     struct Snapshot: Sendable {
         let text: String
         let encoding: String.Encoding
         let hasUTF8BOM: Bool
         let generation: UInt64
     }
-
-    static var readableContentTypes: [UTType] { FormatRegistry.standard.readableContentTypes }
-    static var writableContentTypes: [UTType] { readableContentTypes }
 
     private let lock = NSLock()
     private var textStorage: NSMutableString
@@ -45,6 +50,7 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
     private var generation: UInt64 = 0
     private var savedGeneration: UInt64 = 0
     private var saveObserver: (@Sendable (UInt64) -> Void)?
+    private var externalChangeObserver: (@Sendable (UInt64) -> Void)?
     /// Single source of truth for line starts, shared by the status bar and gutter.
     private var lineIndex: LineIndex
 
@@ -59,6 +65,7 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
     var text: String { lock.withLock { String(textStorage) } }
     var textGeneration: UInt64 { lock.withLock { generation } }
     var isDirty: Bool { lock.withLock { generation != savedGeneration } }
+    var currentFormat: any DocumentFormat { lock.withLock { format } }
 
     /// Number of logical lines, at least one.
     var numberOfLines: Int { lock.withLock { lineIndex.lineCount } }
@@ -87,19 +94,39 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         lineIndex = LineIndex()
     }
 
-    required init(configuration: ReadConfiguration) throws {
-        guard let data = configuration.file.regularFileContents else {
-            throw CocoaError(.fileReadCorruptFile)
+    /// Atomically captures the text, encoding, BOM and edit generation.
+    ///
+    /// This is the only method that should be used to produce bytes for saving.
+    /// Reading `content` and `textGeneration` separately would allow an edit
+    /// between the two reads to make the snapshot internally inconsistent.
+    func snapshot() -> Snapshot {
+        lock.withLock {
+            Snapshot(text: String(textStorage),
+                     encoding: encoding,
+                     hasUTF8BOM: hasUTF8BOM,
+                     generation: generation)
         }
-        let decoded = try TextIO.decode(data)
-        textStorage = NSMutableString(string: decoded.text)
-        encoding = decoded.encoding
-        hasUTF8BOM = decoded.hasUTF8BOM
-        format = FormatRegistry.standard.format(for: configuration.contentType)
-        lineIndex = LineIndex(text: decoded.text)
     }
 
-    // MARK: Mutation (called by EditorModel)
+    // MARK: Loading and mutation
+
+    /// Replaces the entire buffer after a decode and marks it saved.
+    ///
+    /// Used when opening a file and by Revert. Notifies external observers so an
+    /// existing text view can pull in the new contents.
+    func load(_ decoded: TextIO.Decoded, format newFormat: any DocumentFormat) {
+        let result = lock.withLock { () -> (observer: (@Sendable (UInt64) -> Void)?, generation: UInt64) in
+            textStorage.setString(decoded.text)
+            encoding = decoded.encoding
+            hasUTF8BOM = decoded.hasUTF8BOM
+            format = newFormat
+            lineIndex.rebuild(from: decoded.text)
+            generation &+= 1
+            savedGeneration = generation
+            return (externalChangeObserver, generation)
+        }
+        result.observer?(result.generation)
+    }
 
     @discardableResult
     func replaceText(in range: NSRange, with replacement: String) -> UInt64 {
@@ -114,44 +141,40 @@ final class EditorDocument: ReferenceFileDocument, @unchecked Sendable {
         }
     }
 
+    /// Replaces the whole text programmatically (tests and external reloads).
     func setText(_ text: String) {
-        lock.withLock {
+        let result = lock.withLock { () -> (observer: (@Sendable (UInt64) -> Void)?, generation: UInt64) in
             textStorage.setString(text)
             lineIndex.rebuild(from: text)
             generation &+= 1
+            return (externalChangeObserver, generation)
         }
+        result.observer?(result.generation)
     }
 
     func setFormat(_ newFormat: any DocumentFormat) { lock.withLock { format = newFormat } }
+
+    // MARK: Observers
 
     func setSaveObserver(_ observer: (@Sendable (UInt64) -> Void)?) {
         lock.withLock { saveObserver = observer }
     }
 
-    /// Records a successful write without clearing a newer unsaved edit.
+    /// Called after a whole-buffer replacement (open or revert), not after
+    /// ordinary typing.
+    func setExternalChangeObserver(_ observer: (@Sendable (UInt64) -> Void)?) {
+        lock.withLock { externalChangeObserver = observer }
+    }
+
+    /// Records a write that has actually completed.
+    ///
+    /// `savedGeneration` only moves forward, so a late completion for an older
+    /// snapshot cannot hide a newer unsaved edit.
     func recordSuccessfulWrite(generation writtenGeneration: UInt64) {
         let observer = lock.withLock { () -> (@Sendable (UInt64) -> Void)? in
             savedGeneration = max(savedGeneration, writtenGeneration)
             return saveObserver
         }
         observer?(writtenGeneration)
-    }
-
-    // MARK: ReferenceFileDocument
-
-    func snapshot(contentType: UTType) throws -> Snapshot {
-        let current = content
-        return Snapshot(text: current.text,
-                        encoding: current.encoding,
-                        hasUTF8BOM: current.hasUTF8BOM,
-                        generation: textGeneration)
-    }
-
-    func fileWrapper(snapshot: Snapshot, configuration: WriteConfiguration) throws -> FileWrapper {
-        let data = try TextIO.encode(snapshot.text,
-                                     as: snapshot.encoding,
-                                     withUTF8BOM: snapshot.hasUTF8BOM)
-        recordSuccessfulWrite(generation: snapshot.generation)
-        return FileWrapper(regularFileWithContents: data)
     }
 }

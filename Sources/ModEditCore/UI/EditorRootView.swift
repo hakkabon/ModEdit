@@ -3,22 +3,16 @@ import SwiftUI
 /// One editor window: source editor on the left, optional live preview on the right.
 @MainActor
 struct EditorRootView: View {
-    /// `@StateObject` (not `@ObservedObject` on the document): the view must
-    /// observe the *model*, whose revision changes on every keystroke. Observing
-    /// only the document, as before, meant the preview never refreshed.
-    @StateObject private var model: EditorModel
-    @State private var showPreview = true
-
-    init(document: EditorDocument) {
-        _model = StateObject(wrappedValue: EditorModel(document: document))
-    }
+    /// The window controller owns the model, so this is `@ObservedObject`, not
+    /// `@StateObject`: recreating the view must not create a second model.
+    @ObservedObject var model: EditorModel
 
     var body: some View {
         let renderer = model.format.makePreviewRenderer()
         VStack(spacing: 0) {
             HSplitView {
                 EditorTextView(model: model).frame(minWidth: 300)
-                if showPreview, let renderer {
+                if model.showPreview, let renderer {
                     PreviewPane(renderer: renderer,
                                 revision: model.textRevision,
                                 source: { model.textSnapshot() })
@@ -26,14 +20,6 @@ struct EditorRootView: View {
                 }
             }
             EditorStatusBar(model: model, formatID: formatID)
-        }
-        .toolbar {
-            ToolbarItem {
-                Button { showPreview.toggle() } label: {
-                    Label("Preview", systemImage: "sidebar.right")
-                }
-                .disabled(renderer == nil)
-            }
         }
     }
 

@@ -28,8 +28,9 @@ the right shows it as headings, emphasis, symbols and mathematics.
 
 ## Features
 
-* Document-based app (open, save, autosave, versions) built on SwiftUI
-  `DocumentGroup`.
+* Document-based app (open, save, save a copy, revert, autosave) built on an
+  `NSDocument` shell that hosts the SwiftUI editor. Saves are reported as
+  successful only after the file write actually completes.
 * TextKit-backed `NSTextView` editor with find bar, undo/redo and **all automatic
   text "corrections" disabled** (smart quotes, dashes, replacement), because this
   is a source editor.
@@ -69,7 +70,7 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (67 tests)
+The current source is verified with `swift build` and `swift test` (76 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
 push and pull request.
 
@@ -81,17 +82,20 @@ You can also open `Package.swift` in Xcode and run the `ModEdit` scheme.
 ## Architecture
 
 ```
-ModEditApp (executable)           thin: @main App { ModEditScene() }
+ModEditApp (executable)           thin: @main calls ModEditApplication.run()
         │
-        ▼  only public symbol: ModEditScene
+        ▼  AppKit application + document shell
 ModEditCore (library)
 ┌──────────────────────────────────────────────────────────────────────────┐
+│ App           ModEditApplication (NSApplicationDelegate, menu)           │
+│               ModEditDocument (NSDocument: read/write/save completion)    │
+│               ModEditWindowController (window, toolbar, SwiftUI hosting) │
 │ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
 │                 status bar       └ LineNumberRulerView       (WKWebView) │
 │                    │                  │  ▲ edits           (WKWebView)    │
 │ Model         EditorModel (@MainActor, @Published revision/format)       │
 │                    │ writes through                                       │
-│               EditorDocument (locked mutable text; immutable snapshots)  │
+│               EditorDocument (locked mutable text; atomic snapshots)      │
 │                 └ LineIndex (shared, incrementally updated line starts)  │
 │ IO            TextIO (decode/encode, BOM, encoding detection)            │
 │                                                                          │
@@ -113,14 +117,14 @@ Data flow while typing:
 2. The storage delegate reports the edit → `DirtyRange` accumulates it → after an
    80 ms debounce `StorageHighlighter` re-colours **only the touched lines**.
 3. The storage delegate applies only the replacement range to the document's
-   locked `NSMutableString`, increments a cheap published revision, and notifies
-   `ReferenceFileDocument` so autosave sees the change.
+   locked `NSMutableString`, increments a cheap published revision, and tells
+   `ModEditDocument` about the change so autosave and the edited indicator see it.
 4. SwiftUI re-evaluates `EditorRootView`; after a 250 ms debounce `PreviewPane`
    takes one immutable snapshot, renders it, skips identical output, and restores
    the scroll position. Fast typing therefore does not copy the complete file
    for every keystroke.
 5. Selection changes update the status bar's one-based `line:column` location.
-   Successful writes record the exact saved generation; the document becomes
+   A successful write records the exact saved generation; the document becomes
    clean only when no newer edit exists.
 
 Navigation uses one cached UTF-16 line-start index owned by the document. Both
@@ -140,8 +144,8 @@ manager only for visible line fragments.
 | HTML       | `public.html`                 | tags, attributes, strings, comments            | yes     |
 
 The format is chosen from the file's type on open and can be changed from the
-toolbar picker (which also lets you pick a format for a new, untitled document).
-XML, JSON and YAML open as plain text.
+status-bar picker (which also lets you pick a format for a new, untitled
+document). XML, JSON and YAML open as plain text.
 
 > `UTType.markdown` only exists in the macOS 27 SDK, so Markdown is imported by
 > identifier (`UTType(importedAs:)`) and declared in `Info.plist`.
@@ -199,9 +203,10 @@ A new preview is a `PreviewRenderer` returning an HTML string; wrap bodies with
 Package.swift
 scripts/make-app.sh                 build ModEdit.app
 Sources/
-  ModEditApp/                       @main, Info.plist
+  ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
-    ModEditScene.swift              the only public API
+    ModEditApplication.swift        AppKit application, delegate and main menu
+    Model/ModEditDocument.swift     NSDocument shell and window controller
     Formats/                        DocumentFormat, FormatRegistry, formats, UTTypes
     Highlighting/                   Token, Tokenizer, DirtyRange, EditorTheme, StorageHighlighter
     IO/TextIO.swift
@@ -219,9 +224,15 @@ Tests/ModEditTests/                 Swift Testing suites
   `Sendable` and testable; theming is one file.
 * **Immutable registry, not a mutable singleton.** No registration step to
   forget or race.
-* **Document vs. model split.** `ReferenceFileDocument` must be `Sendable` and is
-  saved off the main thread, so the persisted state is lock-protected and saved
-  via a value snapshot; UI state lives in a `@MainActor` model.
+* **Document shell vs. buffer split.** `NSDocument` owns windows, save panels,
+  undo change counts and the disk write. The persisted text stays in a
+  lock-protected buffer that hands out immutable snapshots, while UI state lives
+  in a `@MainActor` model. This keeps saving off the main thread without racing
+  ongoing typing.
+* **Success means the write finished.** SwiftUI's `ReferenceFileDocument` exposes
+  no post-write callback, so save success is recorded only in `NSDocument`'s
+  save completion handler. A failed or interrupted write leaves the document
+  dirty, and an older completed save cannot mark newer edits clean.
 * **Rules are ordered by priority** ("later wins") so comments and code spans
   reliably override anything matching inside them.
 * **State machines for multiline syntax.** Markdown fences and HTML tags and
@@ -236,7 +247,7 @@ Tests/ModEditTests/                 Swift Testing suites
   external replacement and pulled into the text view, covering reload/revert.
 * **Generation-based save status.** Save snapshots carry their source generation.
   A completed older autosave cannot incorrectly mark a newer edit clean.
-* **Small public surface.** Only `ModEditScene` is public.
+* **Small public surface.** Only `ModEditApplication` is public.
 
 ## Known limitations
 
@@ -247,8 +258,9 @@ Tests/ModEditTests/                 Swift Testing suites
   synchronised with the source.
 * **Markdown subset only** (no nested lists, tables, images, setext headings).
   **LaTeX subset only** (no environments, `\frac`, `\sqrt`, macros).
-* **HTML preview cannot load relative resources** (images, CSS) because
-  `DocumentGroup` does not expose the document's URL.
+* **HTML preview cannot load relative resources** (images, CSS) yet. The
+  `NSDocument` shell now exposes the document URL, so supplying it as the web
+  view's base URL is a natural next step.
 * **Edits still move suffix bytes.** The document uses `NSMutableString`, so it
   avoids a second full-file model copy but insertion near the beginning of a very
   large file remains O(n). A piece table or rope is the next scaling step.
@@ -268,9 +280,8 @@ Tests/ModEditTests/                 Swift Testing suites
    same source map).
 3. **Real parsers:** `swift-markdown` for CommonMark/GFM and a bundled KaTeX for
    typeset maths; expand stateful highlighting to embedded languages.
-4. **NSDocument-based shell** if relative resources or finer control over saving
-   are needed. Note SwiftUI's new `WritableDocument` API (SDK 27) is the intended
-   successor to `ReferenceFileDocument`.
+4. **Relative resources in the preview**, using the document URL as the web
+   view's base URL.
 5. User-selectable themes, font and size settings; line numbers; soft-wrap toggle.
 6. Export (HTML/PDF) from the preview.
 

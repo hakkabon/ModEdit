@@ -18,8 +18,9 @@ struct LaTeXPreviewRenderer: PreviewRenderer {
 ///
 /// The preview web view runs with JavaScript disabled and blocks navigation
 /// (see `PreviewPane`), so scripts in the document do not execute. Relative
-/// resources (images, stylesheets) do not resolve because `DocumentGroup` does
-/// not expose the file URL; that needs an `NSDocument`-based app.
+/// resources (images, stylesheets) do not resolve yet because the generated
+/// page has no file `baseURL`; the document shell now exposes the URL, so that
+/// can be wired up next.
 struct HTMLPreviewRenderer: PreviewRenderer {
     func renderHTML(from source: String) async throws -> String { source }
 }

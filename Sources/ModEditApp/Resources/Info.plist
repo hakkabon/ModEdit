@@ -37,6 +37,10 @@
             <string>Editor</string>
             <key>LSHandlerRank</key>
             <string>Alternate</string>
+            <!-- The Objective-C name of the NSDocument subclass. Declared with
+                 @objc(ModEditDocument) in ModEditCore. -->
+            <key>NSDocumentClass</key>
+            <string>ModEditDocument</string>
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.plain-text</string>
