@@ -15,7 +15,7 @@ struct EditorRootView: View {
                 if model.showPreview, let renderer {
                     PreviewPane(renderer: renderer,
                                 revision: model.textRevision,
-                                source: { model.textSnapshot() })
+                                source: { model.previewSnapshot(upTo: PreviewPane.maximumSourceLength) })
                         .frame(minWidth: 300)
                 }
             }

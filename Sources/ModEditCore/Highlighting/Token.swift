@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// What a piece of text *is*, independent of how it is drawn.
@@ -65,6 +66,24 @@ struct Tokenizer {
         let kind: TokenKind
     }
 
+    /// Multiline state at a line boundary.
+    ///
+    /// A local pass starts from `State()` and scans the document prefix so a
+    /// dirty line inside a fence or comment is still classified correctly. A
+    /// full-document pass carries one `State` across line-aligned chunks, so
+    /// the Markdown/HTML scanners visit every character once instead of
+    /// re-scanning the prefix for each chunk.
+    struct State: Equatable, Sendable {
+        /// UTF-16 offset up to which the state machine has consumed text.
+        fileprivate var scanLocation = 0
+        fileprivate var markdownFenceStart: Int?
+        fileprivate var htmlCommentStart: Int?
+        fileprivate var htmlTagStart: Int?
+        fileprivate var htmlTagQuote: unichar?
+
+        init() {}
+    }
+
     private let rules: [CompiledRule]
     private let mode: HighlightingMode
 
@@ -82,30 +101,65 @@ struct Tokenizer {
     ///
     /// `range` should start and end on line boundaries so `^` and `$` behave.
     func tokens(in text: String, range: NSRange) -> [Token] {
-        let ns = text as NSString
-        let documentRange = NSRange(location: 0, length: ns.length)
+        tokens(in: text as NSString, range: range)
+    }
+
+    /// NSString overload used by the editor. `NSTextStorage.mutableString` can
+    /// be passed directly, so a highlight pass never copies the whole document.
+    func tokens(in text: NSString, range: NSRange) -> [Token] {
+        var state = State()
+        return tokens(in: text, range: range, state: &state)
+    }
+
+    /// Tokens for one line-aligned chunk of a full-document pass.
+    ///
+    /// `state` must describe the text immediately before `range` and is
+    /// advanced to its end. Pass a fresh `State()` for the first chunk, or for
+    /// a local pass that recovers state from the document start.
+    func tokens(in text: NSString, range: NSRange, state: inout State) -> [Token] {
+        let documentRange = NSRange(location: 0, length: text.length)
         let requested = NSIntersectionRange(range, documentRange)
         guard requested.location != NSNotFound else { return [] }
 
-        let htmlTokens = mode == .html ? scanHTML(in: ns, clippedTo: requested) : (tags: [], comments: [])
+        var scanner = ChunkScanner()
+        let htmlTokens = mode == .html
+            ? scanHTML(in: text, clippedTo: requested, state: &state, scanner: &scanner)
+            : (tags: [], comments: [])
         var result: [Token] = htmlTokens.tags
-        for rule in rules {
-            rule.regex.enumerateMatches(in: text, options: [], range: requested) { match, _, _ in
-                guard let match, match.range.length > 0 else { return }
-                if mode == .html,
-                   !htmlTokens.tags.contains(where: { NSLocationInRange(match.range.location, $0.range) }) {
-                    return
+
+        // Regexes run over only the requested lines. The substring is the only
+        // copy a local pass makes, and it is proportional to the dirty range,
+        // not to the document.
+        if requested.length > 0 {
+            let local = text.substring(with: requested)
+            let localRange = NSRange(location: 0, length: (local as NSString).length)
+            for rule in rules {
+                rule.regex.enumerateMatches(in: local, options: [], range: localRange) { match, _, _ in
+                    guard let match, match.range.length > 0 else { return }
+                    let range = NSRange(location: match.range.location + requested.location,
+                                        length: match.range.length)
+                    if mode == .html,
+                       !htmlTokens.tags.contains(where: { NSLocationInRange(range.location, $0.range) }) {
+                        return
+                    }
+                    result.append(Token(range: range, kind: rule.kind))
                 }
-                result.append(Token(range: match.range, kind: rule.kind))
             }
         }
+
         if mode == .markdown {
             // Fenced blocks are opaque, so append them after inline rules.
-            result.append(contentsOf: markdownFenceTokens(in: ns, clippedTo: requested))
+            result.append(contentsOf: markdownFenceTokens(in: text, clippedTo: requested,
+                                                          state: &state, scanner: &scanner))
         } else if mode == .html {
             // Comments are opaque and must override tag/attribute/string tokens.
             result.append(contentsOf: htmlTokens.comments)
         }
+
+        // The state machine has consumed every character in `requested`. The
+        // full-document pass splits on line boundaries, so the next chunk
+        // starts exactly here.
+        state.scanLocation = NSMaxRange(requested)
         return result
     }
 
@@ -115,75 +169,315 @@ struct Tokenizer {
         return Token(range: clipped, kind: kind)
     }
 
-    /// Scans from the beginning so a requested range starting inside a fence
-    /// still has the correct state. Tokens are clipped to the requested lines.
-    private func markdownFenceTokens(in text: NSString, clippedTo requested: NSRange) -> [Token] {
+    /// Scans from the state's position so a requested range starting inside a
+    /// fence still has the correct state. Tokens are clipped to the requested
+    /// lines.
+    ///
+    /// Candidate delimiters are found with a chunked `memchr` scan. Scanning
+    /// resumes where the previous chunk stopped (`state.scanLocation`), so a
+    /// full pass does not re-read the document prefix for every chunk.
+    private func markdownFenceTokens(in text: NSString,
+                                     clippedTo requested: NSRange,
+                                     state: inout State,
+                                     scanner: inout ChunkScanner) -> [Token] {
         var result: [Token] = []
-        var offset = 0
-        var fenceStart: Int?
         let scanLimit = NSMaxRange(requested)
-        while offset < scanLimit {
-            let line = text.lineRange(for: NSRange(location: offset, length: 0))
-            let value = text.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.hasPrefix("```") {
-                if let start = fenceStart {
-                    if let token = clippedToken(NSRange(location: start, length: NSMaxRange(line) - start),
-                                                kind: .code, to: requested) { result.append(token) }
-                    fenceStart = nil
-                } else {
-                    fenceStart = line.location
-                }
+        let scanStart = max(state.scanLocation, 0)
+        var searchLocation = scanStart
+
+        while searchLocation < scanLimit {
+            guard let found = scanner.firstIndex(of: 0x60, in: text,
+                                                  from: searchLocation, before: scanLimit)
+            else {
+                searchLocation = scanLimit
+                break
             }
-            offset = NSMaxRange(line)
+
+            guard found + 2 < scanLimit,
+                  text.character(at: found + 1) == 0x60,
+                  text.character(at: found + 2) == 0x60
+            else {
+                searchLocation = found + 1
+                continue
+            }
+
+            let lineStart = fenceLineStart(in: text, at: found, lowerBound: scanStart)
+            guard let lineStart else {
+                // A literal "```" inside a line is not a delimiter.
+                searchLocation = found + 1
+                continue
+            }
+
+            if let start = state.markdownFenceStart {
+                // Closing delimiter: the token runs through the end of this
+                // line, so find the line break.
+                let delimiterEnd = fenceLineEnd(in: text, at: found,
+                                                before: scanLimit, scanner: &scanner)
+                if let token = clippedToken(NSRange(location: start,
+                                                    length: delimiterEnd - start),
+                                            kind: .code, to: requested) {
+                    result.append(token)
+                }
+                state.markdownFenceStart = nil
+                searchLocation = max(delimiterEnd, found + 3)
+            } else {
+                // Opening delimiter: no token is emitted until it closes, so
+                // the rest of this line does not need a line-break scan.
+                state.markdownFenceStart = lineStart
+                searchLocation = found + 3
+            }
         }
-        if let start = fenceStart,
-           let token = clippedToken(NSRange(location: start, length: text.length - start),
-                                    kind: .code, to: requested) { result.append(token) }
+
+        // An unterminated fence continues to the end of this chunk. The token
+        // is clipped to the requested lines, so each chunk only re-colours its
+        // own portion while the state carries the opening position forward.
+        if let start = state.markdownFenceStart,
+           let token = clippedToken(NSRange(location: start, length: scanLimit - start),
+                                    kind: .code, to: requested) {
+            result.append(token)
+        }
         return result
+    }
+
+    /// Returns the start of the line containing `location` when everything
+    /// between that line start and `location` is horizontal whitespace.
+    ///
+    /// Walking backwards over indentation is much cheaper than asking
+    /// Foundation for `lineRange(for:)` at every backtick in a large document.
+    /// `lowerBound` is a line boundary (the start of the scan or chunk).
+    private func fenceLineStart(in text: NSString,
+                                at location: Int,
+                                lowerBound: Int) -> Int? {
+        var index = location
+        while index > lowerBound {
+            let character = text.character(at: index - 1)
+            if character == 0x0A || character == 0x0D { return index }
+            if character != 0x20 && character != 0x09 { return nil }
+            index -= 1
+        }
+        return index
+    }
+
+    /// End of the line containing `location`, including its CR/LF terminator.
+    ///
+    /// The scan is bounded by `scanLimit`, so the last line of a chunk can use
+    /// the chunk boundary without looking outside the requested range.
+    private func fenceLineEnd(in text: NSString,
+                              at location: Int,
+                              before scanLimit: Int,
+                              scanner: inout ChunkScanner) -> Int {
+        guard let lineBreak = scanner.firstLineBreak(in: text,
+                                                     from: location,
+                                                     before: scanLimit)
+        else { return scanLimit }
+
+        if text.character(at: lineBreak) == 0x0D,
+           lineBreak + 1 < scanLimit,
+           text.character(at: lineBreak + 1) == 0x0A {
+            return lineBreak + 2
+        }
+        return lineBreak + 1
     }
 
     /// A small HTML state machine. Unlike `<[^>]+>`, it handles newlines and
     /// `>` characters inside quoted attribute values.
-    private func scanHTML(in text: NSString, clippedTo requested: NSRange) -> (tags: [Token], comments: [Token]) {
+    ///
+    /// It searches for the next `<` with `firstIndex(of:)` instead of visiting
+    /// every character, so a local pass over large HTML does not scan the whole
+    /// document in Swift. An open tag or comment is carried in `state`, so a
+    /// full pass continues where the previous chunk stopped.
+    private func scanHTML(in text: NSString,
+                          clippedTo requested: NSRange,
+                          state: inout State,
+                          scanner: inout ChunkScanner) -> (tags: [Token], comments: [Token]) {
         var tags: [Token] = []
         var comments: [Token] = []
-        var index = 0
         let scanLimit = NSMaxRange(requested)
+        var index = max(state.scanLocation, 0)
+
         while index < scanLimit {
-            if hasPrefix("<!--", at: index, in: text) {
-                let start = index
-                index += 4
-                while index < scanLimit, !hasPrefix("-->", at: index, in: text) { index += 1 }
-                index = min(index + (index < scanLimit ? 3 : 0), scanLimit)
-                if let token = clippedToken(NSRange(location: start, length: index - start),
-                                            kind: .comment, to: requested) { comments.append(token) }
+            if let commentStart = state.htmlCommentStart {
+                let closeSearch = NSRange(location: index, length: scanLimit - index)
+                let close = text.range(of: "-->", options: [], range: closeSearch)
+                let end = close.location == NSNotFound ? scanLimit : NSMaxRange(close)
+                if let token = clippedToken(NSRange(location: commentStart,
+                                                    length: end - commentStart),
+                                            kind: .comment, to: requested) {
+                    comments.append(token)
+                }
+                if close.location == NSNotFound {
+                    state.htmlCommentStart = commentStart
+                    index = scanLimit
+                } else {
+                    state.htmlCommentStart = nil
+                    index = end
+                }
                 continue
             }
-            guard text.character(at: index) == 0x3C else { index += 1; continue } // <
-            let start = index
-            index += 1
-            var quote: unichar?
-            while index < scanLimit {
-                let character = text.character(at: index)
-                if let activeQuote = quote {
-                    if character == activeQuote { quote = nil }
-                } else if character == 0x22 || character == 0x27 { // " or '
-                    quote = character
-                } else if character == 0x3E { // >
+
+            if let tagStart = state.htmlTagStart {
+                var quote = state.htmlTagQuote
+                var closed = false
+                while index < scanLimit {
+                    let character = text.character(at: index)
+                    if let activeQuote = quote {
+                        if character == activeQuote { quote = nil }
+                    } else if character == 0x22 || character == 0x27 { // " or '
+                        quote = character
+                    } else if character == 0x3E { // >
+                        index += 1
+                        closed = true
+                        break
+                    }
                     index += 1
-                    break
                 }
-                index += 1
+                if let token = clippedToken(NSRange(location: tagStart,
+                                                    length: index - tagStart),
+                                            kind: .tag, to: requested) {
+                    tags.append(token)
+                }
+                if closed {
+                    state.htmlTagStart = nil
+                    state.htmlTagQuote = nil
+                } else {
+                    state.htmlTagQuote = quote
+                    index = scanLimit
+                }
+                continue
             }
-            if let token = clippedToken(NSRange(location: start, length: index - start),
-                                        kind: .tag, to: requested) { tags.append(token) }
+
+            // Neither a comment nor a tag is open: find the next tag start.
+            guard let found = scanner.firstIndex(of: 0x3C, in: text,
+                                                  from: index, before: scanLimit)
+            else { break }
+
+            if hasPrefix("<!--", at: found, in: text) {
+                state.htmlCommentStart = found
+                index = found + 4
+            } else {
+                state.htmlTagStart = found
+                state.htmlTagQuote = nil
+                index = found + 1
+            }
         }
         return (tags, comments)
     }
 
+    /// Reusable window over the document for the chunked ASCII searches.
+    ///
+    /// A local pass can call the scanner thousands of times (once per tag or
+    /// fence delimiter). Re-reading a 64K chunk for every call would make the
+    /// pass quadratic. The scanner keeps its last chunk and only loads the next
+    /// one when a search runs past the window, so each character is copied once
+    /// per pass.
+    private struct ChunkScanner {
+        private static let chunkSize = 64 * 1024
+        private var buffer: [unichar] = []
+        private var windowStart = 0
+        private var windowCount = 0
+
+        /// A fast ASCII search for `character` in a UTF-16 string.
+        ///
+        /// Foundation's `range(of:)`/`rangeOfCharacter(from:)` walk a 50 MB
+        /// string in roughly half a second even when the character is absent.
+        /// Reading fixed-size chunks and using `memchr` keeps this in
+        /// single-digit milliseconds, without materialising the whole document
+        /// as an array.
+        mutating func firstIndex(of character: unichar,
+                                 in text: NSString,
+                                 from start: Int,
+                                 before end: Int) -> Int? {
+            let limit = min(end, text.length)
+            guard start >= 0, start < limit else { return nil }
+
+            var location = start
+            while location < limit {
+                loadWindow(containing: location, in: text, limit: limit)
+                let offset = location - windowStart
+                if let index = firstIndexInWindow(of: character, from: offset, in: text) {
+                    return windowStart + index
+                }
+                location = windowStart + windowCount
+            }
+            return nil
+        }
+
+        /// First CR or LF at or after `start`, before `end`.
+        mutating func firstLineBreak(in text: NSString,
+                                     from start: Int,
+                                     before end: Int) -> Int? {
+            let limit = min(end, text.length)
+            guard start >= 0, start < limit else { return nil }
+
+            var location = start
+            while location < limit {
+                loadWindow(containing: location, in: text, limit: limit)
+                let offset = location - windowStart
+                let found = buffer.withUnsafeBufferPointer { characters -> Int? in
+                    for index in offset..<windowCount {
+                        let character = characters[index]
+                        if character == 0x0A || character == 0x0D { return index }
+                    }
+                    return nil
+                }
+                if let found { return windowStart + found }
+                location = windowStart + windowCount
+            }
+            return nil
+        }
+
+        private mutating func loadWindow(containing location: Int,
+                                         in text: NSString,
+                                         limit: Int) {
+            if location >= windowStart, location < windowStart + windowCount { return }
+
+            let count = min(Self.chunkSize, limit - location)
+            guard count > 0 else { return }
+            if buffer.count < count {
+                buffer = [unichar](repeating: 0, count: count)
+            }
+            text.getCharacters(&buffer, range: NSRange(location: location, length: count))
+            windowStart = location
+            windowCount = count
+        }
+
+        /// Window-relative index of `character`, searching from `offset`.
+        private func firstIndexInWindow(of character: unichar,
+                                        from offset: Int,
+                                        in text: NSString) -> Int? {
+            guard offset < windowCount else { return nil }
+            let stride = MemoryLayout<unichar>.size
+            let byteCount = windowCount * stride
+
+            return buffer.withUnsafeBytes { raw -> Int? in
+                let base = raw.baseAddress!
+                var searchFrom = offset
+                while searchFrom < windowCount {
+                    let byteOffset = searchFrom * stride
+                    guard let match = memchr(base + byteOffset, Int32(character),
+                                             byteCount - byteOffset)
+                    else { return nil }
+                    let index = (UnsafeRawPointer(match) - base) / stride
+                    // `memchr` scans bytes, so a UTF-16 code unit can produce
+                    // a false positive in an adjacent byte. Verify the unit.
+                    if index < windowCount,
+                       text.character(at: windowStart + index) == character {
+                        return index
+                    }
+                    searchFrom = index + 1
+                }
+                return nil
+            }
+        }
+    }
+
     private func hasPrefix(_ prefix: String, at location: Int, in text: NSString) -> Bool {
-        let length = (prefix as NSString).length
-        guard location + length <= text.length else { return false }
-        return text.substring(with: NSRange(location: location, length: length)) == prefix
+        let expected = prefix as NSString
+        guard location + expected.length <= text.length else { return false }
+        for offset in 0..<expected.length
+        where text.character(at: location + offset) != expected.character(at: offset) {
+            return false
+        }
+        return true
     }
 }

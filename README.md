@@ -39,10 +39,12 @@ the right shows it as headings, emphasis, symbols and mathematics.
   shows the one-based cursor position, active text format, tab size and a
   high-contrast clean/dirty document indicator.
 * **Syntax colouring** for Markdown, LaTeX and HTML: debounced, incremental
-  (only the edited lines), chunked on load so large files do not freeze the UI,
-  state-aware for multiline Markdown fences and HTML tags/comments, and safe
-  with input methods (Japanese/Chinese/Korean composition).
-* **Live preview** (WebKit) that keeps its scroll position while you type:
+  (only the edited lines and only those bytes are copied), chunked on load so
+  large files do not freeze the UI, state-aware for multiline Markdown fences
+  and HTML tags/comments, and safe with input methods
+  (Japanese/Chinese/Korean composition).
+* **Live preview** (WebKit) that keeps its scroll position while you type.
+  Documents above 5 MB show a notice instead of being copied and rendered:
   * *Markdown* — headings, paragraphs, lists, block quotes, fenced code,
     `**bold**`, `*italic*`, `` `code` ``, links (including URLs with balanced
     parentheses such as `/wiki/Foo_(bar)`).
@@ -72,14 +74,54 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (88 tests)
+The current source is verified with `swift build` and `swift test` (97 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
-push and pull request.
+push and pull request. The large-file benchmark suite is skipped by default;
+see [Large-file benchmark](#large-file-benchmark).
 
 Why a script? `swift run` starts a bare executable without an app bundle, so the
 document types in `Info.plist` are not registered and Finder cannot open files
 with it. `make-app.sh` wraps the binary in a minimal bundle and ad-hoc signs it.
 You can also open `Package.swift` in Xcode and run the `ModEdit` scheme.
+
+### Large-file benchmark
+
+The benchmark is deliberately separate from the normal test run:
+
+```sh
+scripts/benchmark-large-files.sh
+# equivalent to:
+# MODEDIT_BENCHMARK=1 swift test -c release --filter LargeFileBenchmark
+```
+
+It builds 10 MB and 50 MB Markdown files (headings, emphasis, links and fenced
+code) and measures load + line index construction, cursor lookup, edits at the
+end and in the middle, save snapshots, UTF-8 encoding, a dirty-line highlight
+near the end, the last 50k local highlight chunk, and a complete line-aligned
+highlight pass. Results from the development machine (release build, x86_64):
+
+| Operation | 10 MB | 50 MB |
+|-----------|------:|------:|
+| Load + line index | 18–20 ms | 88–98 ms |
+| Line/column lookup | < 2 µs | < 2 µs |
+| Append edit | 0.001 ms | 0.001 ms |
+| Middle one-character edit | 0.08–0.09 ms | 0.52–0.75 ms |
+| Save snapshot | 6 ms | 29–34 ms |
+| UTF-8 encode | 5–8 ms | 29–32 ms |
+| Dirty-line Markdown highlight | 25–27 ms | 114–127 ms |
+| Last 50k local highlight chunk | 40–43 ms | 131–138 ms |
+| Full line-aligned highlight pass | 3.6–4.1 s | 17.5–18.5 s |
+
+The important part is not the absolute numbers (they vary by machine) but the
+shape: edits and lookups stay flat, and the remaining growth is proportional to
+the bytes that genuinely have to be copied or scanned. The full pass is now
+linear (it carries Markdown/HTML state across chunks instead of re-scanning the
+prefix per chunk); the remaining cost is applying attributes to every matched
+range (several per dense prose line). It runs in cancellable chunks and yields
+between them, so the document is editable while it colours in. A dirty-line
+highlight still has to recover the Markdown fence/HTML state from the document
+start, so it is the slowest per-edit path; it is a scan, not a whole-document
+copy.
 
 ## Architecture
 
@@ -118,13 +160,17 @@ Data flow while typing:
 1. `NSTextView` edits its text storage.
 2. The storage delegate reports the edit → `DirtyRange` accumulates it → after an
    80 ms debounce `StorageHighlighter` re-colours **only the touched lines**.
+   The tokenizer works on `NSTextStorage.mutableString` and copies only the
+   dirty-line substring; stateful scanners search for candidate delimiters with
+   a chunked `memchr` scan instead of materialising a line string per line.
 3. The storage delegate applies only the replacement range to the document's
    locked `NSMutableString`, increments a cheap published revision, and tells
    `ModEditDocument` about the change so autosave and the edited indicator see it.
 4. SwiftUI re-evaluates `EditorRootView`; after a 250 ms debounce `PreviewPane`
    takes one immutable snapshot, renders it, skips identical output, and restores
    the scroll position. Fast typing therefore does not copy the complete file
-   for every keystroke.
+   for every keystroke. Documents over 5 MB are not copied at all; the preview
+   shows a size notice.
 5. Selection changes update the status bar's one-based `line:column` location.
    A successful write records the exact saved generation; the document becomes
    clean only when no newer edit exists.
@@ -212,6 +258,7 @@ A new preview is a `PreviewRenderer` returning an HTML string; wrap bodies with
 ```
 Package.swift
 scripts/make-app.sh                 build ModEdit.app
+scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 Sources/
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
@@ -248,6 +295,17 @@ Tests/ModEditTests/                 Swift Testing suites
 * **State machines for multiline syntax.** Markdown fences and HTML tags and
   comments are scanned with explicit state; regex rules remain useful for local
   tokens. Tokens are clipped to the dirty lines before AppKit attributes change.
+* **No whole-document copies on hot paths.** A local highlight pass reads
+  `NSTextStorage.mutableString`, copies only the dirty-line substring for the
+  regex rules and scans for fence/tag candidates with a chunked `memchr` window.
+  The line index is updated in place. Full snapshots exist only for saving and
+  small previews; the preview refuses documents above 5 MB.
+* **One incremental state machine per pass.** A full-document highlight splits on
+  line boundaries and carries one `Tokenizer.State` between chunks, so Markdown
+  fences and HTML tags/comments are scanned once instead of re-reading the
+  prefix per chunk. If an edit lands mid-pass, the pass restarts because the
+  carried offsets are stale; the edit itself is coloured immediately by the
+  debounced local pass.
 * **One shared incremental line index.** The document owns the UTF-16 line
   starts. A text edit rebuilds only the affected line window and shifts the
   remaining starts; the status bar and gutter both read that index instead of
@@ -271,9 +329,18 @@ Tests/ModEditTests/                 Swift Testing suites
 * **HTML preview cannot load relative resources** (images, CSS) yet. The
   `NSDocument` shell now exposes the document URL, so supplying it as the web
   view's base URL is a natural next step.
+* **Live preview is capped at 5 MB.** Larger documents remain editable and
+  savable; the preview pane shows a notice instead of copying and rendering
+  them.
 * **Edits still move suffix bytes.** The document uses `NSMutableString`, so it
   avoids a second full-file model copy but insertion near the beginning of a very
   large file remains O(n). A piece table or rope is the next scaling step.
+* **Stateful highlighting still needs the construct state from the document
+  start.** A dirty line near the end of a 50 MB Markdown file takes about
+  115 ms to re-colour (see [Large-file benchmark](#large-file-benchmark)).
+  The bytes copied stay proportional to the dirty line; only the state search
+  is O(n). The initial full pass over that file takes about 18 s, in
+  cancellable chunks that yield so editing stays responsive.
 * **Status columns use UTF-16 offsets.** This matches AppKit and LSP position
   accounting, but a grapheme such as a composed emoji can occupy several columns.
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.

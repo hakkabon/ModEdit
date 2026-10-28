@@ -16,17 +16,50 @@ struct LineIndex {
 
     mutating func rebuild(from source: String) {
         let text = source as NSString
+        let length = text.length
         starts = [0]
-        var index = 0
-        while index < text.length {
-            let character = text.character(at: index)
-            if character == 0x0D {
-                if index + 1 < text.length, text.character(at: index + 1) == 0x0A { index += 1 }
-                starts.append(index + 1)
-            } else if character == 0x0A {
-                starts.append(index + 1)
+        guard length > 0 else { return }
+
+        // Scan in fixed-size UTF-16 chunks. Asking `character(at:)` for every
+        // position is correct but slow enough to make opening a 50 MB file take
+        // seconds; one `getCharacters` call per 64k units avoids that without
+        // copying the complete document into a Swift Array.
+        let chunkSize = 64 * 1024
+        var buffer = [unichar](repeating: 0, count: min(chunkSize, length))
+        var location = 0
+        var skipLeadingLF = false
+
+        while location < length {
+            let count = min(chunkSize, length - location)
+            text.getCharacters(&buffer, range: NSRange(location: location, length: count))
+
+            buffer.withUnsafeBufferPointer { characters in
+                var index = 0
+                if skipLeadingLF, count > 0 {
+                    index = 1          // already accounted for by the preceding CR
+                    skipLeadingLF = false
+                }
+                while index < count {
+                    let character = characters[index]
+                    if character == 0x0D {
+                        if index + 1 < count {
+                            if characters[index + 1] == 0x0A { index += 1 }
+                            starts.append(location + index + 1)
+                        } else if location + count < length,
+                                  text.character(at: location + count) == 0x0A {
+                            // CRLF split across chunks: consume the LF next time.
+                            skipLeadingLF = true
+                            starts.append(location + count + 1)
+                        } else {
+                            starts.append(location + count)
+                        }
+                    } else if character == 0x0A {
+                        starts.append(location + index + 1)
+                    }
+                    index += 1
+                }
             }
-            index += 1
+            location += count
         }
     }
 
@@ -65,12 +98,16 @@ struct LineIndex {
         let oldWindowEnd = windowEnd - delta
         let suffixStart = firstIndex(after: oldWindowEnd)
 
-        var merged = Array(starts[..<prefixEnd])
-        merged.append(contentsOf: rebuilt)
-        for index in suffixStart..<starts.count {
-            merged.append(starts[index] + delta)
+        // Replace only the changed window in place. Building a second array
+        // from `starts[..<prefixEnd]` copied every line start before the edit,
+        // which turns a keystroke near the end of a large file into a
+        // whole-index copy.
+        let rebuiltCount = rebuilt.count
+        starts.replaceSubrange(prefixEnd..<suffixStart, with: rebuilt)
+        let shiftedSuffixStart = prefixEnd + rebuiltCount
+        for index in shiftedSuffixStart..<starts.count {
+            starts[index] += delta
         }
-        starts = merged
     }
 
     func lineAndColumn(at location: Int) -> (line: Int, column: Int) {

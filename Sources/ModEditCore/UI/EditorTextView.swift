@@ -221,21 +221,46 @@ extension EditorTextView {
             return highlighter
         }
 
-        /// Highlights the document in chunks, yielding between them so the UI
-        /// stays responsive. Re-reads the storage length every iteration, so
-        /// edits made during the pass cannot produce an out-of-range request.
+        /// Highlights the document in line-aligned chunks, yielding between
+        /// them so the UI stays responsive.
+        ///
+        /// Chunks share one `Tokenizer.State`, so a full pass visits every
+        /// character once instead of re-scanning the document prefix per chunk.
+        /// Re-reading the storage length every iteration prevents an edit made
+        /// during the pass from producing an out-of-range request; if an edit
+        /// did change the text, the carried state is stale, so the pass
+        /// restarts from the beginning.
         private func highlightWholeDocument() {
             fullPassTask?.cancel()
             fullPassTask = Task { [weak self] in
                 var start = 0
+                var state = Tokenizer.State()
+                var generation = self?.synchronizedGeneration
+
                 while !Task.isCancelled {
                     guard let self,
                           let storage = self.textView?.textStorage,
                           let highlighter = self.currentHighlighter() else { return }
+
+                    if generation != self.synchronizedGeneration {
+                        start = 0
+                        state = Tokenizer.State()
+                        generation = self.synchronizedGeneration
+                    }
+
                     let length = storage.length
                     guard start < length else { return }
-                    let end = min(start + Self.chunkSize, length)
-                    highlighter.apply(to: storage, in: NSRange(location: start, length: end - start))
+
+                    let text = storage.mutableString
+                    let tentativeEnd = min(start + Self.chunkSize, length)
+                    let lineRange = text.lineRange(
+                        for: NSRange(location: start, length: tentativeEnd - start))
+                    let end = min(NSMaxRange(lineRange), length)
+                    guard end > start else { return }
+
+                    highlighter.apply(to: storage,
+                                      in: NSRange(location: start, length: end - start),
+                                      state: &state)
                     start = end
                     await Task.yield()
                 }

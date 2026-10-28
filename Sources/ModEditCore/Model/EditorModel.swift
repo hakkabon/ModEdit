@@ -54,6 +54,12 @@ final class EditorModel: ObservableObject {
 
     func textSnapshot() -> String { document.text }
 
+    /// Snapshot for the live preview. Large documents return `nil` instead of
+    /// being copied and rendered on every debounce.
+    func previewSnapshot(upTo limit: Int) -> String? {
+        document.textSnapshot(upTo: limit)
+    }
+
     var documentTextGeneration: UInt64 { document.textGeneration }
 
     /// Applies one TextKit edit using UTF-16 offsets. `editedRange` is the

@@ -97,6 +97,168 @@ struct HighlightingTests {
         #expect(tokens.contains(Token(range: requested, kind: .code)))
     }
 
+    @Test func markdownFullPassStateCarriesAcrossLineChunks() throws {
+        let format = MarkdownFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let text = "intro\n```swift\n# not a heading\nlet x = 1\n```\n"
+            + "middle ``` literal\nnot a fence\nafter\n"
+        let ns = text as NSString
+        let whole = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        let chunked = chunkedTokens(tokenizer, text: text, chunkSize: 1)
+
+        #expect(mergedTokens(chunked, kinds: [.code]) == mergedTokens(whole, kinds: [.code]))
+        let headingLine = ns.range(of: "# not a heading")
+        #expect(mergedTokens(chunked, kinds: [.code]).contains {
+            NSLocationInRange(headingLine.location, $0.range)
+        })
+    }
+
+    @Test func unterminatedMarkdownFenceContinuesAcrossLineChunks() throws {
+        let format = MarkdownFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let text = "intro\n```\nstill code\nand more code\n"
+        let ns = text as NSString
+        let whole = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        let chunked = chunkedTokens(tokenizer, text: text, chunkSize: 1)
+
+        #expect(mergedTokens(chunked, kinds: [.code]) == mergedTokens(whole, kinds: [.code]))
+        #expect(mergedTokens(chunked, kinds: [.code]).first
+                == Token(range: NSRange(location: 6, length: ns.length - 6), kind: .code))
+    }
+
+    @Test func fenceAtScannerWindowBoundaryIsRecognised() throws {
+        let format = MarkdownFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        // Put the opening triple backticks across the scanner's 64K window edge.
+        let prefix = String(repeating: "a", count: 65_534) + "\n"
+        let text = prefix + "```\ncode\n```\n"
+        let ns = text as NSString
+        let whole = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        let chunked = chunkedTokens(tokenizer, text: text, chunkSize: 1)
+
+        #expect(mergedTokens(chunked, kinds: [.code]) == mergedTokens(whole, kinds: [.code]))
+        #expect(mergedTokens(chunked, kinds: [.code]).first
+                == Token(range: NSRange(location: 65_535, length: ns.length - 65_535),
+                         kind: .code))
+    }
+
+    @Test func htmlFullPassStateCarriesAcrossLineChunks() throws {
+        let format = HTMLFormat()
+        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let text = "<div\n title=\"a > b\">x</div>\n<!-- one\n two -->\n<span>end</span>\n"
+        let ns = text as NSString
+        let whole = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        let chunked = chunkedTokens(tokenizer, text: text, chunkSize: 1)
+
+        #expect(mergedTokens(chunked, kinds: [.tag]) == mergedTokens(whole, kinds: [.tag]))
+        #expect(mergedTokens(chunked, kinds: [.comment]) == mergedTokens(whole, kinds: [.comment]))
+    }
+
+    @MainActor
+    @Test func progressiveHighlighterCarriesMarkdownStateBetweenChunks() throws {
+        let text = "intro\n```swift\n# not a heading\ncode\n```\nafter"
+        let storage = NSTextStorage(string: text)
+        let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
+                                                 mode: .markdown,
+                                                 theme: EditorTheme())
+        var state = Tokenizer.State()
+        applyLineChunks(with: highlighter, to: storage, state: &state)
+
+        let ns = text as NSString
+        let inside = ns.range(of: "# not a heading")
+        #expect(storage.attribute(.foregroundColor,
+                                  at: inside.location,
+                                  effectiveRange: nil) as? NSColor == .systemPink)
+    }
+
+    @MainActor
+    @Test func progressiveHighlighterCarriesHTMLStateBetweenChunks() throws {
+        let text = "<!-- one\n two -->\n<div\n title=\"a > b\">x</div>"
+        let storage = NSTextStorage(string: text)
+        let highlighter = try StorageHighlighter(rules: HTMLFormat().highlightRules,
+                                                 mode: .html,
+                                                 theme: EditorTheme())
+        var state = Tokenizer.State()
+        applyLineChunks(with: highlighter, to: storage, state: &state)
+
+        let ns = text as NSString
+        #expect(storage.attribute(.foregroundColor,
+                                  at: ns.range(of: "two").location,
+                                  effectiveRange: nil) as? NSColor == .secondaryLabelColor)
+        #expect(storage.attribute(.foregroundColor,
+                                  at: ns.range(of: "<div").location,
+                                  effectiveRange: nil) as? NSColor == .systemBlue)
+        #expect(storage.attribute(.foregroundColor,
+                                  at: ns.range(of: "\"a > b\"").location,
+                                  effectiveRange: nil) as? NSColor == .systemOrange)
+    }
+
+    @MainActor
+    private func applyLineChunks(with highlighter: StorageHighlighter,
+                                 to storage: NSTextStorage,
+                                 state: inout Tokenizer.State) {
+        let ns = storage.mutableString
+        var start = 0
+        while start < ns.length {
+            let line = ns.lineRange(for: NSRange(location: start, length: 0))
+            highlighter.apply(to: storage,
+                              in: NSRange(location: start, length: NSMaxRange(line) - start),
+                              state: &state)
+            start = NSMaxRange(line)
+        }
+    }
+
+    private func chunkedTokens(_ tokenizer: Tokenizer,
+                               text: String,
+                               chunkSize: Int) -> [Token] {
+        let ns = text as NSString
+        let lines = lineRanges(in: text)
+        var state = Tokenizer.State()
+        var result: [Token] = []
+        var index = 0
+        while index < lines.count {
+            let endIndex = min(index + chunkSize, lines.count) - 1
+            let start = lines[index].location
+            let end = NSMaxRange(lines[endIndex])
+            result.append(contentsOf: tokenizer.tokens(
+                in: ns,
+                range: NSRange(location: start, length: end - start),
+                state: &state))
+            index = endIndex + 1
+        }
+        return result
+    }
+
+    private func lineRanges(in text: String) -> [NSRange] {
+        let ns = text as NSString
+        var result: [NSRange] = []
+        var location = 0
+        while location < ns.length {
+            let line = ns.lineRange(for: NSRange(location: location, length: 0))
+            result.append(line)
+            location = NSMaxRange(line)
+        }
+        return result
+    }
+
+    /// Joins adjacent tokens of the selected kinds. A construct split across
+    /// chunks is emitted as one token per chunk; the merged result must match
+    /// the single-pass token list.
+    private func mergedTokens(_ tokens: [Token], kinds: Set<TokenKind>) -> [Token] {
+        var result: [Token] = []
+        for token in tokens where kinds.contains(token.kind) {
+            if let last = result.last,
+               last.kind == token.kind,
+               NSMaxRange(last.range) == token.range.location {
+                result[result.count - 1] = Token(range: NSUnionRange(last.range, token.range),
+                                                 kind: token.kind)
+            } else {
+                result.append(token)
+            }
+        }
+        return result
+    }
+
     @Test func latexCommentsComeLastSoTheyWin() throws {
         let rules = LaTeXFormat().highlightRules
         #expect(rules.last?.kind == .comment)

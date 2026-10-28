@@ -13,6 +13,15 @@ struct LineIndexTests {
         #expect(index.lineCount == 4)
     }
 
+    @Test func crlfSplitAcrossRebuildChunksIsOneBreak() {
+        // The rebuild reads 64k UTF-16 units at a time. Put the CR in one chunk
+        // and the LF in the next.
+        let prefix = String(repeating: "a", count: 65_535)
+        let index = LineIndex(text: prefix + "\r\nb\n")
+
+        #expect(index.starts == [0, 65_537, 65_539])
+    }
+
     @Test func incrementalUpdatesMatchFullRebuildForSingleEdits() {
         let samples = [
             "", "a", "\n", "\r", "\r\n", "a\n", "a\r", "a\r\n",

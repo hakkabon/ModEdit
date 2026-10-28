@@ -140,6 +140,19 @@ struct HTMLPreviewTests {
     }
 }
 
+@Suite("Preview source limit")
+struct PreviewSourceLimitTests {
+
+    @Test func previewSnapshotsRefuseDocumentsOverTheLimit() {
+        let document = EditorDocument()
+        document.setText("12345")
+
+        #expect(document.textLength == 5)
+        #expect(document.textSnapshot(upTo: 5) == "12345")
+        #expect(document.textSnapshot(upTo: 4) == nil)
+    }
+}
+
 @Suite("Preview navigation")
 struct PreviewNavigationTests {
 

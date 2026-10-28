@@ -9,9 +9,13 @@ import AppKit
 /// **non-persistent data store**, and **navigation blocked**. Links open in the
 /// default browser instead of replacing the preview.
 struct PreviewPane: NSViewRepresentable {
+    /// Above this many UTF-16 units the preview refuses to copy and render the
+    /// document. Editing large files must not be starved by a debounced render.
+    static let maximumSourceLength = 5 * 1_024 * 1_024
+
     let renderer: any PreviewRenderer
     let revision: UInt64
-    let source: @MainActor () -> String
+    let source: @MainActor () -> String?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -44,7 +48,7 @@ struct PreviewPane: NSViewRepresentable {
         /// position afterwards (reloading used to jump the preview to the top
         /// on every keystroke).
         func render(revision: UInt64,
-                    source: @escaping @MainActor () -> String,
+                    source: @escaping @MainActor () -> String?,
                     with renderer: any PreviewRenderer,
                     into webView: WKWebView) {
             task?.cancel()
@@ -55,8 +59,19 @@ struct PreviewPane: NSViewRepresentable {
                 let html: String
                 do {
                     // Materialize the complete document only after the debounce,
-                    // not once for every key event.
-                    html = try await renderer.renderHTML(from: source())
+                    // not once for every key event. Large documents are not
+                    // copied at all; the preview shows a notice instead.
+                    guard let text = source() else {
+                        html = PreviewPage.wrap(body: """
+                            <p>Live preview is disabled for documents larger than \
+                            \(PreviewPane.maximumSourceLength / 1_024 / 1_024) MB.</p>
+                            """)
+                        guard !Task.isCancelled, let self, let webView, html != self.lastHTML else { return }
+                        self.lastHTML = html
+                        webView.loadHTMLString(html, baseURL: nil)
+                        return
+                    }
+                    html = try await renderer.renderHTML(from: text)
                 } catch {
                     html = PreviewPage.wrap(body: "<pre>\(HTMLEscaping.escape("Preview failed: \(error)"))</pre>")
                 }

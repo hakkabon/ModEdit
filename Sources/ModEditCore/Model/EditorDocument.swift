@@ -63,6 +63,20 @@ final class EditorDocument: @unchecked Sendable {
     }
 
     var text: String { lock.withLock { String(textStorage) } }
+    /// UTF-16 length without materialising the text.
+    var textLength: Int { lock.withLock { textStorage.length } }
+
+    /// A text snapshot only if the document is within `limit` UTF-16 units.
+    ///
+    /// The length check and the copy happen under the same lock, so a preview
+    /// can never observe a short document and then copy a grown one. Returning
+    /// `nil` lets the caller skip a whole-document copy for very large files.
+    func textSnapshot(upTo limit: Int) -> String? {
+        lock.withLock {
+            guard textStorage.length <= limit else { return nil }
+            return String(textStorage)
+        }
+    }
     var textGeneration: UInt64 { lock.withLock { generation } }
     var isDirty: Bool { lock.withLock { generation != savedGeneration } }
     var currentFormat: any DocumentFormat { lock.withLock { format } }
