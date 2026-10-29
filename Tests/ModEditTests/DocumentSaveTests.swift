@@ -32,7 +32,7 @@ struct DocumentSaveTests {
     }
 
     @Test func successfulSaveWritesTheFileAndClearsDirtyState() async throws {
-        let document = ModEditDocument()
+        let document = makeDocument()
         document.buffer.setText("first")
         #expect(document.buffer.isDirty)
 
@@ -46,7 +46,7 @@ struct DocumentSaveTests {
     }
 
     @Test func aSecondSaveWritesTheNewerText() async throws {
-        let document = ModEditDocument()
+        let document = makeDocument()
         document.buffer.setText("first")
         let url = temporaryURL(extension: "txt")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -60,7 +60,7 @@ struct DocumentSaveTests {
     }
 
     @Test func failedSaveLeavesTheDocumentDirty() async {
-        let document = ModEditDocument()
+        let document = makeDocument()
         document.buffer.setText("hello")
         let model = EditorModel(document: document.buffer)
 
@@ -78,7 +78,7 @@ struct DocumentSaveTests {
     }
 
     @Test func exportingACopyDoesNotClearDirtyState() async throws {
-        let document = ModEditDocument()
+        let document = makeDocument()
         document.buffer.setText("draft")
         let model = EditorModel(document: document.buffer)
         let url = temporaryURL(extension: "txt")
@@ -92,7 +92,7 @@ struct DocumentSaveTests {
     }
 
     @Test func autosavingAnUntitledDraftDoesNotMarkItSaved() async throws {
-        let document = ModEditDocument()
+        let document = makeDocument()
         document.buffer.setText("draft")
         let model = EditorModel(document: document.buffer)
         let url = temporaryURL(extension: "txt")
@@ -106,7 +106,7 @@ struct DocumentSaveTests {
     }
 
     @Test func readAndWritePreserveEncodingAndBOM() throws {
-        let document = ModEditDocument()
+        let document = makeDocument()
         let original = try TextIO.encode("héllo", as: .utf8, withUTF8BOM: true)
 
         try document.read(from: original, ofType: UTType.plainText.identifier)
@@ -121,7 +121,7 @@ struct DocumentSaveTests {
     }
 
     @Test func readSelectsTheMarkdownFormatFromTheDocumentType() throws {
-        let document = ModEditDocument()
+        let document = makeDocument()
 
         try document.read(from: Data("# Title".utf8),
                           ofType: UTType.markdownText.identifier)
@@ -130,7 +130,7 @@ struct DocumentSaveTests {
     }
 
     @Test func modelReflectsCompletedSaves() async throws {
-        let document = ModEditDocument()
+        let document = makeDocument()
         let model = EditorModel(document: document.buffer)
 
         document.buffer.setText("one")
@@ -146,6 +146,13 @@ struct DocumentSaveTests {
     }
 
     // MARK: Helpers
+
+    /// Saves in the tests must not write format preferences to the real
+    /// `UserDefaults`.
+    private func makeDocument() -> ModEditDocument {
+        ModEditDocument(registry: .standard,
+                        formatStore: InMemoryFormatPreferenceStore())
+    }
 
     private func temporaryURL(extension fileExtension: String) -> URL {
         FileManager.default.temporaryDirectory

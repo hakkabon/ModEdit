@@ -33,9 +33,9 @@ final class StorageHighlighter {
 
     /// - Throws: if a rule's pattern is invalid.
     init(rules: [HighlightRule],
-         mode: HighlightingMode = .regularExpressions,
+         scanner: (any StatefulScanner)? = nil,
          theme: EditorTheme) throws {
-        self.tokenizer = try Tokenizer(rules: rules, mode: mode)
+        self.tokenizer = try Tokenizer(rules: rules, scanner: scanner)
         self.theme = theme
         var attributes: [TokenKind: [NSAttributedString.Key: Any]] = [:]
         for kind in TokenKind.allCases {

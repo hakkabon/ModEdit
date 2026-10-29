@@ -217,7 +217,7 @@ extension EditorTextView {
                 highlighterFormatID = format.id
                 do {
                     highlighter = try StorageHighlighter(rules: format.highlightRules,
-                                                         mode: format.highlightingMode,
+                                                         scanner: format.scanner,
                                                          theme: theme)
                 } catch {
                     highlighter = nil

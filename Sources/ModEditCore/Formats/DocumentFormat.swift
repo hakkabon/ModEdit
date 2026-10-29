@@ -10,8 +10,9 @@ import UniformTypeIdentifiers
 /// formats trivially unit-testable and makes themes (dark mode, user themes) a
 /// one-place change.
 ///
-/// To add a format: create a conforming type, then add it to
-/// `FormatRegistry.standard`.
+/// To add a format: create a conforming type and include it in the
+/// `FormatRegistry` you hand to the editor. The app uses
+/// `FormatRegistry.standard`; tests can supply their own.
 protocol DocumentFormat: Sendable {
     /// Stable identifier (used for selection and persistence).
     var id: String { get }
@@ -27,16 +28,16 @@ protocol DocumentFormat: Sendable {
     /// structural rules first and "opaque" ones (comments, code spans) last.
     var highlightRules: [HighlightRule] { get }
 
-    /// Stateful syntax handling layered around the regular-expression rules.
-    /// This is used for constructs whose meaning crosses line boundaries.
-    var highlightingMode: HighlightingMode { get }
+    /// A state machine for syntax whose meaning crosses line boundaries, or
+    /// `nil` when the regex rules are enough.
+    var scanner: (any StatefulScanner)? { get }
 
     /// A renderer for the live preview, or `nil` if the format has none.
     func makePreviewRenderer() -> (any PreviewRenderer)?
 }
 
 extension DocumentFormat {
-    var highlightingMode: HighlightingMode { .regularExpressions }
+    var scanner: (any StatefulScanner)? { nil }
 }
 
 /// Turns document source into an HTML page for the preview pane.

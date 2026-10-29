@@ -34,7 +34,7 @@ struct HighlightingTests {
 
     @Test func everyShippedRuleCompiles() throws {
         for format in FormatRegistry.standard.allFormats {
-            _ = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+            _ = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         }
     }
 
@@ -46,7 +46,7 @@ struct HighlightingTests {
 
     @Test func markdownTokens() throws {
         let format = MarkdownFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         let text = "# Title\n`code`"
         let tokens = tokenizer.tokens(in: text, range: NSRange(location: 0, length: (text as NSString).length))
         #expect(tokens.contains(Token(range: NSRange(location: 0, length: 7), kind: .heading)))
@@ -55,7 +55,7 @@ struct HighlightingTests {
 
     @Test func multilineMarkdownFenceIsOpaque() throws {
         let format = MarkdownFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         let text = "before\n```swift\n# not a heading\n```\nafter"
         let ns = text as NSString
         let inside = ns.range(of: "# not a heading")
@@ -67,7 +67,7 @@ struct HighlightingTests {
 
     @Test func multilineHTMLStatesHandleQuotedGreaterThanAndComments() throws {
         let format = HTMLFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         let text = "<div\n title=\"a > b\">x</div>\n<!-- one\n two -->"
         let ns = text as NSString
         let tagRange = ns.range(of: "<div\n title=\"a > b\">")
@@ -79,7 +79,7 @@ struct HighlightingTests {
 
     @Test func htmlAttributeNamesAreScopedToTags() throws {
         let format = HTMLFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         let text = "outside=value <div inside=value>"
         let ns = text as NSString
         let tokens = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
@@ -89,7 +89,7 @@ struct HighlightingTests {
 
     @Test func statefulTokensWorkWhenRequestedRangeStartsInsideConstruct() throws {
         let format = MarkdownFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         let text = "```\nline one\nline two\n```"
         let ns = text as NSString
         let requested = ns.lineRange(for: ns.range(of: "line two"))
@@ -98,7 +98,7 @@ struct HighlightingTests {
     }
 
     @Test func checkpointLookupUsesTheNearestEarlierState() throws {
-        let tokenizer = try Tokenizer(rules: MarkdownFormat().highlightRules, mode: .markdown)
+        let tokenizer = try Tokenizer(rules: MarkdownFormat().highlightRules, scanner: MarkdownScanner())
         let text = "a\nb\nc\n" as NSString
         var state = Tokenizer.State()
         _ = tokenizer.tokens(in: text, range: NSRange(location: 0, length: 2), state: &state)
@@ -113,7 +113,7 @@ struct HighlightingTests {
     }
 
     @Test func markdownLocalPassResumesFromACheckpoint() throws {
-        let tokenizer = try Tokenizer(rules: MarkdownFormat().highlightRules, mode: .markdown)
+        let tokenizer = try Tokenizer(rules: MarkdownFormat().highlightRules, scanner: MarkdownScanner())
         let text = "```\nline one\nline two\n```\n" as NSString
 
         // Snapshot the state after the opening fence line.
@@ -133,7 +133,7 @@ struct HighlightingTests {
     }
 
     @Test func htmlLocalPassResumesWithAnOpenTag() throws {
-        let tokenizer = try Tokenizer(rules: HTMLFormat().highlightRules, mode: .html)
+        let tokenizer = try Tokenizer(rules: HTMLFormat().highlightRules, scanner: HTMLScanner())
         let text = "<div\n title=\"a > b\">x</div>\n" as NSString
 
         // Snapshot in the middle of a multi-line tag, at the line boundary.
@@ -157,7 +157,7 @@ struct HighlightingTests {
     }
 
     @Test func htmlLocalPassResumesInsideAComment() throws {
-        let tokenizer = try Tokenizer(rules: HTMLFormat().highlightRules, mode: .html)
+        let tokenizer = try Tokenizer(rules: HTMLFormat().highlightRules, scanner: HTMLScanner())
         let text = "<!-- one\n two -->\n<p>x</p>\n" as NSString
 
         var state = Tokenizer.State()
@@ -207,7 +207,7 @@ struct HighlightingTests {
 
     @Test func markdownFullPassStateCarriesAcrossLineChunks() throws {
         let format = MarkdownFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         let text = "intro\n```swift\n# not a heading\nlet x = 1\n```\n"
             + "middle ``` literal\nnot a fence\nafter\n"
         let ns = text as NSString
@@ -223,7 +223,7 @@ struct HighlightingTests {
 
     @Test func unterminatedMarkdownFenceContinuesAcrossLineChunks() throws {
         let format = MarkdownFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         let text = "intro\n```\nstill code\nand more code\n"
         let ns = text as NSString
         let whole = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
@@ -236,7 +236,7 @@ struct HighlightingTests {
 
     @Test func fenceAtScannerWindowBoundaryIsRecognised() throws {
         let format = MarkdownFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         // Put the opening triple backticks across the scanner's 64K window edge.
         let prefix = String(repeating: "a", count: 65_534) + "\n"
         let text = prefix + "```\ncode\n```\n"
@@ -252,7 +252,7 @@ struct HighlightingTests {
 
     @Test func htmlFullPassStateCarriesAcrossLineChunks() throws {
         let format = HTMLFormat()
-        let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
+        let tokenizer = try Tokenizer(rules: format.highlightRules, scanner: format.scanner)
         let text = "<div\n title=\"a > b\">x</div>\n<!-- one\n two -->\n<span>end</span>\n"
         let ns = text as NSString
         let whole = tokenizer.tokens(in: text, range: NSRange(location: 0, length: ns.length))
@@ -267,7 +267,7 @@ struct HighlightingTests {
         let text = "intro\n```swift\n# not a heading\ncode\n```\nafter"
         let storage = NSTextStorage(string: text)
         let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
-                                                 mode: .markdown,
+                                                 scanner: MarkdownScanner(),
                                                  theme: EditorTheme())
         var state = Tokenizer.State()
         applyLineChunks(with: highlighter, to: storage, state: &state)
@@ -284,7 +284,7 @@ struct HighlightingTests {
         let text = "<!-- one\n two -->\n<div\n title=\"a > b\">x</div>"
         let storage = NSTextStorage(string: text)
         let highlighter = try StorageHighlighter(rules: HTMLFormat().highlightRules,
-                                                 mode: .html,
+                                                 scanner: HTMLScanner(),
                                                  theme: EditorTheme())
         var state = Tokenizer.State()
         applyLineChunks(with: highlighter, to: storage, state: &state)
@@ -307,7 +307,7 @@ struct HighlightingTests {
                           count: 2_000)
         let storage = NSTextStorage(string: text)
         let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
-                                                 mode: .markdown,
+                                                 scanner: MarkdownScanner(),
                                                  theme: EditorTheme())
 
         var state = Tokenizer.State()
@@ -331,7 +331,7 @@ struct HighlightingTests {
                           count: 2_000)
         let storage = NSTextStorage(string: text)
         let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
-                                                 mode: .markdown,
+                                                 scanner: MarkdownScanner(),
                                                  theme: EditorTheme())
         var state = Tokenizer.State()
         applyChunks(with: highlighter, to: storage, state: &state, maxLength: 50_000)
@@ -352,7 +352,7 @@ struct HighlightingTests {
             + "```\n"
         let storage = NSTextStorage(string: text)
         let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
-                                                 mode: .markdown,
+                                                 scanner: MarkdownScanner(),
                                                  theme: EditorTheme())
         var state = Tokenizer.State()
         applyChunks(with: highlighter, to: storage, state: &state, maxLength: 50_000)

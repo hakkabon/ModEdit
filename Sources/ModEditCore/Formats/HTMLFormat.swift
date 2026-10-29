@@ -5,7 +5,7 @@ struct HTMLFormat: DocumentFormat {
     let displayName = "HTML"
     let contentTypes: [UTType] = [.html]
     let fileExtensions = ["html", "htm", "xhtml"]
-    let highlightingMode: HighlightingMode = .html
+    let scanner: (any StatefulScanner)? = HTMLScanner()
 
     /// Attribute rules are combined with the stateful tag/comment scanner.
     var highlightRules: [HighlightRule] {

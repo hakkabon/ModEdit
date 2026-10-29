@@ -43,6 +43,9 @@ final class EditorDocument: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    /// The formats this document may use. Injected so tests (and future
+    /// user-defined formats) do not have to mutate a global singleton.
+    let registry: FormatRegistry
     private var textStorage: NSMutableString
     private var encoding: String.Encoding
     private var hasUTF8BOM: Bool
@@ -99,12 +102,13 @@ final class EditorDocument: @unchecked Sendable {
         }
     }
 
-    /// A new, empty plain-text document.
-    init() {
+    /// A new, empty document using `registry`'s fallback format.
+    init(registry: FormatRegistry = .standard) {
+        self.registry = registry
         textStorage = NSMutableString()
         encoding = .utf8
         hasUTF8BOM = false
-        format = FormatRegistry.standard.fallback
+        format = registry.fallback
         lineIndex = LineIndex()
     }
 

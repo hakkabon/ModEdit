@@ -74,7 +74,7 @@ scripts/make-app.sh release     # release build
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (97 tests)
+The current source is verified with `swift build` and `swift test` (120 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
 push and pull request. The large-file benchmark suite is skipped by default;
 see [Large-file benchmark](#large-file-benchmark).
@@ -109,10 +109,10 @@ machine (release build, x86_64):
 | Middle one-character edit | 0.08–0.09 ms | 0.52–0.75 ms |
 | Save snapshot | 5–7 ms | 28–34 ms |
 | UTF-8 encode | 5–8 ms | 27–32 ms |
-| Dirty-line Markdown highlight | 23–27 ms | 101–127 ms |
-| Dirty-line highlight after checkpoints | 0.14–0.17 ms | 0.16–0.20 ms |
-| Last 50k local highlight chunk | 37–43 ms | 116–138 ms |
-| Full line-aligned highlight pass | 3.3–4.1 s | 16.0–18.5 s |
+| Dirty-line Markdown highlight | 22–27 ms | 101–127 ms |
+| Dirty-line highlight after checkpoints | 0.14–0.31 ms | 0.16–0.20 ms |
+| Last 50k local highlight chunk | 36–43 ms | 115–138 ms |
+| Full line-aligned highlight pass | 3.1–4.1 s | 15.9–18.5 s |
 
 The important part is not the absolute numbers (they vary by machine) but the
 shape: edits and lookups stay flat, and the remaining growth is proportional to
@@ -149,11 +149,13 @@ ModEditCore (library)
 │                 └ LineIndex (shared, incrementally updated line starts)  │
 │ IO            TextIO (decode/encode, BOM, encoding detection)            │
 │                                                                          │
-│ Formats       DocumentFormat ── FormatRegistry (immutable)               │
+│ Formats       DocumentFormat ── FormatRegistry (immutable, injected)     │
 │                 • id, content types                                      │
-│                 • highlightRules + optional stateful highlighting mode   │
+│                 • highlightRules + optional StatefulScanner              │
 │                 • makePreviewRenderer()                                  │
+│               FormatPreferenceStore (explicit choice per file URL)       │
 │ Highlighting  Tokenizer → Token(range, kind)   (pure, platform-neutral)  │
+│               MarkdownScanner / HTMLScanner (scanner protocol)           │
 │               EditorTheme: TokenKind → fonts/colours (AppKit)            │
 │               StorageHighlighter: applies tokens to NSTextStorage        │
 │               DirtyRange: accumulates pending edits for debouncing       │
@@ -201,7 +203,9 @@ manager only for visible line fragments.
 
 The format is chosen from the file's type on open and can be changed from the
 status-bar picker (which also lets you pick a format for a new, untitled
-document). XML, JSON and YAML open as plain text.
+document). An explicit choice is remembered for that file's URL and wins over
+the extension when it is reopened; unknown or removed formats are ignored.
+XML, JSON and YAML open as plain text.
 
 > `UTType.markdown` only exists in the macOS 27 SDK, so Markdown is imported by
 > identifier (`UTType(importedAs:)`) and declared in `Info.plist`.
@@ -258,11 +262,21 @@ output is skipped before the web view is touched.
        func makePreviewRenderer() -> (any PreviewRenderer)? { nil }
    }
    ```
-2. Add it to `FormatRegistry.standard`.
-3. Declare the type in `Info.plist` (`UTImportedTypeDeclarations` and
-   `CFBundleDocumentTypes`) if the system does not know it.
-4. Add tests: `FormatTests.swift` already checks that **every** shipped rule
+2. Add it to the `FormatRegistry` passed to `EditorDocument`/`ModEditDocument`.
+   The app's default is `FormatRegistry.standard`; tests often build their own.
+3. If the syntax has constructs that span lines, implement `StatefulScanner`
+   and return an instance from `var scanner` (see `MarkdownScanner` and
+   `HTMLScanner`). The default is `nil`, which uses only the regex rules.
+4. Declare the type in `Info.plist` (`UTImportedTypeDeclarations` and
+   `CFBundleDocumentTypes`) if the system does not know it. AppKit asks for
+   document types on the class before a document exists, so also add the format
+   to `FormatRegistry.standard` for Finder registration.
+5. Add tests: `FormatTests.swift` already checks that **every** shipped rule
    compiles, so a typo cannot silently disable highlighting.
+
+Explicit format choices are persisted per file URL by
+`FormatPreferenceStore`; saved IDs are validated against the document's
+registry before use.
 
 A new preview is a `PreviewRenderer` returning an HTML string; wrap bodies with
 `PreviewPage.wrap(body:)` and escape text with `HTMLEscaping.escape`.
@@ -278,8 +292,8 @@ Sources/
   ModEditCore/
     ModEditApplication.swift        AppKit application, delegate and main menu
     Model/ModEditDocument.swift     NSDocument shell and window controller
-    Formats/                        DocumentFormat, FormatRegistry, formats, UTTypes
-    Highlighting/                   Token, Tokenizer, DirtyRange, EditorTheme, StorageHighlighter
+    Formats/                        DocumentFormat, FormatRegistry, PreferenceStore, formats
+    Highlighting/                   Token, Tokenizer, scanners, DirtyRange, EditorTheme, StorageHighlighter
     IO/TextIO.swift
     Model/                          EditorDocument, EditorModel, LineIndex, LineNumberSource
     Preview/                        PreviewRenderer, MarkdownHTML, LaTeXHTML, escaping, page
@@ -293,8 +307,19 @@ Tests/ModEditTests/                 Swift Testing suites
 * **Semantic tokens, not AppKit attributes, in formats.** Formats say *what* text
   is (`TokenKind`); `EditorTheme` says how it looks. Formats become pure,
   `Sendable` and testable; theming is one file.
-* **Immutable registry, not a mutable singleton.** No registration step to
-  forget or race.
+* **Immutable registry, injected where it is used.** No registration step to
+  forget or race. `EditorDocument`, `EditorModel`, `ModEditDocument` and the
+  status-bar picker take a `FormatRegistry`, so tests can supply a small one
+  instead of depending on `.standard`.
+* **Formats carry an optional scanner, not a mode enum.** A `StatefulScanner`
+  owns its own state type and is layered around the regex rules. Adding a
+  syntax with multiline constructs means implementing the protocol (and
+  choosing which tokens go before or after the regex pass), not adding another
+  branch to the tokenizer.
+* **Explicit format choices survive reopening.** `FormatPreferenceStore`
+  records the chosen format ID against the standardized file URL, and the
+  saved ID is validated against the document's registry. This is separate from
+  the file's type: a `.txt` note can stay Markdown across launches.
 * **Document shell vs. buffer split.** `NSDocument` owns windows, save panels,
   undo change counts and the disk write. The persisted text stays in a
   lock-protected buffer that hands out immutable snapshots, while UI state lives
@@ -306,9 +331,10 @@ Tests/ModEditTests/                 Swift Testing suites
   dirty, and an older completed save cannot mark newer edits clean.
 * **Rules are ordered by priority** ("later wins") so comments and code spans
   reliably override anything matching inside them.
-* **State machines for multiline syntax.** Markdown fences and HTML tags and
-  comments are scanned with explicit state; regex rules remain useful for local
-  tokens. Tokens are clipped to the dirty lines before AppKit attributes change.
+* **State machines for multiline syntax live behind a protocol.** Markdown
+  fences and HTML tags/comments implement `StatefulScanner`; regex rules remain
+  useful for local tokens. Tokens are clipped to the dirty lines before AppKit
+  attributes change.
 * **No whole-document copies on hot paths.** A local highlight pass reads
   `NSTextStorage.mutableString`, copies only the dirty-line substring for the
   regex rules and scans for fence/tag candidates with a chunked `memchr` window.

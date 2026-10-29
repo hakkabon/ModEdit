@@ -86,7 +86,7 @@ struct LargeFileBenchmarkTests {
         // where a whole-document `storage.string` copy used to happen.
         let storage = NSTextStorage(string: document.text)
         let highlighter = try StorageHighlighter(rules: format.highlightRules,
-                                                 mode: format.highlightingMode,
+                                                 scanner: format.scanner,
                                                  theme: EditorTheme())
         let dirtyLocation = max(0, storage.length - 200)
         let dirty = NSRange(location: dirtyLocation, length: 100)
