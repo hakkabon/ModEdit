@@ -126,6 +126,9 @@ extension EditorTextView {
             synchronizedGeneration = generation
             isSynchronizing = false
             dirty = DirtyRange()
+            // The whole text was replaced; every cached scanner state refers to
+            // text that no longer exists.
+            highlighter?.invalidateCheckpoints()
             // Do not publish model state from inside `updateNSView`; refresh
             // after the current view update has finished.
             Task { @MainActor [weak self] in
@@ -178,6 +181,9 @@ extension EditorTextView {
                     editedRange: editedRange, delta: delta, replacement: replacement)
             }
             dirty.record(edited: editedRange, delta: delta)
+            // A character change can invalidate the Markdown/HTML scanner state
+            // for the edit point and everything after it.
+            highlighter?.invalidateCheckpoints(from: editedRange.location)
             scheduleHighlight()
         }
 

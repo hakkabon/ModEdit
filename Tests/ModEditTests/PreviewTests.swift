@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import ModEditCore
@@ -178,6 +179,58 @@ struct PreviewNavigationTests {
                                                isLinkActivated: false) == .cancel)
         #expect(PreviewNavigationPolicy.action(for: URL(string: "data:text/html,hello"),
                                                isLinkActivated: false) == .cancel)
+    }
+}
+
+@Suite("Preview rendering")
+struct PreviewRenderingTests {
+
+    @MainActor
+    @Test func renderersRunOffTheMainActor() async throws {
+        let probe = ThreadProbe()
+        let html = try await PreviewRendering.renderHTML(
+            from: "# Title",
+            with: OffMainProbeRenderer(probe: probe))
+
+        #expect(html == "<p># Title</p>")
+        #expect(probe.observedMainThread == false)
+    }
+
+    @Test func helperProducesTheSameHTMLAsDirectRendering() async throws {
+        let direct = try await MarkdownPreviewRenderer().renderHTML(from: "# Title")
+        let helper = try await PreviewRendering.renderHTML(from: "# Title",
+                                                           with: MarkdownPreviewRenderer())
+        #expect(helper == direct)
+    }
+}
+
+/// Records which thread a renderer observed, without assuming the test runs
+/// serially.
+private final class ThreadProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var mainThread: Bool?
+
+    func record(isMainThread: Bool) {
+        lock.lock()
+        mainThread = isMainThread
+        lock.unlock()
+    }
+
+    var observedMainThread: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        return mainThread
+    }
+}
+
+private struct OffMainProbeRenderer: PreviewRenderer {
+    let probe: ThreadProbe
+
+    func renderHTML(from source: String) async throws -> String {
+        // `Thread.isMainThread` is unavailable in async contexts, so ask the
+        // pthread API directly.
+        probe.record(isMainThread: pthread_main_np() != 0)
+        return "<p>\(HTMLEscaping.escape(source))</p>"
     }
 }
 

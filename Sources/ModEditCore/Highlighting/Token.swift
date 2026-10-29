@@ -68,20 +68,120 @@ struct Tokenizer {
 
     /// Multiline state at a line boundary.
     ///
-    /// A local pass starts from `State()` and scans the document prefix so a
-    /// dirty line inside a fence or comment is still classified correctly. A
-    /// full-document pass carries one `State` across line-aligned chunks, so
+    /// A full-document pass carries one `State` across line-aligned chunks, so
     /// the Markdown/HTML scanners visit every character once instead of
-    /// re-scanning the prefix for each chunk.
+    /// re-scanning the prefix for each chunk. A local dirty-line pass instead
+    /// starts from the nearest entry in `Checkpoints`, so it only replays the
+    /// text between that snapshot and the dirty lines.
     struct State: Equatable, Sendable {
         /// UTF-16 offset up to which the state machine has consumed text.
-        fileprivate var scanLocation = 0
+        fileprivate(set) var scanLocation = 0
         fileprivate var markdownFenceStart: Int?
         fileprivate var htmlCommentStart: Int?
         fileprivate var htmlTagStart: Int?
         fileprivate var htmlTagQuote: unichar?
 
         init() {}
+    }
+
+    /// A bounded cache of scanner snapshots at line boundaries.
+    ///
+    /// A snapshot is the complete `State` after consuming `[0, offset)`.
+    /// Because the Markdown and HTML scanners are purely forward state
+    /// machines, a local pass may resume from any snapshot at or before the
+    /// dirty lines and produce exactly the same tokens as a scan from offset 0.
+    ///
+    /// Snapshots become invalid when characters change: an edit at `location`
+    /// can alter the interpretation of every offset at or after it. Callers
+    /// must call `invalidate(from:)` for each edit; `StorageHighlighter` does
+    /// that from the text-storage delegate.
+    struct Checkpoints: Sendable {
+        struct Entry: Sendable, Equatable {
+            let offset: Int
+            let state: State
+        }
+
+        /// Minimum UTF-16 distance between snapshots. This keeps the cache
+        /// proportional to document size; in normal editing the nearest
+        /// snapshot before a dirty line is one full-pass chunk away.
+        static let spacing = 32 * 1_024
+
+        private(set) var entries: [Entry] = []
+
+        var count: Int { entries.count }
+
+        var offsets: [Int] { entries.map(\.offset) }
+
+        /// The snapshot with the greatest offset at or before `location`, or
+        /// `nil` when the caller has to start at the document start.
+        func state(atOrBefore location: Int) -> State? {
+            // Upper-bound search: first entry whose offset is greater than
+            // `location`; the entry before it is the one to reuse.
+            var low = 0
+            var high = entries.count
+            while low < high {
+                let middle = low + (high - low) / 2
+                if entries[middle].offset <= location {
+                    low = middle + 1
+                } else {
+                    high = middle
+                }
+            }
+            guard low > 0 else { return nil }
+            return entries[low - 1].state
+        }
+
+        /// Records a snapshot at a line-aligned `offset`.
+        ///
+        /// An existing snapshot at the same offset is replaced. Otherwise the
+        /// snapshot is skipped when it is closer than `spacing` to either
+        /// neighbour, which keeps the number of snapshots proportional to
+        /// document size rather than to the number of edits.
+        mutating func record(_ state: State, at offset: Int) {
+            guard offset >= 0 else { return }
+
+            let index = insertionIndex(for: offset)
+            if index < entries.count, entries[index].offset == offset {
+                entries[index] = Entry(offset: offset, state: state)
+                return
+            }
+            if index > 0, offset - entries[index - 1].offset < Self.spacing {
+                return
+            }
+            if index < entries.count, entries[index].offset - offset < Self.spacing {
+                return
+            }
+            entries.insert(Entry(offset: offset, state: state), at: index)
+        }
+
+        /// Drops every snapshot at or after `location`. Text after an edit is
+        /// either different or shifted, so those states can no longer be
+        /// trusted.
+        mutating func invalidate(from location: Int) {
+            let index = insertionIndex(for: location)
+            if index < entries.count {
+                entries.removeSubrange(index...)
+            }
+        }
+
+        mutating func removeAll() {
+            entries.removeAll(keepingCapacity: true)
+        }
+
+        /// First index whose entry offset is at least `offset`.
+        private func insertionIndex(for offset: Int) -> Int {
+            var low = 0
+            var high = entries.count
+            while low < high {
+                let middle = low + (high - low) / 2
+                if entries[middle].offset < offset {
+                    low = middle + 1
+                } else {
+                    high = middle
+                }
+            }
+            return low
+        }
     }
 
     private let rules: [CompiledRule]
@@ -161,6 +261,20 @@ struct Tokenizer {
         // starts exactly here.
         state.scanLocation = NSMaxRange(requested)
         return result
+    }
+
+    /// Tokens for a local dirty-line pass that can reuse cached state.
+    ///
+    /// `state` normally comes from `checkpoints.state(atOrBefore:)`, or is a
+    /// fresh `State()` when no snapshot exists. The resulting state is recorded
+    /// so a later pass after these lines does not have to replay the prefix.
+    func tokens(in text: NSString,
+                range: NSRange,
+                state: inout State,
+                checkpoints: inout Checkpoints) -> [Token] {
+        let tokens = tokens(in: text, range: range, state: &state)
+        checkpoints.record(state, at: state.scanLocation)
+        return tokens
     }
 
     private func clippedToken(_ range: NSRange, kind: TokenKind, to requested: NSRange) -> Token? {

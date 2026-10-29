@@ -97,6 +97,114 @@ struct HighlightingTests {
         #expect(tokens.contains(Token(range: requested, kind: .code)))
     }
 
+    @Test func checkpointLookupUsesTheNearestEarlierState() throws {
+        let tokenizer = try Tokenizer(rules: MarkdownFormat().highlightRules, mode: .markdown)
+        let text = "a\nb\nc\n" as NSString
+        var state = Tokenizer.State()
+        _ = tokenizer.tokens(in: text, range: NSRange(location: 0, length: 2), state: &state)
+
+        var checkpoints = Tokenizer.Checkpoints()
+        checkpoints.record(state, at: 2)
+
+        #expect(checkpoints.count == 1)
+        #expect(checkpoints.state(atOrBefore: 1) == nil)
+        #expect(checkpoints.state(atOrBefore: 2) == state)
+        #expect(checkpoints.state(atOrBefore: 100) == state)
+    }
+
+    @Test func markdownLocalPassResumesFromACheckpoint() throws {
+        let tokenizer = try Tokenizer(rules: MarkdownFormat().highlightRules, mode: .markdown)
+        let text = "```\nline one\nline two\n```\n" as NSString
+
+        // Snapshot the state after the opening fence line.
+        var state = Tokenizer.State()
+        _ = tokenizer.tokens(in: text,
+                             range: NSRange(location: 0, length: 4),
+                             state: &state)
+        var checkpoints = Tokenizer.Checkpoints()
+        checkpoints.record(state, at: 4)
+
+        let requested = text.lineRange(for: text.range(of: "line two"))
+        var resumed = try #require(checkpoints.state(atOrBefore: requested.location))
+        let tokens = tokenizer.tokens(in: text, range: requested, state: &resumed,
+                                      checkpoints: &checkpoints)
+
+        #expect(tokens.contains(Token(range: requested, kind: .code)))
+    }
+
+    @Test func htmlLocalPassResumesWithAnOpenTag() throws {
+        let tokenizer = try Tokenizer(rules: HTMLFormat().highlightRules, mode: .html)
+        let text = "<div\n title=\"a > b\">x</div>\n" as NSString
+
+        // Snapshot in the middle of a multi-line tag, at the line boundary.
+        var state = Tokenizer.State()
+        _ = tokenizer.tokens(in: text,
+                             range: NSRange(location: 0, length: 5),
+                             state: &state)
+        var checkpoints = Tokenizer.Checkpoints()
+        checkpoints.record(state, at: 5)
+
+        let requested = text.lineRange(for: text.range(of: "title"))
+        var resumed = try #require(checkpoints.state(atOrBefore: requested.location))
+        let tokens = tokenizer.tokens(in: text, range: requested, state: &resumed,
+                                      checkpoints: &checkpoints)
+
+        #expect(tokens.contains {
+            $0.kind == .tag && NSLocationInRange(requested.location, $0.range)
+        })
+        #expect(tokens.contains { $0.kind == .attributeName })
+        #expect(tokens.contains { $0.kind == .string })
+    }
+
+    @Test func htmlLocalPassResumesInsideAComment() throws {
+        let tokenizer = try Tokenizer(rules: HTMLFormat().highlightRules, mode: .html)
+        let text = "<!-- one\n two -->\n<p>x</p>\n" as NSString
+
+        var state = Tokenizer.State()
+        _ = tokenizer.tokens(in: text, range: NSRange(location: 0, length: 9),
+                             state: &state)
+        var checkpoints = Tokenizer.Checkpoints()
+        checkpoints.record(state, at: 9)
+
+        let requested = text.lineRange(for: text.range(of: "two"))
+        var resumed = try #require(checkpoints.state(atOrBefore: requested.location))
+        let tokens = tokenizer.tokens(in: text, range: requested, state: &resumed,
+                                      checkpoints: &checkpoints)
+
+        #expect(tokens.contains {
+            $0.kind == .comment && NSLocationInRange(requested.location, $0.range)
+        })
+    }
+
+    @Test func invalidatingACheckpointDropsItAndEverythingAfterIt() {
+        var checkpoints = Tokenizer.Checkpoints()
+        let spacing = Tokenizer.Checkpoints.spacing
+        let state = Tokenizer.State()
+        checkpoints.record(state, at: 0)
+        checkpoints.record(state, at: spacing)
+        checkpoints.record(state, at: spacing * 2)
+
+        checkpoints.invalidate(from: spacing)
+
+        #expect(checkpoints.offsets == [0])
+    }
+
+    @Test func checkpointsKeepAtLeastOneSpacingBetweenNeighbours() {
+        var checkpoints = Tokenizer.Checkpoints()
+        let spacing = Tokenizer.Checkpoints.spacing
+        let state = Tokenizer.State()
+
+        checkpoints.record(state, at: 0)
+        checkpoints.record(state, at: spacing * 2)
+        // Exactly one spacing from both neighbours: allowed.
+        checkpoints.record(state, at: spacing)
+        // Too close to the newly inserted checkpoint: skipped, so pathological
+        // descending edits cannot grow the cache without bound.
+        checkpoints.record(state, at: spacing + spacing / 2)
+
+        #expect(checkpoints.offsets == [0, spacing, spacing * 2])
+    }
+
     @Test func markdownFullPassStateCarriesAcrossLineChunks() throws {
         let format = MarkdownFormat()
         let tokenizer = try Tokenizer(rules: format.highlightRules, mode: format.highlightingMode)
@@ -194,6 +302,97 @@ struct HighlightingTests {
     }
 
     @MainActor
+    @Test func localPassResumesFromTheNearestCheckpoint() throws {
+        let text = String(repeating: "# Heading\nsome **bold** text\n```\ncode\n```\n",
+                          count: 2_000)
+        let storage = NSTextStorage(string: text)
+        let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
+                                                 mode: .markdown,
+                                                 theme: EditorTheme())
+
+        var state = Tokenizer.State()
+        applyChunks(with: highlighter, to: storage, state: &state, maxLength: 50_000)
+        #expect(highlighter.checkpointCount > 1)
+        #expect(highlighter.checkpointOffsets.allSatisfy { $0 > 0 })
+
+        let ns = storage.mutableString
+        let dirty = ns.lineRange(for: NSRange(location: storage.length - 200, length: 1))
+        highlighter.apply(to: storage, in: dirty)
+
+        // Resuming from a checkpoint, not from document offset 0.
+        #expect(highlighter.lastRecoveryStart > 0)
+        #expect(highlighter.lastRecoveryStart <= dirty.location)
+        #expect(dirty.location - highlighter.lastRecoveryStart <= 50_000 + 1)
+    }
+
+    @MainActor
+    @Test func editsInvalidateCheckpointsAtAndAfterTheEdit() throws {
+        let text = String(repeating: "# Heading\nsome **bold** text\n```\ncode\n```\n",
+                          count: 2_000)
+        let storage = NSTextStorage(string: text)
+        let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
+                                                 mode: .markdown,
+                                                 theme: EditorTheme())
+        var state = Tokenizer.State()
+        applyChunks(with: highlighter, to: storage, state: &state, maxLength: 50_000)
+
+        let cut = storage.length * 3 / 4
+        highlighter.invalidateCheckpoints(from: cut)
+
+        #expect(highlighter.checkpointOffsets.allSatisfy { $0 < cut })
+        #expect(!highlighter.checkpointOffsets.isEmpty)
+    }
+
+    @MainActor
+    @Test func checkpointedLocalPassColoursInsideAFence() throws {
+        let text = String(repeating: "prose\n", count: 10_000)
+            + "```\n"
+            + String(repeating: "code line\n", count: 5_000)
+            + "# not a heading\n"
+            + "```\n"
+        let storage = NSTextStorage(string: text)
+        let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
+                                                 mode: .markdown,
+                                                 theme: EditorTheme())
+        var state = Tokenizer.State()
+        applyChunks(with: highlighter, to: storage, state: &state, maxLength: 50_000)
+
+        let ns = storage.mutableString
+        let inside = ns.range(of: "# not a heading")
+        let line = ns.lineRange(for: inside)
+        // Clear the full-pass result so this test proves the local pass alone.
+        storage.setAttributes([:], range: line)
+
+        highlighter.apply(to: storage, in: line)
+
+        // The nearest checkpoint is inside the fence, so its open-fence state
+        // (and the fence's original start) must have been carried across.
+        #expect(highlighter.lastRecoveryStart > 0)
+        #expect(storage.attribute(.foregroundColor,
+                                  at: inside.location,
+                                  effectiveRange: nil) as? NSColor == .systemPink)
+    }
+
+    @MainActor
+    private func applyChunks(with highlighter: StorageHighlighter,
+                             to storage: NSTextStorage,
+                             state: inout Tokenizer.State,
+                             maxLength: Int) {
+        var start = 0
+        while start < storage.length {
+            let ns = storage.mutableString
+            let tentativeEnd = min(start + maxLength, storage.length)
+            let line = ns.lineRange(for: NSRange(location: start,
+                                                 length: tentativeEnd - start))
+            let end = min(NSMaxRange(line), storage.length)
+            highlighter.apply(to: storage,
+                              in: NSRange(location: start, length: end - start),
+                              state: &state)
+            start = end
+        }
+    }
+
+    @MainActor
     private func applyLineChunks(with highlighter: StorageHighlighter,
                                  to storage: NSTextStorage,
                                  state: inout Tokenizer.State) {
@@ -282,6 +481,20 @@ struct HighlightingTests {
 
         highlighter.apply(to: storage, in: NSRange(location: 0, length: storage.length))
         #expect(storage.attribute(.foregroundColor, at: 9, effectiveRange: nil) as? NSColor == .textColor)
+    }
+
+    @MainActor
+    @Test func zeroLengthRangeStillHighlightsItsLine() throws {
+        let highlighter = try StorageHighlighter(rules: MarkdownFormat().highlightRules,
+                                                 theme: EditorTheme())
+        let storage = NSTextStorage(string: "plain\n# Title\nplain")
+
+        // A pure deletion reports a zero-length dirty range; the line around
+        // the deletion still needs to be coloured.
+        highlighter.apply(to: storage, in: NSRange(location: 7, length: 0))
+
+        #expect(storage.attribute(.foregroundColor, at: 6, effectiveRange: nil) as? NSColor
+            == .systemBlue)
     }
 
     @MainActor

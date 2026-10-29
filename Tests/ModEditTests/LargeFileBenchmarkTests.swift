@@ -125,6 +125,16 @@ struct LargeFileBenchmarkTests {
         report(size: megabytes, operation: "full highlight pass", seconds: fullPass,
                detail: "Markdown, line-aligned chunks")
 
+        // The full pass cached scanner checkpoints. A dirty-line pass near the
+        // end now resumes from the nearest checkpoint instead of replaying the
+        // whole document prefix.
+        let checkpointedHighlight = measure {
+            highlighter.apply(to: storage, in: dirty)
+        }
+        report(size: megabytes, operation: "dirty-line (checkpointed)", seconds: checkpointedHighlight,
+               detail: "resumed \(dirty.location - highlighter.lastRecoveryStart) chars back, "
+                   + "\(highlighter.checkpointCount) checkpoints")
+
         #expect(document.numberOfLines > 1)
         #expect(snapshot?.text.utf16.count == document.textLength)
     }

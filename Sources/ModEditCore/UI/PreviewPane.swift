@@ -47,6 +47,10 @@ struct PreviewPane: NSViewRepresentable {
         /// Debounced render. Skips identical output and restores the scroll
         /// position afterwards (reloading used to jump the preview to the top
         /// on every keystroke).
+        ///
+        /// The source snapshot and all `WKWebView` calls stay on the main
+        /// actor; the HTML transformation runs on a detached task so a large
+        /// document cannot block typing.
         func render(revision: UInt64,
                     source: @escaping @MainActor () -> String?,
                     with renderer: any PreviewRenderer,
@@ -71,7 +75,7 @@ struct PreviewPane: NSViewRepresentable {
                         webView.loadHTMLString(html, baseURL: nil)
                         return
                     }
-                    html = try await renderer.renderHTML(from: text)
+                    html = try await PreviewRendering.renderHTML(from: text, with: renderer)
                 } catch {
                     html = PreviewPage.wrap(body: "<pre>\(HTMLEscaping.escape("Preview failed: \(error)"))</pre>")
                 }

@@ -97,31 +97,37 @@ scripts/benchmark-large-files.sh
 It builds 10 MB and 50 MB Markdown files (headings, emphasis, links and fenced
 code) and measures load + line index construction, cursor lookup, edits at the
 end and in the middle, save snapshots, UTF-8 encoding, a dirty-line highlight
-near the end, the last 50k local highlight chunk, and a complete line-aligned
-highlight pass. Results from the development machine (release build, x86_64):
+near the end (cold and after checkpoints), the last 50k local highlight chunk,
+and a complete line-aligned highlight pass. Results from the development
+machine (release build, x86_64):
 
 | Operation | 10 MB | 50 MB |
 |-----------|------:|------:|
-| Load + line index | 18–20 ms | 88–98 ms |
+| Load + line index | 17–20 ms | 79–98 ms |
 | Line/column lookup | < 2 µs | < 2 µs |
 | Append edit | 0.001 ms | 0.001 ms |
 | Middle one-character edit | 0.08–0.09 ms | 0.52–0.75 ms |
-| Save snapshot | 6 ms | 29–34 ms |
-| UTF-8 encode | 5–8 ms | 29–32 ms |
-| Dirty-line Markdown highlight | 25–27 ms | 114–127 ms |
-| Last 50k local highlight chunk | 40–43 ms | 131–138 ms |
-| Full line-aligned highlight pass | 3.6–4.1 s | 17.5–18.5 s |
+| Save snapshot | 5–7 ms | 28–34 ms |
+| UTF-8 encode | 5–8 ms | 27–32 ms |
+| Dirty-line Markdown highlight | 23–27 ms | 101–127 ms |
+| Dirty-line highlight after checkpoints | 0.14–0.17 ms | 0.16–0.20 ms |
+| Last 50k local highlight chunk | 37–43 ms | 116–138 ms |
+| Full line-aligned highlight pass | 3.3–4.1 s | 16.0–18.5 s |
 
 The important part is not the absolute numbers (they vary by machine) but the
 shape: edits and lookups stay flat, and the remaining growth is proportional to
-the bytes that genuinely have to be copied or scanned. The full pass is now
-linear (it carries Markdown/HTML state across chunks instead of re-scanning the
-prefix per chunk); the remaining cost is applying attributes to every matched
-range (several per dense prose line). It runs in cancellable chunks and yields
-between them, so the document is editable while it colours in. A dirty-line
-highlight still has to recover the Markdown fence/HTML state from the document
-start, so it is the slowest per-edit path; it is a scan, not a whole-document
-copy.
+the bytes that genuinely have to be copied or scanned. The full pass is linear
+(it carries Markdown/HTML state across chunks instead of re-scanning the prefix
+per chunk); the remaining cost is applying attributes to every matched range
+(several per dense prose line). It runs in cancellable chunks and yields between
+them, so the document is editable while it colours in.
+
+The first dirty-line pass after a fresh load still has to recover Markdown fence
+or HTML tag state from the document start. Every full-pass chunk then records a
+line-aligned scanner checkpoint, so subsequent passes resume from the nearest
+one: on 50 MB the same near-end edit drops from about 115 ms to about 0.2 ms.
+Checkpoints are invalidated at and after each edit, keeping the resumed state
+consistent with the current text.
 
 ## Architecture
 
@@ -162,15 +168,17 @@ Data flow while typing:
    80 ms debounce `StorageHighlighter` re-colours **only the touched lines**.
    The tokenizer works on `NSTextStorage.mutableString` and copies only the
    dirty-line substring; stateful scanners search for candidate delimiters with
-   a chunked `memchr` scan instead of materialising a line string per line.
+   a chunked `memchr` scan instead of materialising a line string per line. The
+   Markdown/HTML state is resumed from the nearest cached checkpoint and every
+   edit invalidates the checkpoints at and after it.
 3. The storage delegate applies only the replacement range to the document's
    locked `NSMutableString`, increments a cheap published revision, and tells
    `ModEditDocument` about the change so autosave and the edited indicator see it.
 4. SwiftUI re-evaluates `EditorRootView`; after a 250 ms debounce `PreviewPane`
-   takes one immutable snapshot, renders it, skips identical output, and restores
-   the scroll position. Fast typing therefore does not copy the complete file
-   for every keystroke. Documents over 5 MB are not copied at all; the preview
-   shows a size notice.
+   takes one immutable snapshot on the main actor, renders the HTML on a detached
+   task, skips identical output, and restores the scroll position. Fast typing
+   therefore does not copy the complete file for every keystroke. Documents over
+   5 MB are not copied at all; the preview shows a size notice.
 5. Selection changes update the status bar's one-based `line:column` location.
    A successful write records the exact saved generation; the document becomes
    clean only when no newer edit exists.
@@ -221,6 +229,12 @@ Previewed files are *untrusted input*, so the preview is hardened:
 Earlier versions inserted LaTeX source into the page unescaped (so a `.tex` file
 containing `<script>` would execute it) and parsed Markdown links with a regular
 expression that mishandled URLs containing `*` or parentheses.
+
+Rendering is kept off the main actor: after the debounce the pane snapshots the
+document on the main actor, the format's renderer transforms it on a detached
+task, and only the finished HTML returns to the main actor for the `WKWebView`
+load and scroll restoration. A superseded render is cancelled, and identical
+output is skipped before the web view is touched.
 
 ## Adding a format
 
@@ -303,9 +317,16 @@ Tests/ModEditTests/                 Swift Testing suites
 * **One incremental state machine per pass.** A full-document highlight splits on
   line boundaries and carries one `Tokenizer.State` between chunks, so Markdown
   fences and HTML tags/comments are scanned once instead of re-reading the
-  prefix per chunk. If an edit lands mid-pass, the pass restarts because the
-  carried offsets are stale; the edit itself is coloured immediately by the
-  debounced local pass.
+  prefix per chunk. Each chunk boundary also caches a line-aligned checkpoint;
+  a later dirty-line pass resumes from the nearest checkpoint at or before the
+  edit. Checkpoints at and after a character edit are discarded. If an edit
+  lands mid-pass, the pass restarts because the carried offsets are stale; the
+  edit itself is coloured immediately by the debounced local pass.
+* **Preview rendering is off the main actor.** The preview snapshots the source
+  on the main actor, renders Markdown/LaTeX/HTML on a detached task, then
+  returns to the main actor for the `WKWebView` load and scroll restoration.
+  Cancellation is forwarded to the detached render, and identical HTML is
+  skipped before the web view is touched.
 * **One shared incremental line index.** The document owns the UTF-16 line
   starts. A text edit rebuilds only the affected line window and shifts the
   remaining starts; the status bar and gutter both read that index instead of
@@ -335,11 +356,12 @@ Tests/ModEditTests/                 Swift Testing suites
 * **Edits still move suffix bytes.** The document uses `NSMutableString`, so it
   avoids a second full-file model copy but insertion near the beginning of a very
   large file remains O(n). A piece table or rope is the next scaling step.
-* **Stateful highlighting still needs the construct state from the document
-  start.** A dirty line near the end of a 50 MB Markdown file takes about
-  115 ms to re-colour (see [Large-file benchmark](#large-file-benchmark)).
-  The bytes copied stay proportional to the dirty line; only the state search
-  is O(n). The initial full pass over that file takes about 18 s, in
+* **Checkpoint recovery is bounded, not zero.** A local highlight pass resumes
+  from the nearest scanner checkpoint, normally the previous full-pass chunk
+  (about 32–50k UTF-16 units). An edit near the top of the document invalidates
+  every later checkpoint, so a later edit far from it replays the prefix once
+  (about 115 ms on a 50 MB Markdown file). Subsequent passes reuse the new
+  checkpoint. The initial full pass over that file takes about 18 s, in
   cancellable chunks that yield so editing stays responsive.
 * **Status columns use UTF-16 offsets.** This matches AppKit and LSP position
   accounting, but a grapheme such as a composed emoji can occupy several columns.
