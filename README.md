@@ -91,7 +91,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (210 tests)
+The current source is verified with `swift build` and `swift test` (215 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -146,6 +146,45 @@ line-aligned scanner checkpoint, so subsequent passes resume from the nearest
 one: on 50 MB the same near-end edit drops from about 115 ms to about 0.2 ms.
 Checkpoints are invalidated at and after each edit, keeping the resumed state
 consistent with the current text.
+
+### PL/0 parser benchmark
+
+The parser benchmark is also opt-in and always runs with optimization:
+
+```sh
+scripts/benchmark-pl0.sh
+# equivalent to:
+# MODEDIT_PL0_BENCHMARK=1 swift test -c release --filter PL0ParserBenchmark
+```
+
+It generates programs containing 100, 250 and 500 statements and reports
+full lexer, Reference LL, generated SLR(1), Earley, native tree/forest and
+near-end incremental-edit timings. Records use a stable `PL0BENCH` prefix and
+include milliseconds, nanoseconds per token, reuse counts, trace events and
+forest nodes. A representative x86_64 release run produced:
+
+| Statements | Reference LL | SLR(1) | Earley | Incremental SLR | Incremental Earley | Forest nodes |
+|-----------:|-------------:|-------:|-------:|----------------:|-------------------:|-------------:|
+| 100 | 2.2 ms | 13.7 ms | 116 ms | 0.8 ms | 21 ms | 17,259 |
+| 250 | 4.1 ms | 40.7 ms | 737 ms | 1.5 ms | 105 ms | 99,384 |
+| 500 | 7.5 ms | 140 ms | 2.78 s | 4.3 ms | 412 ms | 386,259 |
+
+The forest counts deliberately expose the controlled grammar's ambiguous
+nullable statement-list shape. A 5,000-statement exploratory run exhausted the
+test process, so the published all-engine corpus is bounded at 500 rather than
+hiding the scaling problem. This is a measurement target for future forest
+compaction and grammar-refactoring experiments.
+
+### PL/0 mutation campaigns
+
+The normal test suite runs deterministic token deletion and insertion matrices
+over a controlled corpus, plus 200 seeded random UTF-16 edits. Every mutation
+checks parser termination, bounded recovery, LR/Earley recognition agreement,
+and incremental-versus-full CST, diagnostics, expectation and semantic recovery
+equivalence for all three engines. The published seed is `0xC0FFEE5EED`, making
+failures exactly reproducible. Recovery comparisons intentionally exclude token
+identity: incremental tokens retain stable IDs while a fresh parse creates new
+ones.
 
 ## Architecture
 
@@ -461,6 +500,7 @@ Package.swift
 scripts/make-app.sh                 build ModEdit.app
 scripts/package-release.sh          build and zip the release app
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
+scripts/benchmark-pl0.sh            run the LL/LR/Earley benchmark
 Sources/
   PL0Language/                     lexer/parser, CST, formatter, VM and LSP adapter
   ModEditApp/                       @main entry point, Info.plist
@@ -630,8 +670,9 @@ Examples/squares.pl0                sample controlled-language program
    CYK and RNGLR with recovery-cost and full-versus-incremental differential
    tests.
 2. **Finer incremental parsing.** Add declaration-level reuse, dependency-aware
-   invalidation, recovered-region reuse experiments and randomized differential
-   testing of every incremental result against the complete reference parse.
+   invalidation, recovered-region reuse experiments, mutation minimization and
+   grammar-aware mutation operators. The seeded raw-edit differential campaign
+   already checks every incremental result against a fresh full parse.
 3. **Standards-facing LSP transport.** Wrap the implemented, version-safe
    `PL0LSPAdapter` in JSON-RPC framing, add initialize/capability negotiation,
    cancellation and the standard delta-encoded semantic-token wire format.
