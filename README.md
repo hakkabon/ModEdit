@@ -91,7 +91,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (184 tests)
+The current source is verified with `swift build` and `swift test` (191 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -156,6 +156,7 @@ PL0Language (platform-neutral library)
 │ Incremental PL0Lexer → stable PL0Token[] + lexical diagnostics/metrics  │
 │ Incremental reference LL parser → parser-neutral CST + recovery/metrics │
 │ Comment-preserving formatter · lexical-scope compiler · bounded stack VM │
+│ Versioned LSP adapter → diagnostics/completion/definition/semantic tokens │
 └──────────────────────────────────────────────────────────────────────────┘
                 │
                 ▼
@@ -306,6 +307,10 @@ The first implementation is a deliberately small vertical slice:
 * `PL0Compiler` lowers the controlled grammar to lexical-addressed bytecode.
   `PL0VirtualMachine` executes integer arithmetic, conditions, loops, nested
   procedures and recursion with checked arithmetic and an instruction limit.
+* `PL0LSPAdapter` is a transport-neutral, multi-document language service. It
+  accepts full or ranged LSP changes, rejects stale versions and provides
+  parser plus semantic diagnostics, scope-aware completion, go-to-definition
+  and semantic tokens. Positions are zero-based UTF-16 line/character pairs.
 * Parsing starts 120 ms after an edit on a detached task. A result is displayed
   only if its version still matches the document revision.
 
@@ -422,7 +427,7 @@ scripts/make-app.sh                 build ModEdit.app
 scripts/package-release.sh          build and zip the release app
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 Sources/
-  PL0Language/                     snapshots, incremental lexer/parser, CST/recovery model
+  PL0Language/                     lexer/parser, CST, formatter, VM and LSP adapter
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
     ModEditApplication.swift        AppKit application, delegate and main menu
@@ -566,6 +571,11 @@ Examples/squares.pl0                sample controlled-language program
 * **The PL/0 VM is deliberately small.** Values are checked machine integers;
   the controlled grammar has no input/output statement, so execution results
   currently expose final global variables rather than a console stream.
+* **The LSP layer is transport-neutral.** It intentionally does not own stdin,
+  sockets or JSON-RPC framing. `PL0LSPAdapter` can be called directly by
+  ModEdit and wrapped by a small standards-facing server without coupling the
+  language engine to one process model. Semantic analysis continues over a
+  recovered token stream, so useful results remain available while typing.
 * **Reference parser only.** LL/LR/Earley/CYK/RNGLR adapters and parse forests
   have not yet been connected to the parser-neutral workbench model. The
   reference engine is deliberately deterministic and does not represent
@@ -579,9 +589,9 @@ Examples/squares.pl0                sample controlled-language program
 2. **Finer incremental parsing.** Add declaration-level reuse, dependency-aware
    invalidation, recovered-region reuse experiments and randomized differential
    testing of every incremental result against the complete reference parse.
-3. **PL/0 language service.** Reuse the compiler's lexical scopes in a
-   version-safe LSP server for diagnostics, completion, definitions and
-   semantic tokens.
+3. **Standards-facing LSP transport.** Wrap the implemented, version-safe
+   `PL0LSPAdapter` in JSON-RPC framing, add initialize/capability negotiation,
+   cancellation and the standard delta-encoded semantic-token wire format.
 4. **Rendering inside the editor.** Introduce a
    platform-neutral `TextRenderer` that emits *runs tiling the source exactly*
    (hidden markup = zero-width run) with a two-way source↔display offset map;
