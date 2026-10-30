@@ -10,7 +10,7 @@ struct ReferenceParserTests {
         #expect(descriptor.capabilities.contains(.deterministicTree))
         #expect(descriptor.capabilities.contains(.errorRecovery))
         #expect(descriptor.capabilities.contains(.expectedTokens))
-        #expect(!descriptor.capabilities.contains(.incremental))
+        #expect(descriptor.capabilities.contains(.incremental))
         #expect(!descriptor.capabilities.contains(.ambiguity))
     }
 

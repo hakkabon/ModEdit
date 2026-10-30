@@ -7,7 +7,8 @@ the right shows it as headings, emphasis, symbols and mathematics.
 > **Status: early development (v0.1.0).** The editor, syntax colouring, format
 > switching, file open/save and the live preview work end to end for Plain Text,
 > Markdown, LaTeX and HTML. An initial PL/0 parsing workbench provides a
-> reference lexer/parser, explicit recovery traces and CST inspection.
+> reference lexer/parser with incremental token and syntax-tree reuse, explicit
+> recovery traces and CST inspection.
 > Rendering *inside* the editor pane (single-pane
 > "live preview" with a caret that moves through rendered text) is the next big
 > milestone; see the [roadmap](#roadmap).
@@ -66,8 +67,9 @@ the right shows it as headings, emphasis, symbols and mathematics.
   text, syntax, gutter and current-line colours; preview pages use
   `color-scheme` so they follow the system appearance too.
 * Experimental **PL/0 language workbench**: native `.pl0` documents, incremental
-  UTF-16 tokenization with identity reuse, a recoverable reference LL parser,
-  parser-neutral CST, Problems/recovery/Tokens/CST views and parse metrics.
+  UTF-16 tokenization and reference LL parsing with identity reuse, robust error
+  recovery, a parser-neutral CST, Problems/recovery/Tokens/CST views and reuse
+  metrics.
 
 ## Requirements
 
@@ -87,7 +89,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (158 tests)
+The current source is verified with `swift build` and `swift test` (163 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -150,7 +152,7 @@ PL0Language (platform-neutral library)
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ SourceSnapshot/Edit (versioned UTF-16 ranges)                            │
 │ Incremental PL0Lexer → stable PL0Token[] + lexical diagnostics/metrics  │
-│ Reference LL parser → parser-neutral CST + recovery trace + metrics      │
+│ Incremental reference LL parser → parser-neutral CST + recovery/metrics │
 └──────────────────────────────────────────────────────────────────────────┘
                 │
                 ▼
@@ -282,6 +284,9 @@ The first implementation is a deliberately small vertical slice:
 * `PL0Frontend` currently selects one **Reference LL** recursive-descent parser.
   `PL0ParserProtocol` is the common immutable input/output contract that future
   LL, LR, Earley and RNGLR adapters will implement.
+* `PL0LanguageSession` retains lexer and parser caches for one versioned
+  document. Successful blocks, statements, conditions, expressions, terms and
+  factors can be reused without invoking their grammar productions again.
 * Every inserted or deleted recovery token is returned as a `RecoveryAction`;
   recovered CST nodes retain their origin.
 * The reference engine declares deterministic-tree, recovery and expected-token
@@ -293,8 +298,8 @@ The first implementation is a deliberately small vertical slice:
 
 The Problems tab shows diagnostics and recovery decisions; Tokens shows lexer
 locations and classifications; CST shows the normalized concrete syntax tree.
-The header reports snapshot version, token count, scanned UTF-16 length, reused
-token count and lexer+parser time.
+The header reports snapshot version, token count, scanned UTF-16 length, lexer
+reuse, parser node/token reuse and lexer+parser time.
 
 For an edit, tokenization keeps tokens strictly before a safe token boundary,
 then scans from that boundary until a newly produced token aligns with the
@@ -305,9 +310,15 @@ a safe full scan. Tests compare every result in multi-edit sequences with a
 fresh full tokenization, including token-boundary merging, newline relocation,
 invalid characters and unterminated block comments.
 
-The reference parser still reparses the complete token sequence. Its
-parser-neutral results are the next reuse boundary for incremental LL/LR/Earley
-experiments.
+Parser cache entries are keyed by grammar rule and the first stable token ID.
+Reuse requires an exact match for every consumed token ID and the following
+lookahead token ID. A reused subtree keeps its syntax identity and all of its
+ranges are relocated when an earlier edit changes source offsets. Regions that
+produced a diagnostic, recovery action or expectation are deliberately not
+cached, so malformed input is parsed and recovered again instead of preserving
+stale errors. If document versions skip, full tokenization also clears the
+parser cache, so reuse safely falls back to zero. The program root and any
+invalidated ancestor paths are rebuilt on every edit.
 
 The reference-parser test corpus covers every controlled grammar production,
 direct-parser/frontend equivalence, expected terminals, missing-token insertion,
@@ -381,7 +392,7 @@ scripts/make-app.sh                 build ModEdit.app
 scripts/package-release.sh          build and zip the release app
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 Sources/
-  PL0Language/                     snapshots, tokens, lexer, CST, parser/recovery
+  PL0Language/                     snapshots, incremental lexer/parser, CST/recovery
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
     ModEditApplication.swift        AppKit application, delegate and main menu
@@ -511,8 +522,10 @@ Examples/squares.pl0                sample controlled-language program
 * **Status columns use UTF-16 offsets.** This matches AppKit and LSP position
   accounting, but a grapheme such as a composed emoji can occupy several columns.
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
-* **PL/0 parsing is not incremental yet.** Tokenization is incremental, but the
-  reference LL parser still consumes the complete updated token sequence.
+* **Parser reuse is conservative and region-based.** The reference LL parser
+  memoizes successful grammar regions; it does not yet incrementally repair an
+  individual production or reuse recovered subtrees. Invalidated ancestor paths
+  and the program root are rebuilt.
 * **Reference parser only.** LL/LR/Earley/CYK/RNGLR adapters and parse forests
   have not yet been connected to the parser-neutral workbench model. The
   reference engine is deliberately deterministic and does not represent
@@ -520,11 +533,12 @@ Examples/squares.pl0                sample controlled-language program
 
 ## Roadmap
 
-1. **Incremental reference parsing.** Add reusable declaration/statement
-   boundaries and compare every incremental result against a complete LL parse.
-2. **Parser comparison laboratory.** Connect the Grammar ecosystem's LL, LR,
+1. **Parser comparison laboratory.** Connect the Grammar ecosystem's LL, LR,
    Earley, Earley-table, CYK and RNGLR parsers with traces, recovery costs and
    full-versus-incremental differential tests.
+2. **Finer incremental parsing.** Add declaration-level reuse, dependency-aware
+   invalidation, recovered-region reuse experiments and randomized differential
+   testing of every incremental result against the complete reference parse.
 3. **PL/0 language service.** Add symbols/scopes, formatter, bytecode VM and a
    version-safe LSP server for diagnostics, completion and semantic tokens.
 4. **Rendering inside the editor.** Introduce a

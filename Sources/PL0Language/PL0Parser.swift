@@ -13,13 +13,21 @@ public struct ReferencePL0Parser: PL0ParserProtocol {
     public let descriptor = ParserDescriptor(
         id: "reference-ll",
         displayName: "Reference LL",
-        capabilities: [.deterministicTree, .errorRecovery, .expectedTokens])
+        capabilities: [.deterministicTree, .errorRecovery, .expectedTokens, .incremental])
 
     public init() {}
 
     public func parse(_ input: ParserInput) -> ParserOutput {
-        ReferenceParser(tokens: normalized(input.tokens),
-                        lexicalDiagnostics: input.lexicalDiagnostics).parseProgram()
+        parse(input, reusing: nil).output
+    }
+
+    func parse(_ input: ParserInput,
+               reusing cache: ReferenceParserCache?) -> ReferenceParserRun {
+        let parser = ReferenceParser(tokens: normalized(input.tokens),
+                                     lexicalDiagnostics: input.lexicalDiagnostics,
+                                     previousCache: cache)
+        let output = parser.parseProgram()
+        return ReferenceParserRun(output: output, cache: parser.resultCache)
     }
 
     private func normalized(_ tokens: [PL0Token]) -> [PL0Token] {
@@ -61,16 +69,34 @@ public struct PL0Frontend: Sendable {
     func parse(_ snapshot: SourceSnapshot, lexed: LexResult,
                lexingNanoseconds: UInt64,
                lexMetrics: IncrementalLexMetrics) -> ParseResult {
+        var cache: ReferenceParserCache?
+        return parse(snapshot, lexed: lexed,
+                     lexingNanoseconds: lexingNanoseconds,
+                     lexMetrics: lexMetrics,
+                     parserCache: &cache)
+    }
+
+    func parse(_ snapshot: SourceSnapshot, lexed: LexResult,
+               lexingNanoseconds: UInt64,
+               lexMetrics: IncrementalLexMetrics,
+               parserCache: inout ReferenceParserCache?) -> ParseResult {
         let clock = ContinuousClock()
         let parseStart = clock.now
-        let parser: any PL0ParserProtocol = switch engine {
-        case .referenceLL: ReferencePL0Parser()
+        let descriptor: ParserDescriptor
+        let parsed: ParserOutput
+        switch engine {
+        case .referenceLL:
+            let parser = ReferencePL0Parser()
+            let run = parser.parse(ParserInput(tokens: lexed.tokens,
+                                               lexicalDiagnostics: lexed.diagnostics),
+                                   reusing: parserCache)
+            parserCache = run.cache
+            descriptor = parser.descriptor
+            parsed = run.output
         }
-        let parsed = parser.parse(ParserInput(tokens: lexed.tokens,
-                                              lexicalDiagnostics: lexed.diagnostics))
         let parseDuration = parseStart.duration(to: clock.now)
         return ParseResult(
-            version: snapshot.version, parser: parser.descriptor,
+            version: snapshot.version, parser: descriptor,
             tokens: lexed.tokens, root: parsed.root,
             diagnostics: parsed.diagnostics, recoveryActions: parsed.recoveryActions,
             expectations: parsed.expectations,
@@ -80,7 +106,8 @@ public struct PL0Frontend: Sendable {
                 lexingNanoseconds: lexingNanoseconds,
                 parsingNanoseconds: Self.nanoseconds(parseDuration),
                 recoveryCount: parsed.recoveryActions.count,
-                incrementalLexing: lexMetrics))
+                incrementalLexing: lexMetrics,
+                incrementalParsing: parsed.reuseMetrics))
     }
 
     private static func nanoseconds(_ duration: Duration) -> UInt64 {
@@ -94,6 +121,7 @@ public struct PL0Frontend: Sendable {
 /// may cancel an awaiting UI task without racing the token cache itself.
 public actor PL0LanguageSession {
     private var tokenizer = PL0IncrementalTokenizer()
+    private var parserCache: ReferenceParserCache?
     private let frontend: PL0Frontend
 
     public init(engine: ParserEngine = .referenceLL) {
@@ -108,12 +136,19 @@ public actor PL0LanguageSession {
         let parts = duration.components
         let nanoseconds = UInt64(max(0, parts.seconds)) &* 1_000_000_000
             &+ UInt64(max(0, parts.attoseconds) / 1_000_000_000)
+        if !tokenized.metrics.incremental {
+            parserCache = nil
+        }
         return frontend.parse(snapshot, lexed: tokenized.lexed,
                               lexingNanoseconds: nanoseconds,
-                              lexMetrics: tokenized.metrics)
+                              lexMetrics: tokenized.metrics,
+                              parserCache: &parserCache)
     }
 
-    public func reset() { tokenizer.reset() }
+    public func reset() {
+        tokenizer.reset()
+        parserCache = nil
+    }
 }
 
 private final class ReferenceParser {
@@ -122,10 +157,18 @@ private final class ReferenceParser {
     private var diagnostics: [ParseDiagnostic]
     private var recoveries: [RecoveryAction] = []
     private var expectations: [ParseExpectation] = []
+    private let previousCache: ReferenceParserCache?
+    private var nextCache = ReferenceParserCache()
+    private var reusedNodeCount = 0
+    private var reusedTokenCount = 0
 
-    init(tokens: [PL0Token], lexicalDiagnostics: [ParseDiagnostic]) {
+    var resultCache: ReferenceParserCache { nextCache }
+
+    init(tokens: [PL0Token], lexicalDiagnostics: [ParseDiagnostic],
+         previousCache: ReferenceParserCache?) {
         self.tokens = tokens
         self.diagnostics = lexicalDiagnostics
+        self.previousCache = previousCache
     }
 
     private var current: PL0Token { tokens[min(index, tokens.count - 1)] }
@@ -139,12 +182,22 @@ private final class ReferenceParser {
             deleteCurrent("Unexpected token after program terminator")
         }
         let root = SyntaxNode(kind: "Program", range: range(from: start), children: [block])
+        let reuseMetrics = ParserReuseMetrics(
+            reusedNodeCount: reusedNodeCount,
+            reusedTokenCount: reusedTokenCount,
+            parsedNodeCount: max(0, root.nodeCount - reusedNodeCount),
+            incremental: previousCache?.isEmpty == false)
         return ParserOutput(root: root, diagnostics: diagnostics,
                             recoveryActions: recoveries,
-                            expectations: expectations)
+                            expectations: expectations,
+                            reuseMetrics: reuseMetrics)
     }
 
     private func parseBlock() -> SyntaxNode {
+        memoized(.block) { parseBlockBody() }
+    }
+
+    private func parseBlockBody() -> SyntaxNode {
         let start = current.range.location
         var children: [SyntaxNode] = []
         if match(.const) {
@@ -181,6 +234,10 @@ private final class ReferenceParser {
     }
 
     private func parseStatement() -> SyntaxNode {
+        memoized(.statement) { parseStatementBody() }
+    }
+
+    private func parseStatementBody() -> SyntaxNode {
         let start = current.range.location
         switch current.kind {
         case .identifier:
@@ -247,6 +304,10 @@ private final class ReferenceParser {
     }
 
     private func parseCondition() -> SyntaxNode {
+        memoized(.condition) { parseConditionBody() }
+    }
+
+    private func parseConditionBody() -> SyntaxNode {
         let start = current.range.location
         if match(.odd) {
             return SyntaxNode(kind: "OddCondition", range: range(from: start),
@@ -265,6 +326,10 @@ private final class ReferenceParser {
     }
 
     private func parseExpression() -> SyntaxNode {
+        memoized(.expression) { parseExpressionBody() }
+    }
+
+    private func parseExpressionBody() -> SyntaxNode {
         let start = current.range.location
         _ = match(.plus) || match(.minus)
         var children = [parseTerm()]
@@ -275,6 +340,10 @@ private final class ReferenceParser {
     }
 
     private func parseTerm() -> SyntaxNode {
+        memoized(.term) { parseTermBody() }
+    }
+
+    private func parseTermBody() -> SyntaxNode {
         let start = current.range.location
         var children = [parseFactor()]
         while current.kind == .star || current.kind == .slash {
@@ -284,6 +353,10 @@ private final class ReferenceParser {
     }
 
     private func parseFactor() -> SyntaxNode {
+        memoized(.factor) { parseFactorBody() }
+    }
+
+    private func parseFactorBody() -> SyntaxNode {
         let start = current.range.location
         switch current.kind {
         case .identifier:
@@ -315,6 +388,78 @@ private final class ReferenceParser {
             return SyntaxNode(kind: "MissingFactor",
                               range: SourceRange(location: offset, length: 0),
                               origin: .recovered)
+        }
+    }
+
+    /// Reuses a successful parse region only when its start token, every
+    /// consumed token and the following lookahead token retain their stable
+    /// identities. Recovered regions are never cached.
+    private func memoized(_ rule: ReferenceParserRule,
+                          _ parse: () -> SyntaxNode) -> SyntaxNode {
+        let startIndex = index
+        let startToken = current
+        let key = ReferenceParserCache.Key(rule: rule, startTokenID: startToken.id)
+
+        if let entry = previousCache?.entries[key],
+           cacheEntryMatches(entry, at: startIndex) {
+            let delta = startToken.range.location - entry.startLocation
+            let node = entry.node.relocated(by: delta)
+            index += entry.tokenIDs.count
+            reusedNodeCount += node.nodeCount
+            reusedTokenCount += entry.tokenIDs.count
+            carryCacheEntries(inside: entry, relocatingBy: delta)
+            return node
+        }
+
+        let diagnosticCount = diagnostics.count
+        let recoveryCount = recoveries.count
+        let expectationCount = expectations.count
+        let node = parse()
+        let consumedCount = index - startIndex
+        if consumedCount > 0,
+           diagnostics.count == diagnosticCount,
+           recoveries.count == recoveryCount,
+           expectations.count == expectationCount,
+           node.origin == .source {
+            let tokenIDs = tokens[startIndex..<index].map(\.id)
+            nextCache.entries[key] = ReferenceParserCache.Entry(
+                tokenIDs: tokenIDs,
+                nextTokenID: current.id,
+                startLocation: startToken.range.location,
+                node: node)
+        }
+        return node
+    }
+
+    private func cacheEntryMatches(_ entry: ReferenceParserCache.Entry,
+                                   at startIndex: Int) -> Bool {
+        let endIndex = startIndex + entry.tokenIDs.count
+        guard endIndex < tokens.count else { return false }
+        for (offset, tokenID) in entry.tokenIDs.enumerated()
+        where tokens[startIndex + offset].id != tokenID {
+            return false
+        }
+        return tokens[endIndex].id == entry.nextTokenID
+    }
+
+    /// An outer hit bypasses all recursive parser calls below it. Preserve the
+    /// descendant entries too, otherwise a following edit inside that subtree
+    /// would have only the coarse ancestor entry available for reuse.
+    private func carryCacheEntries(inside reusedEntry: ReferenceParserCache.Entry,
+                                   relocatingBy delta: Int) {
+        guard let previousCache else { return }
+        let regionTokenIDs = Set(reusedEntry.tokenIDs)
+        for (key, entry) in previousCache.entries
+        where regionTokenIDs.contains(key.startTokenID) {
+            let tokensAreInside = entry.tokenIDs.allSatisfy(regionTokenIDs.contains)
+            let lookaheadIsInside = regionTokenIDs.contains(entry.nextTokenID)
+                || entry.nextTokenID == reusedEntry.nextTokenID
+            guard tokensAreInside, lookaheadIsInside else { continue }
+            nextCache.entries[key] = ReferenceParserCache.Entry(
+                tokenIDs: entry.tokenIDs,
+                nextTokenID: entry.nextTokenID,
+                startLocation: entry.startLocation + delta,
+                node: entry.node.relocated(by: delta))
         }
     }
 

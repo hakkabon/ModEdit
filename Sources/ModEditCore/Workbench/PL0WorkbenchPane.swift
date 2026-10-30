@@ -127,11 +127,15 @@ struct PL0WorkbenchPane: View {
     }
 
     private func summary(_ result: ParseResult) -> String {
-        let metrics = result.metrics.incrementalLexing
-        let reuse = metrics.incremental
-            ? " · scan \(metrics.scannedUTF16Length) · reuse \(metrics.reusedPrefixTokenCount + metrics.reusedSuffixTokenCount)"
+        let lex = result.metrics.incrementalLexing
+        let parse = result.metrics.incrementalParsing
+        let lexReuse = lex.incremental
+            ? " · scan \(lex.scannedUTF16Length) · lex reuse \(lex.reusedPrefixTokenCount + lex.reusedSuffixTokenCount)"
             : " · full lex"
-        return "v\(result.version) · \(result.metrics.tokenCount) tokens\(reuse) · \(elapsed(result))"
+        let parseReuse = parse.incremental
+            ? " · parse reuse \(parse.reusedNodeCount)n/\(parse.reusedTokenCount)t"
+            : " · full parse"
+        return "v\(result.version) · \(result.metrics.tokenCount) tokens\(lexReuse)\(parseReuse) · \(elapsed(result))"
     }
 
     private func quoted(_ text: String) -> String {

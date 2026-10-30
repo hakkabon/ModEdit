@@ -45,18 +45,40 @@ public struct ParserInput: Sendable {
     }
 }
 
+public struct ParserReuseMetrics: Sendable, Equatable {
+    public let reusedNodeCount: Int
+    public let reusedTokenCount: Int
+    public let parsedNodeCount: Int
+    public let incremental: Bool
+
+    public init(reusedNodeCount: Int, reusedTokenCount: Int,
+                parsedNodeCount: Int, incremental: Bool) {
+        self.reusedNodeCount = reusedNodeCount
+        self.reusedTokenCount = reusedTokenCount
+        self.parsedNodeCount = parsedNodeCount
+        self.incremental = incremental
+    }
+
+    public static let fullParse = ParserReuseMetrics(
+        reusedNodeCount: 0, reusedTokenCount: 0,
+        parsedNodeCount: 0, incremental: false)
+}
+
 public struct ParserOutput: Sendable {
     public let root: SyntaxNode
     public let diagnostics: [ParseDiagnostic]
     public let recoveryActions: [RecoveryAction]
     public let expectations: [ParseExpectation]
+    public let reuseMetrics: ParserReuseMetrics
 
     public init(root: SyntaxNode, diagnostics: [ParseDiagnostic],
-                recoveryActions: [RecoveryAction], expectations: [ParseExpectation]) {
+                recoveryActions: [RecoveryAction], expectations: [ParseExpectation],
+                reuseMetrics: ParserReuseMetrics = .fullParse) {
         self.root = root
         self.diagnostics = diagnostics
         self.recoveryActions = recoveryActions
         self.expectations = expectations
+        self.reuseMetrics = reuseMetrics
     }
 }
 
