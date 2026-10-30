@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import PL0Language
 
 /// SwiftUI wrapper around an AppKit `NSTextView`.
 struct EditorTextView: NSViewRepresentable {
@@ -101,6 +102,8 @@ extension EditorTextView {
         private var fullPassTask: Task<Void, Never>?
         private var synchronizedGeneration: UInt64 = 0
         private var isSynchronizing = false
+        private var displayedVisualization: PL0EditorVisualization?
+        private var handledRevealID: UInt64 = 0
 
         init(model: EditorModel) {
             self.model = model
@@ -131,6 +134,7 @@ extension EditorTextView {
             textView.string = model.textSnapshot()
             synchronizedGeneration = generation
             isSynchronizing = false
+            clearParserVisualization()
             dirty = DirtyRange()
             // The whole text was replaced; every cached scanner state refers to
             // text that no longer exists.
@@ -147,6 +151,8 @@ extension EditorTextView {
 
         /// Called from `updateNSView`; starts a full pass when the format changed.
         func modelDidChange() {
+            refreshParserVisualization()
+            fulfillRevealRequest()
             guard textView != nil, fullPassFormatID != model.format.id else { return }
             fullPassFormatID = model.format.id
             highlightWholeDocument()
@@ -186,6 +192,7 @@ extension EditorTextView {
                 synchronizedGeneration = model.applyTextEdit(
                     editedRange: editedRange, delta: delta, replacement: replacement)
             }
+            clearParserVisualization()
             dirty.record(edited: editedRange, delta: delta)
             // A character change can invalidate the Markdown/HTML scanner state
             // for the edit point and everything after it.
@@ -232,6 +239,122 @@ extension EditorTextView {
             }
             return highlighter
         }
+
+        // MARK: Parser visualization
+
+        /// Parser annotations are temporary layout attributes. They never enter
+        /// text storage, so syntax highlighting, undo and file output remain
+        /// unchanged.
+        func refreshParserVisualization() {
+            let visualization = model.pl0Visualization
+            guard visualization != displayedVisualization else { return }
+            clearParserVisualization()
+            guard let visualization,
+                  visualization.version == model.textRevision,
+                  let textView,
+                  let layoutManager = textView.layoutManager else { return }
+            let length = textView.textStorage?.length ?? 0
+            for annotation in visualization.annotations {
+                guard let range = displayRange(for: annotation.range, length: length) else {
+                    continue
+                }
+                var attributes = attributes(for: annotation)
+                attributes[Self.parserMarker] = true
+                layoutManager.addTemporaryAttributes(attributes, forCharacterRange: range)
+            }
+            displayedVisualization = visualization
+            textView.needsDisplay = true
+        }
+
+        func fulfillRevealRequest() {
+            guard let request = model.revealRequest,
+                  request.id != handledRevealID,
+                  let textView else { return }
+            handledRevealID = request.id
+            let length = textView.textStorage?.length ?? 0
+            let location = min(max(request.range.location, 0), length)
+            let end = min(max(request.range.end, location), length)
+            let selection = NSRange(location: location, length: end - location)
+            textView.setSelectedRange(selection)
+            textView.scrollRangeToVisible(selection)
+            textView.window?.makeFirstResponder(textView)
+        }
+
+        private func clearParserVisualization() {
+            guard let textView, let layoutManager = textView.layoutManager else {
+                displayedVisualization = nil
+                return
+            }
+            let length = textView.textStorage?.length ?? 0
+            var cursor = 0
+            while cursor < length {
+                var effectiveRange = NSRange(location: cursor, length: 1)
+                let marker = layoutManager.temporaryAttribute(
+                    Self.parserMarker, atCharacterIndex: cursor,
+                    effectiveRange: &effectiveRange)
+                let next = max(cursor + 1, NSMaxRange(effectiveRange))
+                if marker != nil {
+                    for key in Self.parserAttributeKeys {
+                        layoutManager.removeTemporaryAttribute(
+                            key, forCharacterRange: effectiveRange)
+                    }
+                }
+                cursor = next
+            }
+            displayedVisualization = nil
+            textView.needsDisplay = true
+        }
+
+        private func displayRange(for range: SourceRange, length: Int) -> NSRange? {
+            guard length > 0 else { return nil }
+            let location = min(max(range.location, 0), length)
+            let end = min(max(range.end, location), length)
+            if end > location {
+                return NSRange(location: location, length: end - location)
+            }
+            // Missing tokens have zero-width source ranges. Anchor their visual
+            // marker to the following character, or the preceding one at EOF.
+            let anchor = location < length ? location : length - 1
+            return NSRange(location: anchor, length: 1)
+        }
+
+        private func attributes(for annotation: PL0EditorVisualization.Annotation)
+            -> [NSAttributedString.Key: Any] {
+            let tooltip = annotation.message
+            switch annotation.kind {
+            case .error:
+                return [.underlineStyle: Self.problemUnderline,
+                        .underlineColor: NSColor.systemRed,
+                        .toolTip: tooltip]
+            case .warning:
+                return [.underlineStyle: Self.problemUnderline,
+                        .underlineColor: NSColor.systemOrange,
+                        .toolTip: tooltip]
+            case .information:
+                return [.underlineStyle: NSUnderlineStyle.single.rawValue,
+                        .underlineColor: NSColor.systemBlue,
+                        .toolTip: tooltip]
+            case .missingToken:
+                return [.underlineStyle: NSUnderlineStyle.thick.rawValue,
+                        .underlineColor: NSColor.systemOrange,
+                        .backgroundColor: NSColor.systemOrange.withAlphaComponent(0.18),
+                        .toolTip: tooltip]
+            case .skippedToken:
+                return [.strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                        .strikethroughColor: NSColor.systemRed,
+                        .backgroundColor: NSColor.systemRed.withAlphaComponent(0.14),
+                        .toolTip: tooltip]
+            }
+        }
+
+        private static let problemUnderline = NSUnderlineStyle.thick
+            .union(.patternDot).rawValue
+        private static let parserMarker = NSAttributedString.Key(
+            "io.github.hakkabon.ModEdit.parser-annotation")
+        private static let parserAttributeKeys: [NSAttributedString.Key] = [
+            .underlineStyle, .underlineColor, .strikethroughStyle,
+            .strikethroughColor, .backgroundColor, .toolTip, parserMarker,
+        ]
 
         /// Highlights the document in line-aligned chunks, yielding between
         /// them so the UI stays responsive.

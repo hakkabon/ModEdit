@@ -8,6 +8,8 @@ struct PL0WorkbenchPane: View {
     let revision: UInt64
     let edit: SourceEdit?
     let source: () -> String
+    let publish: (ParseResult) -> Void
+    let reveal: (SourceRange) -> Void
 
     @State private var result: ParseResult?
     @State private var selectedView = WorkbenchView.diagnostics
@@ -65,19 +67,23 @@ struct PL0WorkbenchPane: View {
                             .foregroundStyle(.green)
                     }
                     ForEach(result.diagnostics) { diagnostic in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Label(diagnostic.message,
-                                  systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.red)
-                            Text("UTF-16 range \(diagnostic.range.location)..<\(diagnostic.range.end)")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                            if !diagnostic.expected.isEmpty {
-                                Text("expected: \(diagnostic.expected.map(\.displayName).joined(separator: ", "))")
+                        Button { reveal(diagnostic.range) } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Label(diagnostic.message,
+                                      systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.red)
+                                Text("UTF-16 range \(diagnostic.range.location)..<\(diagnostic.range.end)")
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
+                                if !diagnostic.expected.isEmpty {
+                                    Text("expected: \(diagnostic.expected.map(\.displayName).joined(separator: ", "))")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(10)
@@ -87,8 +93,12 @@ struct PL0WorkbenchPane: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
                     ForEach(result.tokens) { token in
-                        Text("\(token.location.line):\(token.location.column)  \(token.kind.rawValue)  \(quoted(token.lexeme))")
-                            .font(.caption.monospaced())
+                        Button { reveal(token.range) } label: {
+                            Text("\(token.location.line):\(token.location.column)  \(token.kind.rawValue)  \(quoted(token.lexeme))")
+                                .font(.caption.monospaced())
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(10)
@@ -105,18 +115,22 @@ struct PL0WorkbenchPane: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                         ForEach(result.recovery.events) { event in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("\(event.sequence + 1). \(event.action.summary)")
-                                    .font(.caption.monospaced())
-                                if !event.expected.isEmpty {
-                                    Text("expected: \(event.expected.map(\.displayName).joined(separator: ", "))")
+                            Button { reveal(event.action.range) } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("\(event.sequence + 1). \(event.action.summary)")
                                         .font(.caption.monospaced())
+                                    if !event.expected.isEmpty {
+                                        Text("expected: \(event.expected.map(\.displayName).joined(separator: ", "))")
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text("cost \(event.cost) · \(event.diagnosticIDs.count) linked problem(s)")
+                                        .font(.caption.monospacedDigit())
                                         .foregroundStyle(.secondary)
                                 }
-                                Text("cost \(event.cost) · \(event.diagnosticIDs.count) linked problem(s)")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -141,6 +155,7 @@ struct PL0WorkbenchPane: View {
         let parsed = await session.parse(snapshot)
         guard !Task.isCancelled, parsed.version == revision else { return }
         result = parsed
+        publish(parsed)
     }
 
     private func elapsed(_ result: ParseResult) -> String {

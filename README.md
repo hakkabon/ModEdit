@@ -69,7 +69,8 @@ the right shows it as headings, emphasis, symbols and mathematics.
 * Experimental **PL/0 language workbench**: native `.pl0` documents, incremental
   UTF-16 tokenization and reference LL parsing with identity reuse, robust error
   recovery, a parser-neutral CST with source/missing/skipped terminals,
-  Problems/Recovery/Tokens/CST views and reuse metrics.
+  Problems/Recovery/Tokens/CST views, reuse metrics and source-editor
+  visualization of diagnostics and repairs.
 
 ## Requirements
 
@@ -89,7 +90,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (168 tests)
+The current source is verified with `swift build` and `swift test` (172 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -307,6 +308,15 @@ nesting followed by the recovered terminal stream. The header reports snapshot
 version, token count, scanned UTF-16 length, lexer reuse, parser node/token reuse
 and lexer+parser time.
 
+The source editor projects the current result directly onto the text: errors and
+warnings are underlined, missing tokens receive an orange insertion marker, and
+skipped tokens are tinted and struck through. These are TextKit temporary
+attributes, not document attributes, so they never affect undo, syntax colours
+or saved bytes. Clicking a Problem, Recovery event or Token reveals and selects
+its UTF-16 range in the editor. The status bar reports problem and repair counts.
+Every visualization is tagged with its document version; edits remove the old
+markers immediately and late parser results are rejected.
+
 For an edit, tokenization keeps tokens strictly before a safe token boundary,
 then scans from that boundary until a newly produced token aligns with the
 unchanged old suffix. Remaining tokens retain their identities while their
@@ -495,6 +505,9 @@ Examples/squares.pl0                sample controlled-language program
   executables can consume the same engine later.
 * **Recovery is data.** Insertions and deletions are explicit result values,
   making recovery observable, testable and suitable for editor code actions.
+* **Parser visualization is ephemeral.** Diagnostics and recovery markers use
+  temporary layout attributes and a revision-bound presentation model. They do
+  not enter text storage, undo registration or persistence.
 
 ## Known limitations
 

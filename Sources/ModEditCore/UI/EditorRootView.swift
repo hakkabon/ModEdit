@@ -21,7 +21,9 @@ struct EditorRootView: View {
                 if model.showWorkbench, model.format.id == "pl0" {
                     PL0WorkbenchPane(revision: model.textRevision,
                                      edit: model.lastSourceEdit,
-                                     source: { model.textSnapshot() })
+                                     source: { model.textSnapshot() },
+                                     publish: model.publishPL0Visualization,
+                                     reveal: model.revealSourceRange)
                 }
             }
             EditorStatusBar(model: model, formatID: formatID)
@@ -62,6 +64,16 @@ private struct EditorStatusBar: View {
 
             Text("Tab Size: \(model.tabSize)")
                 .foregroundStyle(.secondary)
+
+            if let visualization = model.pl0Visualization,
+               visualization.version == model.textRevision {
+                Text("\(visualization.problemCount) problems")
+                    .foregroundStyle(visualization.problemCount == 0
+                                     ? Color.secondary : Color.red)
+                Text("\(visualization.recoveryCount) repairs")
+                    .foregroundStyle(visualization.recoveryCount == 0
+                                     ? Color.secondary : Color.orange)
+            }
 
             Spacer(minLength: 20)
 
