@@ -38,14 +38,17 @@ public struct ParseMetrics: Sendable, Equatable {
     public let lexingNanoseconds: UInt64
     public let parsingNanoseconds: UInt64
     public let recoveryCount: Int
+    public let incrementalLexing: IncrementalLexMetrics
 
     public init(sourceLength: Int, tokenCount: Int, lexingNanoseconds: UInt64,
-                parsingNanoseconds: UInt64, recoveryCount: Int) {
+                parsingNanoseconds: UInt64, recoveryCount: Int,
+                incrementalLexing: IncrementalLexMetrics) {
         self.sourceLength = sourceLength
         self.tokenCount = tokenCount
         self.lexingNanoseconds = lexingNanoseconds
         self.parsingNanoseconds = parsingNanoseconds
         self.recoveryCount = recoveryCount
+        self.incrementalLexing = incrementalLexing
     }
 }
 

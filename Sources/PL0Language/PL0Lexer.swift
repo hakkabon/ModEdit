@@ -3,12 +3,24 @@ import Foundation
 public struct LexResult: Sendable {
     public let tokens: [PL0Token]
     public let diagnostics: [ParseDiagnostic]
+
+    public init(tokens: [PL0Token], diagnostics: [ParseDiagnostic]) {
+        self.tokens = tokens
+        self.diagnostics = diagnostics
+    }
+}
+
+struct ScannerOutput {
+    var tokens: [PL0Token]
+    var diagnostics: [ParseDiagnostic]
+    var scannedEnd: Int
+    var stoppedForConvergence: Bool
 }
 
 /// Reference PL/0 scanner using UTF-16 offsets throughout, so ranges can be
 /// passed directly to TextKit and LSP without lossy conversions.
 public struct PL0Lexer: Sendable {
-    private static let keywords: [String: PL0TokenKind] = [
+    static let keywords: [String: PL0TokenKind] = [
         "const": .const, "var": .varKeyword, "procedure": .procedure,
         "call": .call, "begin": .begin, "end": .end, "if": .ifKeyword,
         "then": .then, "while": .whileKeyword, "do": .doKeyword, "odd": .odd,
@@ -17,12 +29,25 @@ public struct PL0Lexer: Sendable {
     public init() {}
 
     public func tokenize(_ snapshot: SourceSnapshot) -> LexResult {
-        let text = snapshot.text as NSString
+        let output = scan(snapshot.text as NSString,
+                          from: SourceLocation(offset: 0, line: 1, column: 1),
+                          version: snapshot.version)
+        return LexResult(tokens: output.tokens, diagnostics: output.diagnostics)
+    }
+
+    /// Scans from a known-normal token boundary. The convergence predicate is
+    /// called before a token is appended, allowing the caller to reuse the old
+    /// suffix including the matching token.
+    func scan(_ text: NSString,
+              from initial: SourceLocation,
+              version: UInt64,
+              shouldConverge: ((PL0Token) -> Bool)? = nil) -> ScannerOutput {
         var tokens: [PL0Token] = []
         var diagnostics: [ParseDiagnostic] = []
-        var offset = 0
-        var line = 1
-        var column = 1
+        var offset = initial.offset
+        var line = initial.line
+        var column = initial.column
+        var ordinal = 0
 
         func isLetter(_ value: unichar) -> Bool {
             (65...90).contains(value) || (97...122).contains(value) || value == 95
@@ -34,7 +59,9 @@ public struct PL0Lexer: Sendable {
         func makeToken(_ kind: PL0TokenKind, from start: Int,
                        line: Int, column: Int) -> PL0Token {
             let range = NSRange(location: start, length: offset - start)
-            return PL0Token(kind: kind, lexeme: text.substring(with: range),
+            defer { ordinal += 1 }
+            return PL0Token(id: "v\(version):\(start):\(ordinal)", kind: kind,
+                            lexeme: text.substring(with: range),
                             range: SourceRange(location: range.location, length: range.length),
                             location: SourceLocation(offset: start, line: line, column: column))
         }
@@ -54,6 +81,21 @@ public struct PL0Lexer: Sendable {
                 column += 1
             }
         }
+        func emit(_ token: PL0Token) -> Bool {
+            if shouldConverge?(token) == true { return true }
+            tokens.append(token)
+            if token.kind == .invalid {
+                diagnostics.append(ParseDiagnostic(
+                    severity: .error, message: "Unexpected character '\(token.lexeme)'",
+                    range: token.range))
+            }
+            return false
+        }
+        func stopped(at token: PL0Token) -> ScannerOutput {
+            ScannerOutput(tokens: tokens, diagnostics: diagnostics,
+                          scannedEnd: token.range.location,
+                          stoppedForConvergence: true)
+        }
 
         while offset < text.length {
             let character = text.character(at: offset)
@@ -72,8 +114,9 @@ public struct PL0Lexer: Sendable {
                     advance()
                 }
                 let spelling = text.substring(with: NSRange(location: start, length: offset - start))
-                tokens.append(makeToken(Self.keywords[spelling.lowercased()] ?? .identifier,
-                                        from: start, line: startLine, column: startColumn))
+                let token = makeToken(Self.keywords[spelling.lowercased()] ?? .identifier,
+                                      from: start, line: startLine, column: startColumn)
+                if emit(token) { return stopped(at: token) }
                 continue
             }
             if isASCIIDigit(character) {
@@ -82,8 +125,9 @@ public struct PL0Lexer: Sendable {
                     guard isASCIIDigit(text.character(at: offset)) else { break }
                     advance()
                 }
-                tokens.append(makeToken(.number, from: start,
-                                        line: startLine, column: startColumn))
+                let token = makeToken(.number, from: start,
+                                      line: startLine, column: startColumn)
+                if emit(token) { return stopped(at: token) }
                 continue
             }
 
@@ -136,17 +180,14 @@ public struct PL0Lexer: Sendable {
             }
             advance()
             let token = makeToken(kind, from: start, line: startLine, column: startColumn)
-            tokens.append(token)
-            if kind == .invalid {
-                diagnostics.append(ParseDiagnostic(
-                    severity: .error, message: "Unexpected character '\(token.lexeme)'",
-                    range: token.range))
-            }
+            if emit(token) { return stopped(at: token) }
         }
 
-        tokens.append(PL0Token(kind: .endOfFile, lexeme: "",
+        let eof = PL0Token(id: "v\(version):\(offset):eof", kind: .endOfFile, lexeme: "",
             range: SourceRange(location: offset, length: 0),
-            location: SourceLocation(offset: offset, line: line, column: column)))
-        return LexResult(tokens: tokens, diagnostics: diagnostics)
+            location: SourceLocation(offset: offset, line: line, column: column))
+        if emit(eof) { return stopped(at: eof) }
+        return ScannerOutput(tokens: tokens, diagnostics: diagnostics,
+                             scannedEnd: offset, stoppedForConvergence: false)
     }
 }

@@ -16,10 +16,15 @@ public struct SourceSnapshot: Sendable, Equatable {
 
 /// One replacement expressed in UTF-16 offsets, matching TextKit and LSP.
 public struct SourceEdit: Sendable, Equatable {
+    /// Version to which this edit applies. `nil` is useful for isolated tests;
+    /// live sessions set it so skipped/coalesced UI revisions safely fall back.
+    public let baseVersion: UInt64?
     public let replacedRange: SourceRange
     public let replacementLength: Int
 
-    public init(replacedRange: SourceRange, replacementLength: Int) {
+    public init(baseVersion: UInt64? = nil,
+                replacedRange: SourceRange, replacementLength: Int) {
+        self.baseVersion = baseVersion
         self.replacedRange = replacedRange
         self.replacementLength = replacementLength
     }

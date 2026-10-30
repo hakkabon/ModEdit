@@ -6,10 +6,12 @@ import SwiftUI
 @MainActor
 struct PL0WorkbenchPane: View {
     let revision: UInt64
+    let edit: SourceEdit?
     let source: () -> String
 
     @State private var result: ParseResult?
     @State private var selectedView = WorkbenchView.diagnostics
+    @State private var session = PL0LanguageSession()
 
     private enum WorkbenchView: String, CaseIterable, Identifiable {
         case diagnostics = "Problems"
@@ -24,7 +26,7 @@ struct PL0WorkbenchPane: View {
                 Text("PL/0 · Reference LL").font(.headline)
                 Spacer()
                 if let result {
-                    Text("v\(result.version) · \(result.metrics.tokenCount) tokens · \(elapsed(result))")
+                    Text(summary(result))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -107,10 +109,8 @@ struct PL0WorkbenchPane: View {
     private func refresh() async {
         do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
         guard !Task.isCancelled else { return }
-        let snapshot = SourceSnapshot(version: revision, text: source())
-        let parsed = await Task.detached(priority: .userInitiated) {
-            PL0Frontend().parse(snapshot)
-        }.value
+        let snapshot = SourceSnapshot(version: revision, text: source(), edit: edit)
+        let parsed = await session.parse(snapshot)
         guard !Task.isCancelled, parsed.version == revision else { return }
         result = parsed
     }
@@ -118,6 +118,14 @@ struct PL0WorkbenchPane: View {
     private func elapsed(_ result: ParseResult) -> String {
         let total = result.metrics.lexingNanoseconds + result.metrics.parsingNanoseconds
         return String(format: "%.3f ms", Double(total) / 1_000_000)
+    }
+
+    private func summary(_ result: ParseResult) -> String {
+        let metrics = result.metrics.incrementalLexing
+        let reuse = metrics.incremental
+            ? " · scan \(metrics.scannedUTF16Length) · reuse \(metrics.reusedPrefixTokenCount + metrics.reusedSuffixTokenCount)"
+            : " · full lex"
+        return "v\(result.version) · \(result.metrics.tokenCount) tokens\(reuse) · \(elapsed(result))"
     }
 
     private func quoted(_ text: String) -> String {

@@ -16,6 +16,19 @@ struct EditorIntegrationTests {
         #expect(harness.model.textRevision == harness.document.textGeneration)
     }
 
+    @Test func textEditPublishesVersionedLanguageServiceEdit() {
+        let harness = makeHarness(text: "var x;")
+        let baseVersion = harness.model.textRevision
+
+        harness.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 4, length: 1), with: "name")
+
+        #expect(harness.model.lastSourceEdit?.baseVersion == baseVersion)
+        #expect(harness.model.lastSourceEdit?.replacedRange.location == 4)
+        #expect(harness.model.lastSourceEdit?.replacedRange.length == 1)
+        #expect(harness.model.lastSourceEdit?.replacementLength == 4)
+    }
+
     @Test func utf16ReplacementHandlesEmojiBoundaries() throws {
         let harness = makeHarness(text: "a👩🏽‍💻z")
         let range = (harness.textView.string as NSString).range(of: "👩🏽‍💻")

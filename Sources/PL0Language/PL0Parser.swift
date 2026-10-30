@@ -19,6 +19,20 @@ public struct PL0Frontend: Sendable {
         let lexStart = clock.now
         let lexed = PL0Lexer().tokenize(snapshot)
         let lexDuration = lexStart.duration(to: clock.now)
+        let lexMetrics = IncrementalLexMetrics(
+            scannedUTF16Length: snapshot.text.utf16.count,
+            generatedTokenCount: lexed.tokens.count,
+            reusedPrefixTokenCount: 0, reusedSuffixTokenCount: 0,
+            converged: false, incremental: false)
+        return parse(snapshot, lexed: lexed,
+                     lexingNanoseconds: Self.nanoseconds(lexDuration),
+                     lexMetrics: lexMetrics)
+    }
+
+    func parse(_ snapshot: SourceSnapshot, lexed: LexResult,
+               lexingNanoseconds: UInt64,
+               lexMetrics: IncrementalLexMetrics) -> ParseResult {
+        let clock = ContinuousClock()
         let parseStart = clock.now
         let parsed = ReferenceParser(tokens: lexed.tokens,
                                      lexicalDiagnostics: lexed.diagnostics).parseProgram()
@@ -29,9 +43,10 @@ public struct PL0Frontend: Sendable {
             metrics: ParseMetrics(
                 sourceLength: snapshot.text.utf16.count,
                 tokenCount: max(0, lexed.tokens.count - 1),
-                lexingNanoseconds: Self.nanoseconds(lexDuration),
+                lexingNanoseconds: lexingNanoseconds,
                 parsingNanoseconds: Self.nanoseconds(parseDuration),
-                recoveryCount: parsed.recoveries.count))
+                recoveryCount: parsed.recoveries.count,
+                incrementalLexing: lexMetrics))
     }
 
     private static func nanoseconds(_ duration: Duration) -> UInt64 {
@@ -39,6 +54,32 @@ public struct PL0Frontend: Sendable {
         return UInt64(max(0, parts.seconds)) &* 1_000_000_000
             &+ UInt64(max(0, parts.attoseconds) / 1_000_000_000)
     }
+}
+
+/// Serializes incremental tokenizer state for one open document. The editor
+/// may cancel an awaiting UI task without racing the token cache itself.
+public actor PL0LanguageSession {
+    private var tokenizer = PL0IncrementalTokenizer()
+    private let frontend: PL0Frontend
+
+    public init(engine: ParserEngine = .referenceLL) {
+        frontend = PL0Frontend(engine: engine)
+    }
+
+    public func parse(_ snapshot: SourceSnapshot) -> ParseResult {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let tokenized = tokenizer.tokenize(snapshot)
+        let duration = start.duration(to: clock.now)
+        let parts = duration.components
+        let nanoseconds = UInt64(max(0, parts.seconds)) &* 1_000_000_000
+            &+ UInt64(max(0, parts.attoseconds) / 1_000_000_000)
+        return frontend.parse(snapshot, lexed: tokenized.lexed,
+                              lexingNanoseconds: nanoseconds,
+                              lexMetrics: tokenized.metrics)
+    }
+
+    public func reset() { tokenizer.reset() }
 }
 
 private final class ReferenceParser {

@@ -39,9 +39,9 @@ public struct PL0Token: Sendable, Equatable, Identifiable {
     public let range: SourceRange
     public let location: SourceLocation
 
-    public init(kind: PL0TokenKind, lexeme: String, range: SourceRange,
+    public init(id: String? = nil, kind: PL0TokenKind, lexeme: String, range: SourceRange,
                 location: SourceLocation) {
-        self.id = "\(range.location):\(kind.rawValue):\(lexeme)"
+        self.id = id ?? "\(range.location):\(kind.rawValue):\(lexeme)"
         self.kind = kind
         self.lexeme = lexeme
         self.range = range

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import PL0Language
 
 /// Main-actor view model for one editor window.
 ///
@@ -19,6 +20,9 @@ final class EditorModel: ObservableObject {
     @Published var showPreview = true
     /// Whether the experimental parser inspector is visible for PL/0.
     @Published var showWorkbench = true
+    /// The last replacement, used by incremental language services. It is not
+    /// published separately because every edit also publishes `textRevision`.
+    private(set) var lastSourceEdit: SourceEdit?
 
     let tabSize = 4
     /// The format catalogue shown in the status-bar picker.
@@ -40,6 +44,7 @@ final class EditorModel: ObservableObject {
         self.format = document.currentFormat
         self.isDocumentDirty = document.isDirty
         self.lineCount = document.numberOfLines
+        self.lastSourceEdit = nil
         document.setSaveObserver { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refreshDocumentState()
@@ -73,7 +78,12 @@ final class EditorModel: ObservableObject {
     func applyTextEdit(editedRange: NSRange, delta: Int, replacement: String) -> UInt64 {
         let oldLength = editedRange.length - delta
         let oldRange = NSRange(location: editedRange.location, length: oldLength)
+        let baseVersion = document.textGeneration
         let generation = document.replaceText(in: oldRange, with: replacement)
+        lastSourceEdit = SourceEdit(
+            baseVersion: baseVersion,
+            replacedRange: SourceRange(location: oldRange.location, length: oldRange.length),
+            replacementLength: (replacement as NSString).length)
         textRevision = generation
         lineCount = document.numberOfLines
         isDocumentDirty = document.isDirty
@@ -94,6 +104,7 @@ final class EditorModel: ObservableObject {
     /// Refreshes UI state after a document replacement that did not originate
     /// in the text view (for example Revert to Saved).
     func refreshAfterExternalChange() {
+        lastSourceEdit = nil
         format = document.currentFormat
         textRevision = document.textGeneration
         lineCount = document.numberOfLines

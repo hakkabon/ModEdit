@@ -20,6 +20,7 @@ struct EditorRootView: View {
                 }
                 if model.showWorkbench, model.format.id == "pl0" {
                     PL0WorkbenchPane(revision: model.textRevision,
+                                     edit: model.lastSourceEdit,
                                      source: { model.textSnapshot() })
                 }
             }

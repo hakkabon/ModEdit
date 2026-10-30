@@ -65,9 +65,9 @@ the right shows it as headings, emphasis, symbols and mathematics.
 * Light/dark mode aware: `EditorTheme` has explicit light and dark palettes for
   text, syntax, gutter and current-line colours; preview pages use
   `color-scheme` so they follow the system appearance too.
-* Experimental **PL/0 language workbench**: native `.pl0` documents, syntax
-  colouring, a versioned UTF-16 token stream, recoverable reference LL parser,
-  parser-neutral CST, Problems/recovery/Tokens/CST views and parse timings.
+* Experimental **PL/0 language workbench**: native `.pl0` documents, incremental
+  UTF-16 tokenization with identity reuse, a recoverable reference LL parser,
+  parser-neutral CST, Problems/recovery/Tokens/CST views and parse metrics.
 
 ## Requirements
 
@@ -87,7 +87,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (141 tests)
+The current source is verified with `swift build` and `swift test` (149 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -149,7 +149,7 @@ consistent with the current text.
 PL0Language (platform-neutral library)
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ SourceSnapshot/Edit (versioned UTF-16 ranges)                            │
-│ PL0Lexer → PL0Token[] + lexical diagnostics                             │
+│ Incremental PL0Lexer → stable PL0Token[] + lexical diagnostics/metrics  │
 │ Reference LL parser → parser-neutral CST + recovery trace + metrics      │
 └──────────────────────────────────────────────────────────────────────────┘
                 │
@@ -276,8 +276,8 @@ The first implementation is a deliberately small vertical slice:
   AppKit or know about ModEdit.
 * `SourceSnapshot` carries a document version, text and optional `SourceEdit`.
   Public ranges use UTF-16, matching TextKit and LSP.
-* `PL0Lexer` recognizes classic PL/0 plus `//` and `/* ... */` comments. Tokens
-  retain spelling, range and one-based source location.
+* `PL0Lexer` recognizes classic PL/0 plus `//` and `/* ... */` comments. The
+  stateful `PL0IncrementalTokenizer` preserves identities for reusable tokens.
 * `PL0Frontend` currently selects one **Reference LL** recursive-descent parser.
 * Every inserted or deleted recovery token is returned as a `RecoveryAction`;
   recovered CST nodes retain their origin.
@@ -286,11 +286,21 @@ The first implementation is a deliberately small vertical slice:
 
 The Problems tab shows diagnostics and recovery decisions; Tokens shows lexer
 locations and classifications; CST shows the normalized concrete syntax tree.
-The header reports snapshot version, token count and lexer+parser time.
+The header reports snapshot version, token count, scanned UTF-16 length, reused
+token count and lexer+parser time.
 
-This milestone intentionally performs a full lex and parse. The versioned
-snapshot/edit contract and parser-neutral results are the foundation for true
-incremental token convergence and alternative parser engines.
+For an edit, tokenization keeps tokens strictly before a safe token boundary,
+then scans from that boundary until a newly produced token aligns with the
+unchanged old suffix. Remaining tokens retain their identities while their
+ranges and line/column locations are relocated. Edits carry the version they
+apply to; if UI debouncing skips an intermediate revision, the session performs
+a safe full scan. Tests compare every result in multi-edit sequences with a
+fresh full tokenization, including token-boundary merging, newline relocation,
+invalid characters and unterminated block comments.
+
+The reference parser still reparses the complete token sequence. Its
+parser-neutral results are the next reuse boundary for incremental LL/LR/Earley
+experiments.
 
 ```ebnf
 program     = block "." ;
@@ -487,16 +497,15 @@ Examples/squares.pl0                sample controlled-language program
 * **Status columns use UTF-16 offsets.** This matches AppKit and LSP position
   accounting, but a grapheme such as a composed emoji can occupy several columns.
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
-* **PL/0 parsing is not incremental yet.** It is debounced and off the main
-  actor, but currently lexes and parses the complete snapshot after an edit.
+* **PL/0 parsing is not incremental yet.** Tokenization is incremental, but the
+  reference LL parser still consumes the complete updated token sequence.
 * **Reference parser only.** LL/LR/Earley/CYK/RNGLR adapters and parse forests
   have not yet been connected to the parser-neutral workbench model.
 
 ## Roadmap
 
-1. **Incremental PL/0 tokenization.** Restart at a lexical checkpoint before an
-   edit, scan until state and token suffix converge, preserve token identities,
-   and expose reuse/invalidation metrics.
+1. **Incremental reference parsing.** Add reusable declaration/statement
+   boundaries and compare every incremental result against a complete LL parse.
 2. **Parser comparison laboratory.** Connect the Grammar ecosystem's LL, LR,
    Earley, Earley-table, CYK and RNGLR parsers with traces, recovery costs and
    full-versus-incremental differential tests.
