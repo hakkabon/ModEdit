@@ -15,6 +15,7 @@ struct PL0WorkbenchPane: View {
 
     private enum WorkbenchView: String, CaseIterable, Identifiable {
         case diagnostics = "Problems"
+        case recovery = "Recovery"
         case tokens = "Tokens"
         case syntaxTree = "CST"
         var id: Self { self }
@@ -78,14 +79,6 @@ struct PL0WorkbenchPane: View {
                             }
                         }
                     }
-                    if !result.recoveryActions.isEmpty {
-                        Divider()
-                        Text("Recovery trace").font(.headline)
-                        ForEach(Array(result.recoveryActions.enumerated()), id: \.offset) {
-                            _, action in
-                            Text(action.summary).font(.caption.monospaced())
-                        }
-                    }
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -101,9 +94,38 @@ struct PL0WorkbenchPane: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+        case .recovery:
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if result.recovery.isClean {
+                        Label("No parser recovery", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("Cost \(result.recovery.totalCost) · \(result.recovery.insertionCount) inserted · \(result.recovery.deletionCount) skipped")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        ForEach(result.recovery.events) { event in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("\(event.sequence + 1). \(event.action.summary)")
+                                    .font(.caption.monospaced())
+                                if !event.expected.isEmpty {
+                                    Text("expected: \(event.expected.map(\.displayName).joined(separator: ", "))")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("cost \(event.cost) · \(event.diagnosticIDs.count) linked problem(s)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         case .syntaxTree:
             ScrollView([.horizontal, .vertical]) {
-                Text(result.root.outline())
+                Text(result.syntaxTree.outline())
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
                     .padding(10)

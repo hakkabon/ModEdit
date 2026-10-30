@@ -134,6 +134,7 @@ struct ParserReuseTests {
     }
 
     private func expectEquivalent(_ incremental: ParseResult, _ full: ParseResult) {
+        #expect(incremental.syntaxTree == full.syntaxTree)
         #expect(incremental.root.outline() == full.root.outline())
         #expect(incremental.diagnostics == full.diagnostics)
         #expect(incremental.recoveryActions == full.recoveryActions)

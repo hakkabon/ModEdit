@@ -89,24 +89,25 @@ public struct ParseResult: Sendable, Equatable {
     public let version: UInt64
     public let parser: ParserDescriptor
     public let tokens: [PL0Token]
-    public let root: SyntaxNode
+    public let syntaxTree: ConcreteSyntaxTree
     public let diagnostics: [ParseDiagnostic]
-    public let recoveryActions: [RecoveryAction]
-    public let expectations: [ParseExpectation]
+    public let recovery: RecoveryModel
     public let metrics: ParseMetrics
 
+    public var root: SyntaxNode { syntaxTree.root }
+    public var recoveryActions: [RecoveryAction] { recovery.actions }
+    public var expectations: [ParseExpectation] { recovery.expectations }
+
     public init(version: UInt64, parser: ParserDescriptor,
-                tokens: [PL0Token], root: SyntaxNode,
-                diagnostics: [ParseDiagnostic], recoveryActions: [RecoveryAction],
-                expectations: [ParseExpectation],
+                tokens: [PL0Token], syntaxTree: ConcreteSyntaxTree,
+                diagnostics: [ParseDiagnostic], recovery: RecoveryModel,
                 metrics: ParseMetrics) {
         self.version = version
         self.parser = parser
         self.tokens = tokens
-        self.root = root
+        self.syntaxTree = syntaxTree
         self.diagnostics = diagnostics
-        self.recoveryActions = recoveryActions
-        self.expectations = expectations
+        self.recovery = recovery
         self.metrics = metrics
     }
 }

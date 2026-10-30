@@ -71,7 +71,9 @@ struct ReferenceParserTests {
         let frontend = PL0Frontend().parse(snapshot)
 
         #expect(direct.root == frontend.root)
+        #expect(direct.syntaxTree == frontend.syntaxTree)
         #expect(direct.diagnostics == frontend.diagnostics)
+        #expect(direct.recovery == frontend.recovery)
         #expect(direct.recoveryActions == frontend.recoveryActions)
         #expect(direct.expectations == frontend.expectations)
         #expect(frontend.parser == ReferencePL0Parser().descriptor)

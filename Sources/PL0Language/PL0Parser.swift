@@ -97,9 +97,8 @@ public struct PL0Frontend: Sendable {
         let parseDuration = parseStart.duration(to: clock.now)
         return ParseResult(
             version: snapshot.version, parser: descriptor,
-            tokens: lexed.tokens, root: parsed.root,
-            diagnostics: parsed.diagnostics, recoveryActions: parsed.recoveryActions,
-            expectations: parsed.expectations,
+            tokens: lexed.tokens, syntaxTree: parsed.syntaxTree,
+            diagnostics: parsed.diagnostics, recovery: parsed.recovery,
             metrics: ParseMetrics(
                 sourceLength: snapshot.text.utf16.count,
                 tokenCount: max(0, lexed.tokens.count - 1),
@@ -187,9 +186,13 @@ private final class ReferenceParser {
             reusedTokenCount: reusedTokenCount,
             parsedNodeCount: max(0, root.nodeCount - reusedNodeCount),
             incremental: previousCache?.isEmpty == false)
-        return ParserOutput(root: root, diagnostics: diagnostics,
-                            recoveryActions: recoveries,
-                            expectations: expectations,
+        let recovery = RecoveryModel(actions: recoveries,
+                                     expectations: expectations,
+                                     diagnostics: diagnostics)
+        let syntaxTree = ConcreteSyntaxTree(root: root, sourceTokens: tokens,
+                                            recoveryActions: recoveries)
+        return ParserOutput(syntaxTree: syntaxTree, diagnostics: diagnostics,
+                            recovery: recovery,
                             reuseMetrics: reuseMetrics)
     }
 
@@ -243,8 +246,9 @@ private final class ReferenceParser {
         case .identifier:
             advance()
             _ = expect(.assign, message: "Expected ':=' after variable name")
+            let expression = parseExpression()
             return SyntaxNode(kind: "Assignment", range: range(from: start),
-                              children: [parseExpression()])
+                              children: [expression])
         case .call:
             advance()
             _ = expect(.identifier, message: "Expected procedure name after 'call'")
@@ -295,8 +299,9 @@ private final class ReferenceParser {
             let unexpected = current
             deleteCurrent("Expected a statement", expected: statementStarts)
             if isStatementStart(current.kind) {
+                let statement = parseStatement()
                 return SyntaxNode(kind: "RecoveredStatement", range: range(from: start),
-                                  origin: .recovered, children: [parseStatement()])
+                                  origin: .recovered, children: [statement])
             }
             return SyntaxNode(kind: "ErrorStatement", range: unexpected.range,
                               origin: .recovered)
@@ -310,8 +315,9 @@ private final class ReferenceParser {
     private func parseConditionBody() -> SyntaxNode {
         let start = current.range.location
         if match(.odd) {
+            let expression = parseExpression()
             return SyntaxNode(kind: "OddCondition", range: range(from: start),
-                              children: [parseExpression()])
+                              children: [expression])
         }
         let left = parseExpression()
         if current.kind.isRelationalOperator { advance() }
@@ -381,8 +387,9 @@ private final class ReferenceParser {
             } else {
                 deleteCurrent("Unexpected token in expression", expected: expected)
                 if [.identifier, .number, .leftParen].contains(current.kind) {
+                    let factor = parseFactor()
                     return SyntaxNode(kind: "RecoveredFactor", range: range(from: offset),
-                                      origin: .recovered, children: [parseFactor()])
+                                      origin: .recovered, children: [factor])
                 }
             }
             return SyntaxNode(kind: "MissingFactor",

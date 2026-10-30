@@ -68,8 +68,8 @@ the right shows it as headings, emphasis, symbols and mathematics.
   `color-scheme` so they follow the system appearance too.
 * Experimental **PL/0 language workbench**: native `.pl0` documents, incremental
   UTF-16 tokenization and reference LL parsing with identity reuse, robust error
-  recovery, a parser-neutral CST, Problems/recovery/Tokens/CST views and reuse
-  metrics.
+  recovery, a parser-neutral CST with source/missing/skipped terminals,
+  Problems/Recovery/Tokens/CST views and reuse metrics.
 
 ## Requirements
 
@@ -89,7 +89,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (163 tests)
+The current source is verified with `swift build` and `swift test` (168 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -287,8 +287,13 @@ The first implementation is a deliberately small vertical slice:
 * `PL0LanguageSession` retains lexer and parser caches for one versioned
   document. Successful blocks, statements, conditions, expressions, terms and
   factors can be reused without invoking their grammar productions again.
-* Every inserted or deleted recovery token is returned as a `RecoveryAction`;
-  recovered CST nodes retain their origin.
+* `ConcreteSyntaxTree` combines grammatical nodes with an ordered concrete
+  terminal stream. Terminals are explicitly classified as source, missing
+  (inserted) or skipped (deleted), so repairs remain inspectable in the tree.
+* `RecoveryModel` exposes ordered events, expected terminals, linked diagnostic
+  IDs, insertion/deletion counts and an additive cost. The older `root`,
+  `recoveryActions` and `expectations` result properties remain compatibility
+  views over these first-class models.
 * The reference engine declares deterministic-tree, recovery and expected-token
   capabilities. Diagnostics carry expected terminal sets, while compound
   statements and expressions synchronize past bad tokens so later syntax is
@@ -296,10 +301,11 @@ The first implementation is a deliberately small vertical slice:
 * Parsing starts 120 ms after an edit on a detached task. A result is displayed
   only if its version still matches the document revision.
 
-The Problems tab shows diagnostics and recovery decisions; Tokens shows lexer
-locations and classifications; CST shows the normalized concrete syntax tree.
-The header reports snapshot version, token count, scanned UTF-16 length, lexer
-reuse, parser node/token reuse and lexer+parser time.
+The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
+cost; Tokens shows lexer locations and classifications; CST shows grammatical
+nesting followed by the recovered terminal stream. The header reports snapshot
+version, token count, scanned UTF-16 length, lexer reuse, parser node/token reuse
+and lexer+parser time.
 
 For an edit, tokenization keeps tokens strictly before a safe token boundary,
 then scans from that boundary until a newly produced token aligns with the
@@ -392,7 +398,7 @@ scripts/make-app.sh                 build ModEdit.app
 scripts/package-release.sh          build and zip the release app
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 Sources/
-  PL0Language/                     snapshots, incremental lexer/parser, CST/recovery
+  PL0Language/                     snapshots, incremental lexer/parser, CST/recovery model
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
     ModEditApplication.swift        AppKit application, delegate and main menu
@@ -526,6 +532,10 @@ Examples/squares.pl0                sample controlled-language program
   memoizes successful grammar regions; it does not yet incrementally repair an
   individual production or reuse recovered subtrees. Invalidated ancestor paths
   and the program root are rebuilt.
+* **The PL/0 CST is normalized, not trivia-preserving.** It retains every lexer
+  token plus missing and skipped recovery terminals, but whitespace and comments
+  are currently discarded by the lexer. A future lossless-token mode can add
+  trivia without changing the grammatical node or recovery contracts.
 * **Reference parser only.** LL/LR/Earley/CYK/RNGLR adapters and parse forests
   have not yet been connected to the parser-neutral workbench model. The
   reference engine is deliberately deterministic and does not represent

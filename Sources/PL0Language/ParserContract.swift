@@ -65,19 +65,21 @@ public struct ParserReuseMetrics: Sendable, Equatable {
 }
 
 public struct ParserOutput: Sendable {
-    public let root: SyntaxNode
+    public let syntaxTree: ConcreteSyntaxTree
     public let diagnostics: [ParseDiagnostic]
-    public let recoveryActions: [RecoveryAction]
-    public let expectations: [ParseExpectation]
+    public let recovery: RecoveryModel
     public let reuseMetrics: ParserReuseMetrics
 
-    public init(root: SyntaxNode, diagnostics: [ParseDiagnostic],
-                recoveryActions: [RecoveryAction], expectations: [ParseExpectation],
+    public var root: SyntaxNode { syntaxTree.root }
+    public var recoveryActions: [RecoveryAction] { recovery.actions }
+    public var expectations: [ParseExpectation] { recovery.expectations }
+
+    public init(syntaxTree: ConcreteSyntaxTree, diagnostics: [ParseDiagnostic],
+                recovery: RecoveryModel,
                 reuseMetrics: ParserReuseMetrics = .fullParse) {
-        self.root = root
+        self.syntaxTree = syntaxTree
         self.diagnostics = diagnostics
-        self.recoveryActions = recoveryActions
-        self.expectations = expectations
+        self.recovery = recovery
         self.reuseMetrics = reuseMetrics
     }
 }
