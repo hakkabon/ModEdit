@@ -17,24 +17,99 @@ public struct GrammarRecognition: Sendable, Equatable {
     }
 }
 
-/// Generated SLR(1) recognizer for the controlled PL/0 grammar. The existing
-/// reference parser remains the CST/recovery normalizer so every engine emits
-/// exactly the same parser-neutral model while recognition is independent.
+public enum LRTraceAction: String, Sendable { case shift, reduce, accept, error, reuse }
+
+public struct LRTraceEvent: Sendable, Equatable, Identifiable {
+    public let id: Int
+    public let action: LRTraceAction
+    public let tokenIndex: Int
+    public let state: Int
+    public let detail: String
+    public let stackDepth: Int
+}
+
+public struct LRParseArtifact: Sendable, Equatable {
+    public let recognition: GrammarRecognition
+    public let root: SyntaxNode?
+    public let trace: [LRTraceEvent]
+    public let reusedTokenCount: Int
+}
+
+public enum EarleyTraceAction: String, Sendable { case predict, scan, complete, accept, reuse }
+
+public struct EarleyTraceEvent: Sendable, Equatable, Identifiable {
+    public let id: Int
+    public let action: EarleyTraceAction
+    public let chartIndex: Int
+    public let production: String
+    public let dot: Int
+    public let origin: Int
+}
+
+public struct EarleyPackedAlternative: Sendable, Equatable, Hashable {
+    /// IDs of terminal or nonterminal forest nodes in grammar order.
+    public let children: [String]
+}
+
+public struct EarleyForestNode: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let symbol: String
+    public let tokenRange: Range<Int>
+    public let sourceRange: SourceRange
+    public let terminal: PL0TokenKind?
+    public let alternatives: [EarleyPackedAlternative]
+}
+
+public struct EarleyParseForest: Sendable, Equatable {
+    public let rootID: String
+    public let nodes: [String: EarleyForestNode]
+    public var root: EarleyForestNode? { nodes[rootID] }
+    public var packedAlternativeCount: Int {
+        nodes.values.reduce(0) { $0 + $1.alternatives.count }
+    }
+}
+
+public struct EarleyParseArtifact: Sendable, Equatable {
+    public let recognition: GrammarRecognition
+    public let forest: EarleyParseForest?
+    public let trace: [EarleyTraceEvent]
+    public let reusedChartColumnCount: Int
+}
+
+public enum ParserAlgorithmArtifact: Sendable, Equatable {
+    case lr(LRParseArtifact)
+    case earley(EarleyParseArtifact)
+}
+
+/// Generated SLR(1) parser for the controlled PL/0 grammar.
 public struct LRPL0Parser: PL0ParserProtocol {
     public let descriptor = ParserDescriptor(
         id: "slr-1", displayName: "Generated SLR(1)",
-        capabilities: [.deterministicTree, .expectedTokens])
+        capabilities: [.deterministicTree, .errorRecovery, .expectedTokens, .incremental])
 
     public init() {}
 
     public func recognize(_ input: ParserInput) -> GrammarRecognition {
-        PL0SLRRecognizer.recognize(input.tokens)
+        parseDetailed(input).recognition
+    }
+
+    public func parseDetailed(_ input: ParserInput) -> LRParseArtifact {
+        LRMachine.run(input.tokens).artifact
     }
 
     public func parse(_ input: ParserInput) -> ParserOutput {
-        // CST construction and recovery are deliberately normalized through
-        // one adapter until LR reductions grow their own tree builder.
-        ReferencePL0Parser().parse(input)
+        let detailed = parseDetailed(input)
+        return output(for: detailed, input: input)
+    }
+
+    func output(for detailed: LRParseArtifact, input: ParserInput) -> ParserOutput {
+        guard detailed.recognition.accepted, let root = detailed.root,
+              input.lexicalDiagnostics.isEmpty else {
+            return ReferencePL0Parser().parse(input)
+        }
+        let tree = ConcreteSyntaxTree(root: root, sourceTokens: input.tokens)
+        return ParserOutput(syntaxTree: tree, diagnostics: [],
+                            recovery: RecoveryModel(actions: [], expectations: [], diagnostics: []))
     }
 }
 
@@ -44,17 +119,59 @@ public struct LRPL0Parser: PL0ParserProtocol {
 public struct EarleyPL0Parser: PL0ParserProtocol {
     public let descriptor = ParserDescriptor(
         id: "earley", displayName: "Earley Chart",
-        capabilities: [.deterministicTree, .errorRecovery, .expectedTokens, .ambiguity])
+        capabilities: [.deterministicTree, .errorRecovery, .expectedTokens,
+                       .incremental, .ambiguity])
 
     public init() {}
 
     public func recognize(_ input: ParserInput) -> GrammarRecognition {
-        PL0EarleyRecognizer.recognize(input.tokens)
+        parseDetailed(input).recognition
+    }
+
+    public func parseDetailed(_ input: ParserInput) -> EarleyParseArtifact {
+        EarleyMachine.run(input.tokens).artifact
     }
 
     public func parse(_ input: ParserInput) -> ParserOutput {
-        ReferencePL0Parser().parse(input)
+        let detailed = parseDetailed(input)
+        return output(for: detailed, input: input)
     }
+
+    func output(for detailed: EarleyParseArtifact, input: ParserInput) -> ParserOutput {
+        guard detailed.recognition.accepted, let forest = detailed.forest,
+              let root = forest.syntaxTreeRoot(), input.lexicalDiagnostics.isEmpty else {
+            return ReferencePL0Parser().parse(input)
+        }
+        let tree = ConcreteSyntaxTree(root: root, sourceTokens: input.tokens)
+        return ParserOutput(syntaxTree: tree, diagnostics: [],
+                            recovery: RecoveryModel(actions: [], expectations: [], diagnostics: []))
+    }
+}
+
+/// Stateful LR driver. Stable token identities supplied by the incremental
+/// lexer determine the maximal safe checkpoint from which parsing resumes.
+public struct IncrementalLRPL0Parser: Sendable {
+    private var cache: LRCache?
+    public init() {}
+    public mutating func parse(_ input: ParserInput) -> LRParseArtifact {
+        let run = LRMachine.run(input.tokens, previous: cache)
+        cache = run.cache
+        return run.artifact
+    }
+    public mutating func reset() { cache = nil }
+}
+
+/// Stateful Earley driver. Closed chart columns before the first changed token
+/// are immutable and can be reused without prediction/completion work.
+public struct IncrementalEarleyPL0Parser: Sendable {
+    private var cache: EarleyCache?
+    public init() {}
+    public mutating func parse(_ input: ParserInput) -> EarleyParseArtifact {
+        let run = EarleyMachine.run(input.tokens, previous: cache)
+        cache = run.cache
+        return run.artifact
+    }
+    public mutating func reset() { cache = nil }
 }
 
 private enum GrammarSymbol: Hashable, Sendable {
@@ -282,106 +399,368 @@ private struct SLRTable {
     }
 }
 
-private enum PL0SLRRecognizer {
+private struct LRCheckpoint: Sendable {
+    let states: [Int]
+    let nodes: [SyntaxNode]
+}
+
+private struct LRCache: Sendable {
+    let tokenIDs: [String]
+    let checkpoints: [LRCheckpoint]
+}
+
+private struct LRRun {
+    let artifact: LRParseArtifact
+    let cache: LRCache
+}
+
+private enum LRMachine {
     static let table = SLRTable(grammar: .shared)
 
-    static func recognize(_ sourceTokens: [PL0Token]) -> GrammarRecognition {
-        let tokens = normalizedKinds(sourceTokens)
-        var stack = [0]
-        var cursor = 0
+    static func run(_ sourceTokens: [PL0Token], previous: LRCache? = nil) -> LRRun {
+        let tokens = normalizedTokens(sourceTokens)
+        let ids = tokens.dropLast().map(\.id)
+        let reusable = previous.map { commonPrefix(ids, $0.tokenIDs) } ?? 0
+        let checkpoint = previous.flatMap { reusable < $0.checkpoints.count ? $0.checkpoints[reusable] : nil }
+        var states = checkpoint?.states ?? [0]
+        var nodes = checkpoint?.nodes ?? []
+        var cursor = checkpoint == nil ? 0 : reusable
+        var checkpoints = checkpoint == nil
+            ? [LRCheckpoint(states: states, nodes: nodes)]
+            : Array(previous!.checkpoints.prefix(reusable + 1))
+        var trace: [LRTraceEvent] = []
+        if reusable > 0 {
+            trace.append(LRTraceEvent(id: 0, action: .reuse, tokenIndex: reusable,
+                                      state: states.last ?? 0,
+                                      detail: "resume after \(reusable) stable tokens",
+                                      stackDepth: states.count))
+        }
         var configurations = 0
-        var maximumDepth = 1
-        while configurations < max(1_000, tokens.count * 20) {
+        var maximumDepth = states.count
+        let limit = max(1_000, tokens.count * 20)
+
+        func event(_ action: LRTraceAction, _ detail: String) -> LRTraceEvent {
+            LRTraceEvent(id: trace.count, action: action, tokenIndex: cursor,
+                         state: states.last ?? 0, detail: detail,
+                         stackDepth: states.count)
+        }
+
+        while configurations < limit {
             configurations += 1
             let lookahead = tokens[min(cursor, tokens.count - 1)]
-            guard let action = table.actions[ActionKey(state: stack.last!, terminal: lookahead)] else {
-                return GrammarRecognition(accepted: false, consumedTokenCount: cursor,
-                                          configurationCount: configurations,
-                                          maximumFrontierSize: maximumDepth)
+            guard let action = table.actions[ActionKey(state: states.last!,
+                                                       terminal: lookahead.kind)] else {
+                trace.append(event(.error, "no action for \(lookahead.kind.displayName)"))
+                return finish(false)
             }
             switch action {
             case let .shift(state):
-                stack.append(state); cursor += 1; maximumDepth = max(maximumDepth, stack.count)
+                trace.append(event(.shift, "\(lookahead.kind.rawValue) → state \(state)"))
+                states.append(state)
+                nodes.append(SyntaxNode(kind: lookahead.kind.rawValue,
+                                        range: lookahead.range))
+                cursor += 1
+                maximumDepth = max(maximumDepth, states.count)
+                if cursor <= ids.count {
+                    checkpoints.append(LRCheckpoint(states: states, nodes: nodes))
+                }
             case let .reduce(productionIndex):
                 let production = table.productions[productionIndex]
-                if production.rhs.count >= stack.count {
-                    return GrammarRecognition(accepted: false, consumedTokenCount: cursor,
-                                              configurationCount: configurations,
-                                              maximumFrontierSize: maximumDepth)
+                let count = production.rhs.count
+                guard count < states.count, count <= nodes.count else {
+                    trace.append(event(.error, "invalid reduction stack"))
+                    return finish(false)
                 }
-                stack.removeLast(production.rhs.count)
-                guard let state = table.gotos[GotoKey(state: stack.last!, nonterminal: production.lhs)] else {
-                    return GrammarRecognition(accepted: false, consumedTokenCount: cursor,
-                                              configurationCount: configurations,
-                                              maximumFrontierSize: maximumDepth)
+                let children = count == 0 ? [] : Array(nodes.suffix(count))
+                if count > 0 {
+                    states.removeLast(count)
+                    nodes.removeLast(count)
                 }
-                stack.append(state); maximumDepth = max(maximumDepth, stack.count)
+                guard let state = table.gotos[GotoKey(state: states.last!,
+                                                      nonterminal: production.lhs)] else {
+                    trace.append(event(.error, "missing goto for \(production.lhs)"))
+                    return finish(false)
+                }
+                let emptyOffset = lookahead.range.location
+                let range = nodeRange(children, emptyAt: emptyOffset)
+                nodes.append(SyntaxNode(kind: production.lhs, range: range,
+                                        children: children))
+                states.append(state)
+                trace.append(event(.reduce,
+                                   "r\(productionIndex): \(productionText(production)) → state \(state)"))
+                maximumDepth = max(maximumDepth, states.count)
             case .accept:
-                return GrammarRecognition(accepted: true, consumedTokenCount: cursor,
-                                          configurationCount: configurations,
-                                          maximumFrontierSize: maximumDepth)
+                trace.append(event(.accept, "accept"))
+                return finish(true)
             }
         }
-        return GrammarRecognition(accepted: false, consumedTokenCount: cursor,
-                                  configurationCount: configurations,
-                                  maximumFrontierSize: maximumDepth)
+        trace.append(event(.error, "configuration limit exceeded"))
+        return finish(false)
+
+        func finish(_ accepted: Bool) -> LRRun {
+            let recognition = GrammarRecognition(
+                accepted: accepted, consumedTokenCount: min(cursor, ids.count),
+                configurationCount: configurations,
+                maximumFrontierSize: maximumDepth)
+            return LRRun(
+                artifact: LRParseArtifact(recognition: recognition,
+                                          root: accepted ? nodes.last : nil,
+                                          trace: trace,
+                                          reusedTokenCount: reusable),
+                cache: LRCache(tokenIDs: ids, checkpoints: checkpoints))
+        }
     }
 }
 
-private struct EarleyItem: Hashable { let production: Int; let dot: Int; let origin: Int }
-private enum PL0EarleyRecognizer {
-    static func recognize(_ sourceTokens: [PL0Token]) -> GrammarRecognition {
+private struct EarleyItem: Hashable, Sendable {
+    let production: Int
+    let dot: Int
+    let origin: Int
+}
+
+private struct MutableForestNode: Sendable {
+    let id: String
+    let symbol: String
+    let start: Int
+    let end: Int
+    let terminal: PL0TokenKind?
+    var alternatives: Set<EarleyPackedAlternative>
+}
+
+private struct EarleyCache: Sendable {
+    let tokenIDs: [String]
+    let chart: [Set<EarleyItem>]
+    let families: [Int: [EarleyItem: Set<[String]>]]
+    let forest: [String: MutableForestNode]
+}
+
+private struct EarleyRun {
+    let artifact: EarleyParseArtifact
+    let cache: EarleyCache
+}
+
+private enum EarleyMachine {
+    static func run(_ sourceTokens: [PL0Token], previous: EarleyCache? = nil) -> EarleyRun {
         let grammar = PL0Grammar.shared
         let augmented = GrammarProduction(lhs: "$Start", rhs: [.nonterminal(grammar.start)])
         let productions = [augmented] + grammar.productions
         let byLHS = Dictionary(grouping: productions.indices, by: { productions[$0].lhs })
-        let input = normalizedKinds(sourceTokens).dropLast()
-        var chart = Array(repeating: Set<EarleyItem>(), count: input.count + 1)
-        chart[0].insert(EarleyItem(production: 0, dot: 0, origin: 0))
+        let tokens = Array(normalizedTokens(sourceTokens).dropLast())
+        let ids = tokens.map(\.id)
+        let reusable = min(tokens.count,
+                           previous.map { commonPrefix(ids, $0.tokenIDs) } ?? 0)
+        var chart: [Set<EarleyItem>]
+        var families: [Int: [EarleyItem: Set<[String]>]]
+        var forest: [String: MutableForestNode]
+        if let previous, reusable > 0 {
+            chart = Array(previous.chart.prefix(reusable + 1))
+            chart += Array(repeating: [], count: tokens.count + 1 - chart.count)
+            families = previous.families.filter { $0.key <= reusable }
+            forest = previous.forest.filter { $0.value.end <= reusable }
+        } else {
+            chart = Array(repeating: [], count: tokens.count + 1)
+            families = [:]
+            forest = [:]
+            let start = EarleyItem(production: 0, dot: 0, origin: 0)
+            chart[0].insert(start)
+            families[0, default: [:]][start] = [[]]
+        }
+        var trace: [EarleyTraceEvent] = []
+        if reusable > 0 {
+            trace.append(EarleyTraceEvent(id: 0, action: .reuse,
+                                          chartIndex: reusable,
+                                          production: "reuse \(reusable) closed columns",
+                                          dot: 0, origin: 0))
+        }
         var configurations = 0
-        var maximum = 1
+        var maximum = chart.prefix(reusable + 1).map(\.count).max() ?? 1
 
-        for position in chart.indices {
+        func add(_ item: EarleyItem, at position: Int, family: [String],
+                 to agenda: inout [EarleyItem]) -> Bool {
+            let newItem = chart[position].insert(item).inserted
+            let newFamily = families[position, default: [:]][item, default: []]
+                .insert(family).inserted
+            if newItem || newFamily { agenda.append(item) }
+            return newItem || newFamily
+        }
+
+        let startPosition = reusable > 0 ? reusable : 0
+        for position in startPosition..<chart.count {
             var agenda = Array(chart[position])
-            var cursor = 0
-            while cursor < agenda.count {
-                let item = agenda[cursor]; cursor += 1; configurations += 1
+            var agendaCursor = 0
+            while agendaCursor < agenda.count {
+                let item = agenda[agendaCursor]
+                agendaCursor += 1
+                configurations += 1
                 let production = productions[item.production]
+                let itemFamilies = families[position]?[item] ?? [[]]
                 if item.dot < production.rhs.count {
                     switch production.rhs[item.dot] {
                     case let .nonterminal(name):
                         for productionIndex in byLHS[name, default: []] {
-                            let predicted = EarleyItem(production: productionIndex, dot: 0,
-                                                       origin: position)
-                            if chart[position].insert(predicted).inserted { agenda.append(predicted) }
+                            let predicted = EarleyItem(production: productionIndex,
+                                                       dot: 0, origin: position)
+                            if add(predicted, at: position, family: [], to: &agenda) {
+                                trace.append(traceEvent(.predict, position, predicted,
+                                                        productions, trace.count))
+                            }
                         }
                     case let .terminal(kind):
-                        if position < input.count, input[input.index(input.startIndex, offsetBy: position)] == kind {
-                            chart[position + 1].insert(EarleyItem(
-                                production: item.production, dot: item.dot + 1,
-                                origin: item.origin))
+                        guard position < tokens.count, tokens[position].kind == kind else { break }
+                        let terminalID = "t:\(position):\(kind.rawValue)"
+                        forest[terminalID] = MutableForestNode(
+                            id: terminalID, symbol: kind.rawValue,
+                            start: position, end: position + 1, terminal: kind,
+                            alternatives: [])
+                        let advanced = EarleyItem(production: item.production,
+                                                  dot: item.dot + 1,
+                                                  origin: item.origin)
+                        for family in itemFamilies {
+                            var next = family; next.append(terminalID)
+                            var unused: [EarleyItem] = []
+                            if add(advanced, at: position + 1, family: next,
+                                   to: &unused) {
+                                trace.append(traceEvent(.scan, position + 1, advanced,
+                                                        productions, trace.count))
+                            }
                         }
                     }
                 } else {
+                    let nodeID = "n:\(production.lhs):\(item.origin):\(position)"
+                    var packed = forest[nodeID] ?? MutableForestNode(
+                        id: nodeID, symbol: production.lhs,
+                        start: item.origin, end: position, terminal: nil,
+                        alternatives: [])
+                    var changed = false
+                    for family in itemFamilies {
+                        changed = packed.alternatives.insert(
+                            EarleyPackedAlternative(children: family)).inserted || changed
+                    }
+                    forest[nodeID] = packed
+                    if changed {
+                        trace.append(traceEvent(.complete, position, item,
+                                                productions, trace.count))
+                    }
                     for waiting in chart[item.origin] {
                         let waitingProduction = productions[waiting.production]
                         guard waiting.dot < waitingProduction.rhs.count,
                               waitingProduction.rhs[waiting.dot] == .nonterminal(production.lhs) else { continue }
-                        let completed = EarleyItem(production: waiting.production,
-                                                   dot: waiting.dot + 1,
-                                                   origin: waiting.origin)
-                        if chart[position].insert(completed).inserted { agenda.append(completed) }
+                        let advanced = EarleyItem(production: waiting.production,
+                                                  dot: waiting.dot + 1,
+                                                  origin: waiting.origin)
+                        for family in families[item.origin]?[waiting] ?? [[]] {
+                            var next = family; next.append(nodeID)
+                            _ = add(advanced, at: position, family: next, to: &agenda)
+                        }
                     }
                 }
             }
             maximum = max(maximum, chart[position].count)
         }
-        let accepted = chart[input.count].contains(EarleyItem(production: 0, dot: 1, origin: 0))
+        let acceptedItem = EarleyItem(production: 0, dot: 1, origin: 0)
+        let accepted = chart[tokens.count].contains(acceptedItem)
+        let rootID = "n:Program:0:\(tokens.count)"
+        let publicNodes = forest.mapValues { node in
+            EarleyForestNode(id: node.id, symbol: node.symbol,
+                             tokenRange: node.start..<node.end,
+                             sourceRange: sourceRange(node.start..<node.end, tokens: tokens),
+                             terminal: node.terminal,
+                             alternatives: node.alternatives.sorted {
+                                 $0.children.lexicographicallyPrecedes($1.children)
+                             })
+        }
+        let parseForest = accepted && publicNodes[rootID] != nil
+            ? EarleyParseForest(rootID: rootID, nodes: publicNodes) : nil
+        if accepted {
+            trace.append(EarleyTraceEvent(id: trace.count, action: .accept,
+                                          chartIndex: tokens.count,
+                                          production: "$Start → Program", dot: 1,
+                                          origin: 0))
+        }
         let consumed = chart.lastIndex(where: { !$0.isEmpty }) ?? 0
-        return GrammarRecognition(accepted: accepted, consumedTokenCount: consumed,
-                                  configurationCount: configurations,
-                                  maximumFrontierSize: maximum)
+        let recognition = GrammarRecognition(
+            accepted: accepted, consumedTokenCount: consumed,
+            configurationCount: configurations,
+            maximumFrontierSize: maximum)
+        return EarleyRun(
+            artifact: EarleyParseArtifact(recognition: recognition,
+                                          forest: parseForest, trace: trace,
+                                          reusedChartColumnCount: reusable),
+            cache: EarleyCache(tokenIDs: ids, chart: chart,
+                               families: families, forest: forest))
     }
+}
+
+private extension EarleyParseForest {
+    func syntaxTreeRoot() -> SyntaxNode? {
+        var visiting = Set<String>()
+        func build(_ id: String) -> SyntaxNode? {
+            guard let node = nodes[id], visiting.insert(id).inserted else { return nil }
+            defer { visiting.remove(id) }
+            if node.terminal != nil {
+                return SyntaxNode(kind: node.symbol, range: node.sourceRange)
+            }
+            let children = node.alternatives.first?.children.compactMap(build) ?? []
+            return SyntaxNode(kind: node.symbol, range: node.sourceRange,
+                              children: children)
+        }
+        return build(rootID)
+    }
+}
+
+private func traceEvent(_ action: EarleyTraceAction, _ chartIndex: Int,
+                        _ item: EarleyItem, _ productions: [GrammarProduction],
+                        _ id: Int) -> EarleyTraceEvent {
+    EarleyTraceEvent(id: id, action: action, chartIndex: chartIndex,
+                     production: productionText(productions[item.production]),
+                     dot: item.dot, origin: item.origin)
+}
+
+private func productionText(_ production: GrammarProduction) -> String {
+    let rhs = production.rhs.map { symbol in
+        switch symbol {
+        case let .terminal(kind): kind.rawValue
+        case let .nonterminal(name): name
+        }
+    }.joined(separator: " ")
+    return "\(production.lhs) → \(rhs.isEmpty ? "ε" : rhs)"
+}
+
+private func nodeRange(_ children: [SyntaxNode], emptyAt offset: Int) -> SourceRange {
+    guard let first = children.first, let last = children.last else {
+        return SourceRange(location: offset, length: 0)
+    }
+    return SourceRange(location: first.range.location,
+                       length: max(0, last.range.end - first.range.location))
+}
+
+private func sourceRange(_ tokenRange: Range<Int>, tokens: [PL0Token]) -> SourceRange {
+    guard !tokenRange.isEmpty, tokenRange.lowerBound < tokens.count else {
+        let offset = tokenRange.lowerBound < tokens.count
+            ? tokens[tokenRange.lowerBound].range.location
+            : tokens.last?.range.end ?? 0
+        return SourceRange(location: offset, length: 0)
+    }
+    let first = tokens[tokenRange.lowerBound].range.location
+    let last = tokens[min(tokenRange.upperBound - 1, tokens.count - 1)].range.end
+    return SourceRange(location: first, length: max(0, last - first))
+}
+
+private func commonPrefix(_ lhs: [String], _ rhs: [String]) -> Int {
+    var count = 0
+    while count < lhs.count, count < rhs.count, lhs[count] == rhs[count] { count += 1 }
+    return count
+}
+
+private func normalizedTokens(_ tokens: [PL0Token]) -> [PL0Token] {
+    guard tokens.last?.kind != .endOfFile else { return tokens }
+    let last = tokens.last
+    let offset = last?.range.end ?? 0
+    return tokens + [PL0Token(id: "grammar:eof:\(offset)", kind: .endOfFile,
+                             lexeme: "", range: SourceRange(location: offset, length: 0),
+                             location: SourceLocation(offset: offset,
+                                                      line: last?.location.line ?? 1,
+                                                      column: last?.location.column ?? 1))]
 }
 
 private func normalizedKinds(_ tokens: [PL0Token]) -> [PL0TokenKind] {

@@ -24,6 +24,7 @@ struct PL0WorkbenchPane: View {
         case tokens = "Tokens"
         case syntaxTree = "CST"
         case comparison = "Compare"
+        case trace = "Trace"
         case runtime = "Run"
         var id: Self { self }
     }
@@ -185,6 +186,8 @@ struct PL0WorkbenchPane: View {
             }
         case .comparison:
             comparisonContent(result)
+        case .trace:
+            traceContent(result)
         case .runtime:
             runtimeContent
         }
@@ -230,6 +233,50 @@ struct PL0WorkbenchPane: View {
                 Text(name).font(.subheadline.bold())
                 Text(detail).font(.caption.monospaced()).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func traceContent(_ result: ParseResult) -> some View {
+        switch result.algorithmArtifact {
+        case let .lr(artifact):
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    Text("LR · \(artifact.trace.count) events · reused \(artifact.reusedTokenCount) tokens")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    ForEach(artifact.trace) { event in
+                        Text("\(event.id)  \(event.action.rawValue)  t\(event.tokenIndex) s\(event.state) depth \(event.stackDepth)  \(event.detail)")
+                            .font(.caption.monospaced())
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            }
+        case let .earley(artifact):
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    Text("Earley · \(artifact.trace.count) events · reused \(artifact.reusedChartColumnCount) columns · \(artifact.forest?.nodes.count ?? 0) forest nodes · \(artifact.forest?.packedAlternativeCount ?? 0) packed alternatives")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    ForEach(artifact.trace) { event in
+                        Text("\(event.id)  \(event.action.rawValue)  chart[\(event.chartIndex)]  \(event.production)  dot \(event.dot) origin \(event.origin)")
+                            .font(.caption.monospaced())
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            }
+        case nil:
+            VStack(spacing: 8) {
+                Label("Reference parser", systemImage: "list.bullet.rectangle")
+                    .font(.headline)
+                Text("Select Generated SLR(1) or Earley Chart to inspect its native trace.")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

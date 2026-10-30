@@ -91,7 +91,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (197 tests)
+The current source is verified with `swift build` and `swift test` (204 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -154,8 +154,8 @@ PL0Language (platform-neutral library)
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ SourceSnapshot/Edit (versioned UTF-16 ranges)                            │
 │ Incremental PL0Lexer → stable PL0Token[] + lexical diagnostics/metrics  │
-│ Reference LL · generated SLR(1) · Earley chart recognizers              │
-│                    ↓ parser-neutral CST + recovery/metrics               │
+│ Incremental Reference LL · generated SLR(1) · Earley chart parsers       │
+│ Native LR trees · Earley packed forests · traces · parser-neutral CST    │
 │ Comment-preserving formatter · lexical-scope compiler · bounded stack VM │
 │ Versioned LSP adapter → diagnostics/completion/definition/semantic tokens │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -170,7 +170,7 @@ ModEditCore (library)
 │               ModEditDocument (NSDocument: read/write/save completion)    │
 │               ModEditWindowController (window, toolbar, SwiftUI hosting) │
 │ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
-│                       └ PL0WorkbenchPane (Problems/CST/Format/Run)        │
+│                       └ PL0WorkbenchPane (Problems/CST/Compare/Trace/Run) │
 │                 status bar       └ LineNumberRulerView       (WKWebView) │
 │                    │                  │  ▲ edits           (WKWebView)    │
 │ Model         EditorModel (@MainActor, @Published revision/format)       │
@@ -287,13 +287,14 @@ The first implementation is a deliberately small vertical slice:
 * `PL0Lexer` recognizes classic PL/0 plus `//` and `/* ... */` comments. The
   stateful `PL0IncrementalTokenizer` preserves identities for reusable tokens.
 * `PL0Frontend` selects **Reference LL**, generated **SLR(1)** or **Earley**.
-  `PL0ParserProtocol` is their common immutable input/output contract. LR and
-  Earley recognize the explicit controlled grammar independently, then use the
-  reference adapter to normalize CST and recovery output for structural
-  comparison.
+  `PL0ParserProtocol` is their common immutable input/output contract. LR emits
+  its native reduction tree. Earley retains a shared packed forest keyed by
+  grammar symbol and token span, then projects one alternative as its CST.
 * `PL0LanguageSession` retains lexer and parser caches for one versioned
   document. Successful blocks, statements, conditions, expressions, terms and
-  factors can be reused without invoking their grammar productions again.
+  factors can be reused without invoking their grammar productions again. LR
+  resumes from its last stable state/node-stack checkpoint; Earley reuses closed
+  chart columns and their packed forest nodes before the first changed token.
 * `ConcreteSyntaxTree` combines grammatical nodes with an ordered concrete
   terminal stream. Terminals are explicitly classified as source, missing
   (inserted) or skipped (deleted), so repairs remain inspectable in the tree.
@@ -319,7 +320,9 @@ The first implementation is a deliberately small vertical slice:
 
 The parser menu switches engines for the current document. The **Compare** tab
 shows acceptance, consumed tokens and LR action/stack or Earley chart-item
-metrics side by side. The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
+metrics side by side. The **Trace** tab exposes LR shift/reduce/state-stack
+events or Earley predict/scan/complete/chart events, including incremental
+reuse. The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
 cost; Tokens shows lexer locations and classifications; CST shows grammatical
 nesting followed by the recovered terminal stream. The header reports snapshot
 version, token count, scanned UTF-16 length, lexer reuse, parser node/token reuse
@@ -581,17 +584,19 @@ Examples/squares.pl0                sample controlled-language program
   ModEdit and wrapped by a small standards-facing server without coupling the
   language engine to one process model. Semantic analysis continues over a
   recovered token stream, so useful results remain available while typing.
-* **Normalized LR/Earley trees.** SLR(1) and Earley currently perform their own
-  recognition, while CST construction and recovery are normalized through the
-  reference adapter. Earley does not yet retain a shared packed parse forest;
-  LR does not yet expose shift/reduce traces in the UI.
+* **Recovery remains normalized.** On valid input LR builds a native reduction
+  tree and Earley projects its packed forest. When either engine rejects the
+  current, incomplete program, the reference recovery adapter supplies the
+  common missing/skipped-terminal model. Incremental reuse is therefore native
+  for successful LR/Earley prefixes but recovery-region reuse remains future
+  experimental work.
 
 ## Roadmap
 
 1. **Parser comparison laboratory.** Extend the connected LL, SLR(1) and Earley
-   engines with reduction/chart traces and native tree builders; then connect
-   Earley-table, CYK and RNGLR with recovery-cost and full-versus-incremental
-   differential tests.
+   traces with stepping and forest visualization; then connect Earley-table,
+   CYK and RNGLR with recovery-cost and full-versus-incremental differential
+   tests.
 2. **Finer incremental parsing.** Add declaration-level reuse, dependency-aware
    invalidation, recovered-region reuse experiments and randomized differential
    testing of every incremental result against the complete reference parse.

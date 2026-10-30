@@ -93,6 +93,7 @@ public struct ParseResult: Sendable, Equatable {
     public let diagnostics: [ParseDiagnostic]
     public let recovery: RecoveryModel
     public let metrics: ParseMetrics
+    public let algorithmArtifact: ParserAlgorithmArtifact?
 
     public var root: SyntaxNode { syntaxTree.root }
     public var recoveryActions: [RecoveryAction] { recovery.actions }
@@ -101,7 +102,8 @@ public struct ParseResult: Sendable, Equatable {
     public init(version: UInt64, parser: ParserDescriptor,
                 tokens: [PL0Token], syntaxTree: ConcreteSyntaxTree,
                 diagnostics: [ParseDiagnostic], recovery: RecoveryModel,
-                metrics: ParseMetrics) {
+                metrics: ParseMetrics,
+                algorithmArtifact: ParserAlgorithmArtifact? = nil) {
         self.version = version
         self.parser = parser
         self.tokens = tokens
@@ -109,5 +111,6 @@ public struct ParseResult: Sendable, Equatable {
         self.diagnostics = diagnostics
         self.recovery = recovery
         self.metrics = metrics
+        self.algorithmArtifact = algorithmArtifact
     }
 }

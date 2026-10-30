@@ -72,20 +72,26 @@ public struct PL0Frontend: Sendable {
                lexingNanoseconds: UInt64,
                lexMetrics: IncrementalLexMetrics) -> ParseResult {
         var cache: ReferenceParserCache?
+        var lrParser = IncrementalLRPL0Parser()
+        var earleyParser = IncrementalEarleyPL0Parser()
         return parse(snapshot, lexed: lexed,
                      lexingNanoseconds: lexingNanoseconds,
                      lexMetrics: lexMetrics,
-                     parserCache: &cache)
+                     parserCache: &cache,
+                     lrParser: &lrParser, earleyParser: &earleyParser)
     }
 
     func parse(_ snapshot: SourceSnapshot, lexed: LexResult,
                lexingNanoseconds: UInt64,
                lexMetrics: IncrementalLexMetrics,
-               parserCache: inout ReferenceParserCache?) -> ParseResult {
+               parserCache: inout ReferenceParserCache?,
+               lrParser: inout IncrementalLRPL0Parser,
+               earleyParser: inout IncrementalEarleyPL0Parser) -> ParseResult {
         let clock = ContinuousClock()
         let parseStart = clock.now
         let descriptor: ParserDescriptor
         let parsed: ParserOutput
+        let algorithmArtifact: ParserAlgorithmArtifact?
         switch engine {
         case .referenceLL:
             let parser = ReferencePL0Parser()
@@ -95,18 +101,25 @@ public struct PL0Frontend: Sendable {
             parserCache = run.cache
             descriptor = parser.descriptor
             parsed = run.output
+            algorithmArtifact = nil
         case .generatedLR:
             parserCache = nil
             let parser = LRPL0Parser()
+            let input = ParserInput(tokens: lexed.tokens,
+                                    lexicalDiagnostics: lexed.diagnostics)
+            let detailed = lrParser.parse(input)
             descriptor = parser.descriptor
-            parsed = parser.parse(ParserInput(tokens: lexed.tokens,
-                                              lexicalDiagnostics: lexed.diagnostics))
+            parsed = parser.output(for: detailed, input: input)
+            algorithmArtifact = .lr(detailed)
         case .earley:
             parserCache = nil
             let parser = EarleyPL0Parser()
+            let input = ParserInput(tokens: lexed.tokens,
+                                    lexicalDiagnostics: lexed.diagnostics)
+            let detailed = earleyParser.parse(input)
             descriptor = parser.descriptor
-            parsed = parser.parse(ParserInput(tokens: lexed.tokens,
-                                              lexicalDiagnostics: lexed.diagnostics))
+            parsed = parser.output(for: detailed, input: input)
+            algorithmArtifact = .earley(detailed)
         }
         let parseDuration = parseStart.duration(to: clock.now)
         return ParseResult(
@@ -120,7 +133,8 @@ public struct PL0Frontend: Sendable {
                 parsingNanoseconds: Self.nanoseconds(parseDuration),
                 recoveryCount: parsed.recoveryActions.count,
                 incrementalLexing: lexMetrics,
-                incrementalParsing: parsed.reuseMetrics))
+                incrementalParsing: parsed.reuseMetrics),
+            algorithmArtifact: algorithmArtifact)
     }
 
     private static func nanoseconds(_ duration: Duration) -> UInt64 {
@@ -135,6 +149,8 @@ public struct PL0Frontend: Sendable {
 public actor PL0LanguageSession {
     private var tokenizer = PL0IncrementalTokenizer()
     private var parserCache: ReferenceParserCache?
+    private var lrParser = IncrementalLRPL0Parser()
+    private var earleyParser = IncrementalEarleyPL0Parser()
     private let frontend: PL0Frontend
 
     public init(engine: ParserEngine = .referenceLL) {
@@ -151,16 +167,22 @@ public actor PL0LanguageSession {
             &+ UInt64(max(0, parts.attoseconds) / 1_000_000_000)
         if !tokenized.metrics.incremental {
             parserCache = nil
+            lrParser.reset()
+            earleyParser.reset()
         }
         return frontend.parse(snapshot, lexed: tokenized.lexed,
                               lexingNanoseconds: nanoseconds,
                               lexMetrics: tokenized.metrics,
-                              parserCache: &parserCache)
+                              parserCache: &parserCache,
+                              lrParser: &lrParser,
+                              earleyParser: &earleyParser)
     }
 
     public func reset() {
         tokenizer.reset()
         parserCache = nil
+        lrParser.reset()
+        earleyParser.reset()
     }
 }
 
