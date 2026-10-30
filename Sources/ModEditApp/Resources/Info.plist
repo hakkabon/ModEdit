@@ -47,6 +47,7 @@
                 <string>net.daringfireball.markdown</string>
                 <string>public.html</string>
                 <string>org.tug.tex</string>
+                <string>io.github.hakkabon.pl0-source</string>
             </array>
         </dict>
     </array>
@@ -54,6 +55,27 @@
          earlier systems the app must declare it itself. -->
     <key>UTImportedTypeDeclarations</key>
     <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>io.github.hakkabon.pl0-source</string>
+            <key>UTTypeDescription</key>
+            <string>PL/0 Source</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.plain-text</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>pl0</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>text/x-pl0</string>
+                </array>
+            </dict>
+        </dict>
         <dict>
             <key>UTTypeIdentifier</key>
             <string>net.daringfireball.markdown</string>

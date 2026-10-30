@@ -18,6 +18,10 @@ struct EditorRootView: View {
                                 source: { model.previewSnapshot(upTo: PreviewPane.maximumSourceLength) })
                         .frame(minWidth: 300)
                 }
+                if model.showWorkbench, model.format.id == "pl0" {
+                    PL0WorkbenchPane(revision: model.textRevision,
+                                     source: { model.textSnapshot() })
+                }
             }
             EditorStatusBar(model: model, formatID: formatID)
         }

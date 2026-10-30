@@ -11,6 +11,7 @@ struct FormatRegistryTests {
         #expect(registry.format(for: .markdownText).id == "markdown")
         #expect(registry.format(for: .latex).id == "latex")
         #expect(registry.format(for: .html).id == "html")
+        #expect(registry.format(for: .pl0Source).id == "pl0")
         #expect(registry.format(for: .plainText).id == "plaintext")
     }
 

@@ -6,7 +6,9 @@ the right shows it as headings, emphasis, symbols and mathematics.
 
 > **Status: early development (v0.1.0).** The editor, syntax colouring, format
 > switching, file open/save and the live preview work end to end for Plain Text,
-> Markdown, LaTeX and HTML. Rendering *inside* the editor pane (single-pane
+> Markdown, LaTeX and HTML. An initial PL/0 parsing workbench provides a
+> reference lexer/parser, explicit recovery traces and CST inspection.
+> Rendering *inside* the editor pane (single-pane
 > "live preview" with a caret that moves through rendered text) is the next big
 > milestone; see the [roadmap](#roadmap).
 
@@ -18,13 +20,14 @@ the right shows it as headings, emphasis, symbols and mathematics.
 4. [Architecture](#architecture)
 5. [Formats](#formats)
 6. [The preview](#the-preview)
-7. [Adding a format](#adding-a-format)
-8. [Project layout](#project-layout)
-9. [Design decisions](#design-decisions)
-10. [Known limitations](#known-limitations)
-11. [Roadmap](#roadmap)
-12. [Contributing](#contributing)
-13. [License](#license)
+7. [PL/0 parsing workbench](#pl0-parsing-workbench)
+8. [Adding a format](#adding-a-format)
+9. [Project layout](#project-layout)
+10. [Design decisions](#design-decisions)
+11. [Known limitations](#known-limitations)
+12. [Roadmap](#roadmap)
+13. [Contributing](#contributing)
+14. [License](#license)
 
 ## Features
 
@@ -62,6 +65,9 @@ the right shows it as headings, emphasis, symbols and mathematics.
 * Light/dark mode aware: `EditorTheme` has explicit light and dark palettes for
   text, syntax, gutter and current-line colours; preview pages use
   `color-scheme` so they follow the system appearance too.
+* Experimental **PL/0 language workbench**: native `.pl0` documents, syntax
+  colouring, a versioned UTF-16 token stream, recoverable reference LL parser,
+  parser-neutral CST, Problems/recovery/Tokens/CST views and parse timings.
 
 ## Requirements
 
@@ -81,7 +87,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (134 tests)
+The current source is verified with `swift build` and `swift test` (141 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -140,6 +146,14 @@ consistent with the current text.
 ## Architecture
 
 ```
+PL0Language (platform-neutral library)
+┌──────────────────────────────────────────────────────────────────────────┐
+│ SourceSnapshot/Edit (versioned UTF-16 ranges)                            │
+│ PL0Lexer → PL0Token[] + lexical diagnostics                             │
+│ Reference LL parser → parser-neutral CST + recovery trace + metrics      │
+└──────────────────────────────────────────────────────────────────────────┘
+                │
+                ▼
 ModEditApp (executable)           thin: @main calls ModEditApplication.run()
         │
         ▼  AppKit application + document shell
@@ -149,6 +163,7 @@ ModEditCore (library)
 │               ModEditDocument (NSDocument: read/write/save completion)    │
 │               ModEditWindowController (window, toolbar, SwiftUI hosting) │
 │ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
+│                       └ PL0WorkbenchPane (Problems/Tokens/CST)            │
 │                 status bar       └ LineNumberRulerView       (WKWebView) │
 │                    │                  │  ▲ edits           (WKWebView)    │
 │ Model         EditorModel (@MainActor, @Published revision/format)       │
@@ -204,6 +219,7 @@ manager only for visible line fragments.
 
 | Format     | Types                         | Colouring                                      | Preview |
 |------------|-------------------------------|------------------------------------------------|---------|
+| PL/0       | `io.github.hakkabon.pl0-source` | keywords, numbers, operators, comments       | workbench |
 | Plain Text | `public.plain-text`, UTF-8    | —                                              | —       |
 | Markdown   | `net.daringfireball.markdown` | headings, bold, links, quotes, lists, code     | yes     |
 | LaTeX      | `org.tug.tex`                 | commands, arguments, math, comments            | yes     |
@@ -247,6 +263,50 @@ document on the main actor, the format's renderer transforms it on a detached
 task, and only the finished HTML returns to the main actor for the `WKWebView`
 load and scroll restoration. A superseded render is cancelled, and identical
 output is skipped before the web view is touched.
+
+## PL/0 parsing workbench
+
+Open [`Examples/squares.pl0`](Examples/squares.pl0), or choose **PL/0** in the
+status-bar format menu for an untitled document. The workbench appears on the
+right and can be hidden with the **Parsing Workbench** toolbar button.
+
+The first implementation is a deliberately small vertical slice:
+
+* `PL0Language` is a separate, platform-neutral Swift target. It does not import
+  AppKit or know about ModEdit.
+* `SourceSnapshot` carries a document version, text and optional `SourceEdit`.
+  Public ranges use UTF-16, matching TextKit and LSP.
+* `PL0Lexer` recognizes classic PL/0 plus `//` and `/* ... */` comments. Tokens
+  retain spelling, range and one-based source location.
+* `PL0Frontend` currently selects one **Reference LL** recursive-descent parser.
+* Every inserted or deleted recovery token is returned as a `RecoveryAction`;
+  recovered CST nodes retain their origin.
+* Parsing starts 120 ms after an edit on a detached task. A result is displayed
+  only if its version still matches the document revision.
+
+The Problems tab shows diagnostics and recovery decisions; Tokens shows lexer
+locations and classifications; CST shows the normalized concrete syntax tree.
+The header reports snapshot version, token count and lexer+parser time.
+
+This milestone intentionally performs a full lex and parse. The versioned
+snapshot/edit contract and parser-neutral results are the foundation for true
+incremental token convergence and alternative parser engines.
+
+```ebnf
+program     = block "." ;
+block       = [ "const" ident "=" number { "," ident "=" number } ";" ]
+              [ "var" ident { "," ident } ";" ]
+              { "procedure" ident ";" block ";" } statement ;
+statement   = ident ":=" expression | "call" ident
+            | "begin" statement { ";" statement } "end"
+            | "if" condition "then" statement
+            | "while" condition "do" statement | empty ;
+condition   = "odd" expression | expression relation expression ;
+expression  = [ "+" | "-" ] term { ( "+" | "-" ) term } ;
+term        = factor { ( "*" | "/" ) factor } ;
+factor      = ident | number | "(" expression ")" ;
+relation    = "=" | "#" | "<" | "<=" | ">" | ">=" ;
+```
 
 ## Adding a format
 
@@ -297,6 +357,7 @@ scripts/make-app.sh                 build ModEdit.app
 scripts/package-release.sh          build and zip the release app
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 Sources/
+  PL0Language/                     snapshots, tokens, lexer, CST, parser/recovery
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
     ModEditApplication.swift        AppKit application, delegate and main menu
@@ -306,8 +367,11 @@ Sources/
     IO/TextIO.swift
     Model/                          EditorDocument, EditorModel, LineIndex, LineNumberSource
     Preview/                        PreviewRenderer, MarkdownHTML, LaTeXHTML, escaping, page
+    Workbench/                      PL/0 parser inspector
     UI/                             root/status bar, editor/gutter, preview
 Tests/ModEditTests/                 Swift Testing suites
+Tests/PL0LanguageTests/             lexer/parser/recovery contract tests
+Examples/squares.pl0                sample controlled-language program
 .github/workflows/ci.yml            debug + release build, tests and packaged artifact
 ```
 
@@ -385,6 +449,11 @@ Tests/ModEditTests/                 Swift Testing suites
 * **Generation-based save status.** Save snapshots carry their source generation.
   A completed older autosave cannot incorrectly mark a newer edit clean.
 * **Small public surface.** Only `ModEditApplication` is public.
+* **Language engine outside the editor.** `PL0Language` exposes immutable,
+  `Sendable` snapshots and results. ModEdit is one client; command-line and LSP
+  executables can consume the same engine later.
+* **Recovery is data.** Insertions and deletions are explicit result values,
+  making recovery observable, testable and suitable for editor code actions.
 
 ## Known limitations
 
@@ -418,23 +487,35 @@ Tests/ModEditTests/                 Swift Testing suites
 * **Status columns use UTF-16 offsets.** This matches AppKit and LSP position
   accounting, but a grapheme such as a composed emoji can occupy several columns.
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
+* **PL/0 parsing is not incremental yet.** It is debounced and off the main
+  actor, but currently lexes and parses the complete snapshot after an edit.
+* **Reference parser only.** LL/LR/Earley/CYK/RNGLR adapters and parse forests
+  have not yet been connected to the parser-neutral workbench model.
 
 ## Roadmap
 
-1. **Rendering inside the editor.** The headline feature. Plan: introduce a
+1. **Incremental PL/0 tokenization.** Restart at a lexical checkpoint before an
+   edit, scan until state and token suffix converge, preserve token identities,
+   and expose reuse/invalidation metrics.
+2. **Parser comparison laboratory.** Connect the Grammar ecosystem's LL, LR,
+   Earley, Earley-table, CYK and RNGLR parsers with traces, recovery costs and
+   full-versus-incremental differential tests.
+3. **PL/0 language service.** Add symbols/scopes, formatter, bytecode VM and a
+   version-safe LSP server for diagnostics, completion and semantic tokens.
+4. **Rendering inside the editor.** Introduce a
    platform-neutral `TextRenderer` that emits *runs tiling the source exactly*
    (hidden markup = zero-width run) with a two-way source↔display offset map;
    draw the rendered form for everything except the line under the caret using
    TextKit 2 layout fragments or text attachments. The offset map is what lets
    the caret move through rendered text.
-2. **Scroll and caret synchronisation** between source and preview (needs the
+5. **Scroll and caret synchronisation** between source and preview (needs the
    same source map).
-3. **Real parsers:** `swift-markdown` for CommonMark/GFM and a bundled KaTeX for
+6. **Real markup parsers:** `swift-markdown` for CommonMark/GFM and a bundled KaTeX for
    typeset maths; expand stateful highlighting to embedded languages.
-4. **Relative resources in the preview**, using the document URL as the web
+7. **Relative resources in the preview**, using the document URL as the web
    view's base URL.
-5. User-selectable themes, font and size settings; soft-wrap toggle.
-6. Export (HTML/PDF) from the preview.
+8. User-selectable themes, font and size settings; soft-wrap toggle.
+9. Export (HTML/PDF) from the preview.
 
 ## Contributing
 

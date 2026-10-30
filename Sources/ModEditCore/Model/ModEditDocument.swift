@@ -271,6 +271,7 @@ private final class PendingWrite: @unchecked Sendable {
 @MainActor
 final class ModEditWindowController: NSWindowController, NSToolbarDelegate {
     private static let previewItem = NSToolbarItem.Identifier("ModEdit.TogglePreview")
+    private static let workbenchItem = NSToolbarItem.Identifier("ModEdit.ToggleWorkbench")
 
     let model: EditorModel
 
@@ -302,17 +303,33 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate {
         model.showPreview.toggle()
     }
 
+    @objc private func toggleWorkbench(_ sender: Any?) {
+        model.showWorkbench.toggle()
+    }
+
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.previewItem]
+        [.flexibleSpace, Self.workbenchItem, Self.previewItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.previewItem]
+        [.flexibleSpace, Self.workbenchItem, Self.previewItem]
     }
 
     func toolbar(_ toolbar: NSToolbar,
                  itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == Self.workbenchItem {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Parsing Workbench"
+            item.paletteLabel = "Parsing Workbench"
+            item.toolTip = "Show or hide the parsing workbench"
+            item.image = NSImage(systemSymbolName: "waveform.path.ecg.rectangle",
+                                 accessibilityDescription: "Parsing Workbench")
+            item.target = self
+            item.action = #selector(toggleWorkbench(_:))
+            item.isBordered = true
+            return item
+        }
         guard itemIdentifier == Self.previewItem else { return nil }
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
         item.label = "Preview"
@@ -327,7 +344,13 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
-        guard item.itemIdentifier == Self.previewItem else { return true }
-        return model.format.makePreviewRenderer() != nil
+        switch item.itemIdentifier {
+        case Self.previewItem:
+            return model.format.makePreviewRenderer() != nil
+        case Self.workbenchItem:
+            return model.format.id == "pl0"
+        default:
+            return true
+        }
     }
 }

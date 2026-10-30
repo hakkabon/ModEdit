@@ -20,6 +20,9 @@ enum TokenKind: Sendable, Hashable, CaseIterable {
     case link
     case quote
     case listMarker
+    case keyword
+    case number
+    case `operator`
 }
 
 /// A regular expression that classifies the text it matches.

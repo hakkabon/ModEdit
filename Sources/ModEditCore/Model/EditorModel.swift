@@ -17,6 +17,8 @@ final class EditorModel: ObservableObject {
     /// Whether the live-preview pane is shown. Owned here rather than in the
     /// view so the window's toolbar can toggle it.
     @Published var showPreview = true
+    /// Whether the experimental parser inspector is visible for PL/0.
+    @Published var showWorkbench = true
 
     let tabSize = 4
     /// The format catalogue shown in the status-bar picker.

@@ -8,6 +8,9 @@ let package = Package(
     ],
     products: [
         .library(
+            name: "PL0Language",
+            targets: ["PL0Language"]),
+        .library(
             name: "ModEditCore",
             targets: ["ModEditCore"]),
         .executable(
@@ -16,7 +19,10 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "ModEditCore"),
+            name: "PL0Language"),
+        .target(
+            name: "ModEditCore",
+            dependencies: ["PL0Language"]),
         .executableTarget(
             name: "ModEditApp",
             dependencies: ["ModEditCore"],
@@ -26,5 +32,8 @@ let package = Package(
         .testTarget(
             name: "ModEditTests",
             dependencies: ["ModEditCore"]),
+        .testTarget(
+            name: "PL0LanguageTests",
+            dependencies: ["PL0Language"]),
     ]
 )

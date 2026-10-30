@@ -13,7 +13,7 @@ struct FormatRegistry: Sendable {
     let fallback: any DocumentFormat
 
     static let standard = FormatRegistry(
-        formats: [MarkdownFormat(), LaTeXFormat(), HTMLFormat()],
+        formats: [PL0Format(), MarkdownFormat(), LaTeXFormat(), HTMLFormat()],
         fallback: PlainTextFormat())
 
     /// Every format, fallback last. Used to populate pickers.
