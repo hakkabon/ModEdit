@@ -58,6 +58,17 @@ struct EditorIntegrationTests {
         #expect(harness.model.format.id == "markdown")
     }
 
+    @Test func workbenchLauncherSelectsPL0AndIsVisible() {
+        let harness = makeHarness(text: "var x;")
+        harness.model.setFormat(PlainTextFormat())
+        harness.model.showWorkbench = false
+
+        harness.model.activatePL0Workbench()
+
+        #expect(harness.model.format.id == "pl0")
+        #expect(harness.model.showWorkbench)
+    }
+
     @Test func undoFlowsBackIntoPersistedDocument() throws {
         let harness = makeHarness(text: "abc")
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),

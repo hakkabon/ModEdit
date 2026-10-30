@@ -6,6 +6,35 @@ public enum ParserEngine: String, Sendable, CaseIterable {
     case referenceLL = "Reference LL"
 }
 
+/// Hand-written correctness oracle for the controlled PL/0 grammar. It is
+/// intentionally conventional and deterministic so generated and generalized
+/// parsers have an uncomplicated result to compare against.
+public struct ReferencePL0Parser: PL0ParserProtocol {
+    public let descriptor = ParserDescriptor(
+        id: "reference-ll",
+        displayName: "Reference LL",
+        capabilities: [.deterministicTree, .errorRecovery, .expectedTokens])
+
+    public init() {}
+
+    public func parse(_ input: ParserInput) -> ParserOutput {
+        ReferenceParser(tokens: normalized(input.tokens),
+                        lexicalDiagnostics: input.lexicalDiagnostics).parseProgram()
+    }
+
+    private func normalized(_ tokens: [PL0Token]) -> [PL0Token] {
+        guard tokens.last?.kind != .endOfFile else { return tokens }
+        let last = tokens.last
+        let offset = last?.range.end ?? 0
+        let line = last?.location.line ?? 1
+        let column = (last?.location.column ?? 1) + (last?.range.length ?? 0)
+        let eof = PL0Token(id: "reference:eof:\(offset)", kind: .endOfFile, lexeme: "",
+                           range: SourceRange(location: offset, length: 0),
+                           location: SourceLocation(offset: offset, line: line, column: column))
+        return tokens + [eof]
+    }
+}
+
 /// Facade used by ModEdit and tests. The implementation is intentionally a
 /// small reference recursive-descent parser: correctness and transparent
 /// recovery matter more than cleverness at this stage.
@@ -34,18 +63,23 @@ public struct PL0Frontend: Sendable {
                lexMetrics: IncrementalLexMetrics) -> ParseResult {
         let clock = ContinuousClock()
         let parseStart = clock.now
-        let parsed = ReferenceParser(tokens: lexed.tokens,
-                                     lexicalDiagnostics: lexed.diagnostics).parseProgram()
+        let parser: any PL0ParserProtocol = switch engine {
+        case .referenceLL: ReferencePL0Parser()
+        }
+        let parsed = parser.parse(ParserInput(tokens: lexed.tokens,
+                                              lexicalDiagnostics: lexed.diagnostics))
         let parseDuration = parseStart.duration(to: clock.now)
         return ParseResult(
-            version: snapshot.version, tokens: lexed.tokens, root: parsed.root,
-            diagnostics: parsed.diagnostics, recoveryActions: parsed.recoveries,
+            version: snapshot.version, parser: parser.descriptor,
+            tokens: lexed.tokens, root: parsed.root,
+            diagnostics: parsed.diagnostics, recoveryActions: parsed.recoveryActions,
+            expectations: parsed.expectations,
             metrics: ParseMetrics(
                 sourceLength: snapshot.text.utf16.count,
                 tokenCount: max(0, lexed.tokens.count - 1),
                 lexingNanoseconds: lexingNanoseconds,
                 parsingNanoseconds: Self.nanoseconds(parseDuration),
-                recoveryCount: parsed.recoveries.count,
+                recoveryCount: parsed.recoveryActions.count,
                 incrementalLexing: lexMetrics))
     }
 
@@ -83,16 +117,11 @@ public actor PL0LanguageSession {
 }
 
 private final class ReferenceParser {
-    struct Output {
-        let root: SyntaxNode
-        let diagnostics: [ParseDiagnostic]
-        let recoveries: [RecoveryAction]
-    }
-
     private let tokens: [PL0Token]
     private var index = 0
     private var diagnostics: [ParseDiagnostic]
     private var recoveries: [RecoveryAction] = []
+    private var expectations: [ParseExpectation] = []
 
     init(tokens: [PL0Token], lexicalDiagnostics: [ParseDiagnostic]) {
         self.tokens = tokens
@@ -102,7 +131,7 @@ private final class ReferenceParser {
     private var current: PL0Token { tokens[min(index, tokens.count - 1)] }
     private var previous: PL0Token { tokens[max(0, index - 1)] }
 
-    func parseProgram() -> Output {
+    func parseProgram() -> ParserOutput {
         let start = current.range.location
         let block = parseBlock()
         _ = expect(.period, message: "A PL/0 program must end with '.'")
@@ -110,7 +139,9 @@ private final class ReferenceParser {
             deleteCurrent("Unexpected token after program terminator")
         }
         let root = SyntaxNode(kind: "Program", range: range(from: start), children: [block])
-        return Output(root: root, diagnostics: diagnostics, recoveries: recoveries)
+        return ParserOutput(root: root, diagnostics: diagnostics,
+                            recoveryActions: recoveries,
+                            expectations: expectations)
     }
 
     private func parseBlock() -> SyntaxNode {
@@ -165,11 +196,19 @@ private final class ReferenceParser {
             advance()
             var statements: [SyntaxNode] = []
             if current.kind != .end { statements.append(parseStatement()) }
-            while match(.semicolon) { statements.append(parseStatement()) }
-            while current.kind != .end && isStatementStart(current.kind) {
-                report("Expected ';' between statements", at: current.range)
-                recoveries.append(.insert(kind: .semicolon, at: current.range.location))
-                statements.append(parseStatement())
+            while current.kind != .end && current.kind != .endOfFile {
+                if match(.semicolon) {
+                    statements.append(parseStatement())
+                } else if isStatementStart(current.kind) {
+                    report("Expected ';' between statements", at: current.range,
+                           expected: [.semicolon])
+                    recoveries.append(.insert(kind: .semicolon,
+                                              at: current.range.location))
+                    statements.append(parseStatement())
+                } else {
+                    deleteCurrent("Unexpected token inside compound statement",
+                                  expected: [.semicolon, .end])
+                }
             }
             _ = expect(.end, message: "Expected 'end' to close compound statement")
             return SyntaxNode(kind: "BeginStatement", range: range(from: start),
@@ -192,9 +231,18 @@ private final class ReferenceParser {
             deleteCurrent("Invalid token in statement")
             return SyntaxNode(kind: "ErrorStatement", range: range(from: start),
                               origin: .recovered)
-        default:
+        case .semicolon, .end, .period, .endOfFile:
             return SyntaxNode(kind: "EmptyStatement",
                               range: SourceRange(location: start, length: 0))
+        default:
+            let unexpected = current
+            deleteCurrent("Expected a statement", expected: statementStarts)
+            if isStatementStart(current.kind) {
+                return SyntaxNode(kind: "RecoveredStatement", range: range(from: start),
+                                  origin: .recovered, children: [parseStatement()])
+            }
+            return SyntaxNode(kind: "ErrorStatement", range: unexpected.range,
+                              origin: .recovered)
         }
     }
 
@@ -206,7 +254,11 @@ private final class ReferenceParser {
         }
         let left = parseExpression()
         if current.kind.isRelationalOperator { advance() }
-        else { _ = expect(.equal, message: "Expected a comparison operator in condition") }
+        else {
+            report("Expected a comparison operator in condition", at: current.range,
+                   expected: relationalOperators)
+            recoveries.append(.insert(kind: .equal, at: current.range.location))
+        }
         let right = parseExpression()
         return SyntaxNode(kind: "Comparison", range: range(from: start),
                           children: [left, right])
@@ -248,8 +300,18 @@ private final class ReferenceParser {
                               children: [expression])
         default:
             let offset = current.range.location
-            report("Expected identifier, number, or parenthesized expression", at: current.range)
-            recoveries.append(.insert(kind: .identifier, at: offset))
+            let expected: [PL0TokenKind] = [.identifier, .number, .leftParen]
+            if isExpressionFollower(current.kind) {
+                report("Expected identifier, number, or parenthesized expression",
+                       at: current.range, expected: expected)
+                recoveries.append(.insert(kind: .identifier, at: offset))
+            } else {
+                deleteCurrent("Unexpected token in expression", expected: expected)
+                if [.identifier, .number, .leftParen].contains(current.kind) {
+                    return SyntaxNode(kind: "RecoveredFactor", range: range(from: offset),
+                                      origin: .recovered, children: [parseFactor()])
+                }
+            }
             return SyntaxNode(kind: "MissingFactor",
                               range: SourceRange(location: offset, length: 0),
                               origin: .recovered)
@@ -259,7 +321,7 @@ private final class ReferenceParser {
     @discardableResult
     private func expect(_ kind: PL0TokenKind, message: String) -> Bool {
         if match(kind) { return true }
-        report(message, at: current.range)
+        report(message, at: current.range, expected: [kind])
         recoveries.append(.insert(kind: kind, at: current.range.location))
         return false
     }
@@ -274,16 +336,23 @@ private final class ReferenceParser {
         if current.kind != .endOfFile { index += 1 }
     }
 
-    private func deleteCurrent(_ message: String) {
+    private func deleteCurrent(_ message: String,
+                               expected: [PL0TokenKind] = []) {
         guard current.kind != .endOfFile else { return }
         let token = current
-        report(message, at: token.range)
+        report(message, at: token.range, expected: expected)
         recoveries.append(.delete(token: token))
         advance()
     }
 
-    private func report(_ message: String, at range: SourceRange) {
-        diagnostics.append(ParseDiagnostic(severity: .error, message: message, range: range))
+    private func report(_ message: String, at range: SourceRange,
+                        expected: [PL0TokenKind] = []) {
+        diagnostics.append(ParseDiagnostic(severity: .error, message: message,
+                                           range: range, expected: expected))
+        if !expected.isEmpty {
+            let expectation = ParseExpectation(offset: range.location, kinds: expected)
+            if !expectations.contains(expectation) { expectations.append(expectation) }
+        }
     }
 
     private func range(from start: Int) -> SourceRange {
@@ -292,6 +361,19 @@ private final class ReferenceParser {
     }
 
     private func isStatementStart(_ kind: PL0TokenKind) -> Bool {
-        [.identifier, .call, .begin, .ifKeyword, .whileKeyword].contains(kind)
+        statementStarts.contains(kind)
+    }
+
+    private var statementStarts: [PL0TokenKind] {
+        [.identifier, .call, .begin, .ifKeyword, .whileKeyword]
+    }
+
+    private var relationalOperators: [PL0TokenKind] {
+        [.equal, .notEqual, .less, .lessEqual, .greater, .greaterEqual]
+    }
+
+    private func isExpressionFollower(_ kind: PL0TokenKind) -> Bool {
+        [.plus, .minus, .star, .slash, .rightParen, .semicolon, .then,
+         .doKeyword, .end, .period, .endOfFile].contains(kind)
     }
 }

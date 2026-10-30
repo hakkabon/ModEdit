@@ -23,7 +23,8 @@ struct PL0WorkbenchPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("PL/0 · Reference LL").font(.headline)
+                Text("PL/0 · \(result?.parser.displayName ?? "Reference LL")")
+                    .font(.headline)
                 Spacer()
                 if let result {
                     Text(summary(result))
@@ -70,6 +71,11 @@ struct PL0WorkbenchPane: View {
                             Text("UTF-16 range \(diagnostic.range.location)..<\(diagnostic.range.end)")
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
+                            if !diagnostic.expected.isEmpty {
+                                Text("expected: \(diagnostic.expected.map(\.displayName).joined(separator: ", "))")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     if !result.recoveryActions.isEmpty {

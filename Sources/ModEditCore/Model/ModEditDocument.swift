@@ -304,7 +304,11 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     @objc private func toggleWorkbench(_ sender: Any?) {
-        model.showWorkbench.toggle()
+        if model.format.id == "pl0" {
+            model.showWorkbench.toggle()
+        } else {
+            model.activatePL0Workbench()
+        }
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -348,7 +352,7 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate {
         case Self.previewItem:
             return model.format.makePreviewRenderer() != nil
         case Self.workbenchItem:
-            return model.format.id == "pl0"
+            return model.registry.format(withID: "pl0") != nil
         default:
             return true
         }

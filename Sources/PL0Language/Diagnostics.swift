@@ -9,12 +9,15 @@ public struct ParseDiagnostic: Sendable, Equatable, Identifiable {
     public let severity: DiagnosticSeverity
     public let message: String
     public let range: SourceRange
+    public let expected: [PL0TokenKind]
 
-    public init(severity: DiagnosticSeverity, message: String, range: SourceRange) {
+    public init(severity: DiagnosticSeverity, message: String, range: SourceRange,
+                expected: [PL0TokenKind] = []) {
         self.id = "\(range.location):\(range.length):\(message)"
         self.severity = severity
         self.message = message
         self.range = range
+        self.expected = expected
     }
 }
 

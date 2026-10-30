@@ -87,7 +87,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (149 tests)
+The current source is verified with `swift build` and `swift test` (158 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -266,9 +266,10 @@ output is skipped before the web view is touched.
 
 ## PL/0 parsing workbench
 
-Open [`Examples/squares.pl0`](Examples/squares.pl0), or choose **PL/0** in the
-status-bar format menu for an untitled document. The workbench appears on the
-right and can be hidden with the **Parsing Workbench** toolbar button.
+Open [`Examples/squares.pl0`](Examples/squares.pl0), choose **PL/0** in the
+status-bar format menu, or press the **Parsing Workbench** toolbar button from
+any document. The toolbar button selects PL/0 when necessary; once PL/0 is
+active it toggles the right-hand workbench.
 
 The first implementation is a deliberately small vertical slice:
 
@@ -279,8 +280,14 @@ The first implementation is a deliberately small vertical slice:
 * `PL0Lexer` recognizes classic PL/0 plus `//` and `/* ... */` comments. The
   stateful `PL0IncrementalTokenizer` preserves identities for reusable tokens.
 * `PL0Frontend` currently selects one **Reference LL** recursive-descent parser.
+  `PL0ParserProtocol` is the common immutable input/output contract that future
+  LL, LR, Earley and RNGLR adapters will implement.
 * Every inserted or deleted recovery token is returned as a `RecoveryAction`;
   recovered CST nodes retain their origin.
+* The reference engine declares deterministic-tree, recovery and expected-token
+  capabilities. Diagnostics carry expected terminal sets, while compound
+  statements and expressions synchronize past bad tokens so later syntax is
+  retained instead of being discarded in a cascade.
 * Parsing starts 120 ms after an edit on a detached task. A result is displayed
   only if its version still matches the document revision.
 
@@ -301,6 +308,13 @@ invalid characters and unterminated block comments.
 The reference parser still reparses the complete token sequence. Its
 parser-neutral results are the next reuse boundary for incremental LL/LR/Earley
 experiments.
+
+The reference-parser test corpus covers every controlled grammar production,
+direct-parser/frontend equivalence, expected terminals, missing-token insertion,
+garbage deletion, recovery that preserves later statements, and bounded
+termination across malformed fragment combinations. It is intended to be the
+correctness oracle for the other parser implementations, not the eventual
+high-performance parser.
 
 ```ebnf
 program     = block "." ;
@@ -500,7 +514,9 @@ Examples/squares.pl0                sample controlled-language program
 * **PL/0 parsing is not incremental yet.** Tokenization is incremental, but the
   reference LL parser still consumes the complete updated token sequence.
 * **Reference parser only.** LL/LR/Earley/CYK/RNGLR adapters and parse forests
-  have not yet been connected to the parser-neutral workbench model.
+  have not yet been connected to the parser-neutral workbench model. The
+  reference engine is deliberately deterministic and does not represent
+  ambiguity.
 
 ## Roadmap
 

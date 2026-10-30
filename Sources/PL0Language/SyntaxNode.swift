@@ -54,20 +54,26 @@ public struct ParseMetrics: Sendable, Equatable {
 
 public struct ParseResult: Sendable, Equatable {
     public let version: UInt64
+    public let parser: ParserDescriptor
     public let tokens: [PL0Token]
     public let root: SyntaxNode
     public let diagnostics: [ParseDiagnostic]
     public let recoveryActions: [RecoveryAction]
+    public let expectations: [ParseExpectation]
     public let metrics: ParseMetrics
 
-    public init(version: UInt64, tokens: [PL0Token], root: SyntaxNode,
+    public init(version: UInt64, parser: ParserDescriptor,
+                tokens: [PL0Token], root: SyntaxNode,
                 diagnostics: [ParseDiagnostic], recoveryActions: [RecoveryAction],
+                expectations: [ParseExpectation],
                 metrics: ParseMetrics) {
         self.version = version
+        self.parser = parser
         self.tokens = tokens
         self.root = root
         self.diagnostics = diagnostics
         self.recoveryActions = recoveryActions
+        self.expectations = expectations
         self.metrics = metrics
     }
 }

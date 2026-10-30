@@ -121,6 +121,16 @@ final class EditorModel: ObservableObject {
         document.setFormat(newFormat)
         onFormatChange?(newFormat)
     }
+
+    /// Opens the PL/0 workbench from any document. The toolbar item is a
+    /// launcher as well as a visibility toggle, so it must never become a
+    /// disabled dead end while another format is selected.
+    func activatePL0Workbench() {
+        if format.id != "pl0", let pl0 = registry.format(withID: "pl0") {
+            setFormat(pl0)
+        }
+        showWorkbench = true
+    }
 }
 
 extension EditorModel: LineNumberSource {
