@@ -91,7 +91,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (191 tests)
+The current source is verified with `swift build` and `swift test` (197 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -154,7 +154,8 @@ PL0Language (platform-neutral library)
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ SourceSnapshot/Edit (versioned UTF-16 ranges)                            │
 │ Incremental PL0Lexer → stable PL0Token[] + lexical diagnostics/metrics  │
-│ Incremental reference LL parser → parser-neutral CST + recovery/metrics │
+│ Reference LL · generated SLR(1) · Earley chart recognizers              │
+│                    ↓ parser-neutral CST + recovery/metrics               │
 │ Comment-preserving formatter · lexical-scope compiler · bounded stack VM │
 │ Versioned LSP adapter → diagnostics/completion/definition/semantic tokens │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -285,9 +286,11 @@ The first implementation is a deliberately small vertical slice:
   Public ranges use UTF-16, matching TextKit and LSP.
 * `PL0Lexer` recognizes classic PL/0 plus `//` and `/* ... */` comments. The
   stateful `PL0IncrementalTokenizer` preserves identities for reusable tokens.
-* `PL0Frontend` currently selects one **Reference LL** recursive-descent parser.
-  `PL0ParserProtocol` is the common immutable input/output contract that future
-  LL, LR, Earley and RNGLR adapters will implement.
+* `PL0Frontend` selects **Reference LL**, generated **SLR(1)** or **Earley**.
+  `PL0ParserProtocol` is their common immutable input/output contract. LR and
+  Earley recognize the explicit controlled grammar independently, then use the
+  reference adapter to normalize CST and recovery output for structural
+  comparison.
 * `PL0LanguageSession` retains lexer and parser caches for one versioned
   document. Successful blocks, statements, conditions, expressions, terms and
   factors can be reused without invoking their grammar productions again.
@@ -314,7 +317,9 @@ The first implementation is a deliberately small vertical slice:
 * Parsing starts 120 ms after an edit on a detached task. A result is displayed
   only if its version still matches the document revision.
 
-The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
+The parser menu switches engines for the current document. The **Compare** tab
+shows acceptance, consumed tokens and LR action/stack or Earley chart-item
+metrics side by side. The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
 cost; Tokens shows lexer locations and classifications; CST shows grammatical
 nesting followed by the recovered terminal stream. The header reports snapshot
 version, token count, scanned UTF-16 length, lexer reuse, parser node/token reuse
@@ -576,16 +581,17 @@ Examples/squares.pl0                sample controlled-language program
   ModEdit and wrapped by a small standards-facing server without coupling the
   language engine to one process model. Semantic analysis continues over a
   recovered token stream, so useful results remain available while typing.
-* **Reference parser only.** LL/LR/Earley/CYK/RNGLR adapters and parse forests
-  have not yet been connected to the parser-neutral workbench model. The
-  reference engine is deliberately deterministic and does not represent
-  ambiguity.
+* **Normalized LR/Earley trees.** SLR(1) and Earley currently perform their own
+  recognition, while CST construction and recovery are normalized through the
+  reference adapter. Earley does not yet retain a shared packed parse forest;
+  LR does not yet expose shift/reduce traces in the UI.
 
 ## Roadmap
 
-1. **Parser comparison laboratory.** Connect the Grammar ecosystem's LL, LR,
-   Earley, Earley-table, CYK and RNGLR parsers with traces, recovery costs and
-   full-versus-incremental differential tests.
+1. **Parser comparison laboratory.** Extend the connected LL, SLR(1) and Earley
+   engines with reduction/chart traces and native tree builders; then connect
+   Earley-table, CYK and RNGLR with recovery-cost and full-versus-incremental
+   differential tests.
 2. **Finer incremental parsing.** Add declaration-level reuse, dependency-aware
    invalidation, recovered-region reuse experiments and randomized differential
    testing of every incremental result against the complete reference parse.

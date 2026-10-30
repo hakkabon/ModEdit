@@ -14,6 +14,7 @@ struct PL0WorkbenchPane: View {
 
     @State private var result: ParseResult?
     @State private var selectedView = WorkbenchView.diagnostics
+    @State private var selectedEngine = ParserEngine.referenceLL
     @State private var session = PL0LanguageSession()
     @State private var runtime = RuntimeState.idle
 
@@ -22,6 +23,7 @@ struct PL0WorkbenchPane: View {
         case recovery = "Recovery"
         case tokens = "Tokens"
         case syntaxTree = "CST"
+        case comparison = "Compare"
         case runtime = "Run"
         var id: Self { self }
     }
@@ -41,8 +43,16 @@ struct PL0WorkbenchPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("PL/0 · \(result?.parser.displayName ?? "Reference LL")")
+                Text("PL/0")
                     .font(.headline)
+                Picker("Parser", selection: $selectedEngine) {
+                    ForEach(ParserEngine.allCases, id: \.self) { engine in
+                        Text(engine.rawValue).tag(engine)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
                 Spacer()
                 Button("Format", action: formatDocument)
                     .controlSize(.small)
@@ -73,7 +83,14 @@ struct PL0WorkbenchPane: View {
             }
         }
         .frame(minWidth: 300, idealWidth: 390)
-        .task(id: revision) { await refresh() }
+        .task(id: ParseRequest(revision: revision, engine: selectedEngine)) {
+            await refresh()
+        }
+        .onChange(of: selectedEngine) { engine in
+            result = nil
+            runtime = .idle
+            session = PL0LanguageSession(engine: engine)
+        }
         .onChange(of: revision) { _ in runtime = .idle }
     }
 
@@ -166,8 +183,53 @@ struct PL0WorkbenchPane: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        case .comparison:
+            comparisonContent(result)
         case .runtime:
             runtimeContent
+        }
+    }
+
+    private struct ParseRequest: Hashable {
+        let revision: UInt64
+        let engine: ParserEngine
+    }
+
+    @ViewBuilder
+    private func comparisonContent(_ result: ParseResult) -> some View {
+        let input = ParserInput(tokens: result.tokens, lexicalDiagnostics: [])
+        let lr = LRPL0Parser().recognize(input)
+        let earley = EarleyPL0Parser().recognize(input)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Grammar recognition").font(.headline)
+                comparisonRow(name: "Reference LL",
+                              accepted: result.diagnostics.isEmpty,
+                              detail: "normalized CST and recovery oracle")
+                comparisonRow(name: "Generated SLR(1)", accepted: lr.accepted,
+                              detail: "\(lr.configurationCount) actions · stack \(lr.maximumFrontierSize) · consumed \(lr.consumedTokenCount)")
+                comparisonRow(name: "Earley Chart", accepted: earley.accepted,
+                              detail: "\(earley.configurationCount) items · chart max \(earley.maximumFrontierSize) · consumed \(earley.consumedTokenCount)")
+                Divider()
+                Text("Selected engine: \(result.parser.displayName)")
+                    .font(.caption.monospaced())
+                Text("LR and Earley perform independent recognition. Their CST and recovery output is normalized through the reference adapter so results can be compared structurally.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func comparisonRow(name: String, accepted: Bool, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: accepted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(accepted ? .green : .red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.subheadline.bold())
+                Text(detail).font(.caption.monospaced()).foregroundStyle(.secondary)
+            }
         }
     }
 

@@ -2,8 +2,10 @@ import Foundation
 
 /// Parser identity is explicit so the workbench can compare engines later
 /// without changing its result model.
-public enum ParserEngine: String, Sendable, CaseIterable {
+public enum ParserEngine: String, Sendable, CaseIterable, Hashable {
     case referenceLL = "Reference LL"
+    case generatedLR = "Generated SLR(1)"
+    case earley = "Earley Chart"
 }
 
 /// Hand-written correctness oracle for the controlled PL/0 grammar. It is
@@ -93,6 +95,18 @@ public struct PL0Frontend: Sendable {
             parserCache = run.cache
             descriptor = parser.descriptor
             parsed = run.output
+        case .generatedLR:
+            parserCache = nil
+            let parser = LRPL0Parser()
+            descriptor = parser.descriptor
+            parsed = parser.parse(ParserInput(tokens: lexed.tokens,
+                                              lexicalDiagnostics: lexed.diagnostics))
+        case .earley:
+            parserCache = nil
+            let parser = EarleyPL0Parser()
+            descriptor = parser.descriptor
+            parsed = parser.parse(ParserInput(tokens: lexed.tokens,
+                                              lexicalDiagnostics: lexed.diagnostics))
         }
         let parseDuration = parseStart.duration(to: clock.now)
         return ParseResult(
