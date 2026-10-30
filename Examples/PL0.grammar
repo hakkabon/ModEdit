@@ -1,0 +1,56 @@
+%start Program
+%token CONST /const\b/
+%token VAR /var\b/
+%token PROCEDURE /procedure\b/
+%token CALL /call\b/
+%token BEGIN /begin\b/
+%token END /end\b/
+%token IF /if\b/
+%token THEN /then\b/
+%token WHILE /while\b/
+%token DO /do\b/
+%token ODD /odd\b/
+%token IDENTIFIER /[A-Za-z_][A-Za-z0-9_]*/
+%token NUMBER /[0-9]+/
+%token ASSIGN /:=/
+%token NE /#/
+%token LE /<=/
+%token GE />=/
+%token LT /</
+%token GT />/
+%token PLUS /\+/
+%token MINUS /-/
+%token STAR /\*/
+%token SLASH /\//
+%token EQUAL /=/
+%token COMMA /,/
+%token SEMICOLON /;/
+%token PERIOD /\./
+%token LPAREN /\(/
+%token RPAREN /\)/
+%skip /\s+/
+%skip /\/\/[^\r\n]*/
+
+Program : Block PERIOD ;
+Block : ConstPart VarPart Procedures Statement ;
+ConstPart : CONST ConstDefinition MoreConsts SEMICOLON | ;
+ConstDefinition : IDENTIFIER EQUAL NUMBER ;
+MoreConsts : COMMA ConstDefinition MoreConsts | ;
+VarPart : VAR IDENTIFIER MoreVars SEMICOLON | ;
+MoreVars : COMMA IDENTIFIER MoreVars | ;
+Procedures : PROCEDURE IDENTIFIER SEMICOLON Block SEMICOLON Procedures | ;
+Statement : IDENTIFIER ASSIGN Expression
+          | CALL IDENTIFIER
+          | BEGIN Statement MoreStatements END
+          | IF Condition THEN Statement
+          | WHILE Condition DO Statement
+          | ;
+MoreStatements : SEMICOLON Statement MoreStatements | ;
+Condition : ODD Expression | Expression Relation Expression ;
+Relation : EQUAL | NE | LT | LE | GT | GE ;
+Expression : Sign Term MoreTerms ;
+Sign : PLUS | MINUS | ;
+MoreTerms : PLUS Term MoreTerms | MINUS Term MoreTerms | ;
+Term : Factor MoreFactors ;
+MoreFactors : STAR Factor MoreFactors | SLASH Factor MoreFactors | ;
+Factor : IDENTIFIER | NUMBER | LPAREN Expression RPAREN ;

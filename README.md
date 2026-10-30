@@ -91,7 +91,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (204 tests)
+The current source is verified with `swift build` and `swift test` (210 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -156,6 +156,7 @@ PL0Language (platform-neutral library)
 │ Incremental PL0Lexer → stable PL0Token[] + lexical diagnostics/metrics  │
 │ Incremental Reference LL · generated SLR(1) · Earley chart parsers       │
 │ Native LR trees · Earley packed forests · traces · parser-neutral CST    │
+│ Grammar Workbench JSON-lines session · watched grammar hot reload        │
 │ Comment-preserving formatter · lexical-scope compiler · bounded stack VM │
 │ Versioned LSP adapter → diagnostics/completion/definition/semantic tokens │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -315,6 +316,10 @@ The first implementation is a deliberately small vertical slice:
   accepts full or ranged LSP changes, rejects stale versions and provides
   parser plus semantic diagnostics, scope-aware completion, go-to-definition
   and semantic tokens. Positions are zero-based UTF-16 line/character pairs.
+* `GrammarWorkbenchHotReloadSession` speaks Grammar Workbench's published
+  schema-1 JSON-lines protocol without linking ModEdit to Workbench packages.
+  It retains one document session, sends UTF-16 edits and atomically activates
+  valid grammar replacements while keeping the last good revision on failure.
 * Parsing starts 120 ms after an edit on a detached task. A result is displayed
   only if its version still matches the document revision.
 
@@ -327,6 +332,28 @@ cost; Tokens shows lexer locations and classifications; CST shows grammatical
 nesting followed by the recovered terminal stream. The header reports snapshot
 version, token count, scanned UTF-16 length, lexer reuse, parser node/token reuse
 and lexer+parser time.
+
+### Grammar Workbench hot reload
+
+Build `grammar-workbench-service`, then launch ModEdit with these environment
+variables (absolute paths are recommended):
+
+```sh
+MODEDIT_GRAMMAR_WORKBENCH_SERVICE=/path/to/grammar-workbench-service \
+MODEDIT_PL0_GRAMMAR=/path/to/ModEdit/Examples/PL0.grammar \
+swift run ModEdit
+```
+
+The **Grammar WB** tab reports connection state, grammar and document
+revisions, parse status, token count and diagnostics. ModEdit polls the grammar
+file's modification date twice per second. A saved change triggers
+`sessionReplaceGrammar`; Grammar Workbench recompiles the grammar and reanalyzes
+the retained PL/0 document. Invalid replacements are reported but do not replace
+the active grammar. Editor changes are sent through `documentChange` as
+revisioned UTF-16 edits. **Reload Now** is available for an explicit refresh.
+
+The repository includes [Examples/PL0.grammar](Examples/PL0.grammar), validated
+against Grammar Workbench as 43 productions and 29 terminals.
 
 The source editor projects the current result directly onto the text: errors and
 warnings are underlined, missing tokens receive an orange insertion marker, and
@@ -590,6 +617,11 @@ Examples/squares.pl0                sample controlled-language program
   common missing/skipped-terminal model. Incremental reuse is therefore native
   for successful LR/Earley prefixes but recovery-region reuse remains future
   experimental work.
+* **Grammar Workbench is opt-in and out-of-process.** ModEdit does not build,
+  locate or launch an unspecified Workbench binary automatically. Both paths
+  must be supplied through environment variables. The bundled external grammar
+  currently skips whitespace and `//` comments; ModEdit's native lexer also
+  supports block comments.
 
 ## Roadmap
 

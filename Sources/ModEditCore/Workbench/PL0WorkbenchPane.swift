@@ -17,6 +17,9 @@ struct PL0WorkbenchPane: View {
     @State private var selectedEngine = ParserEngine.referenceLL
     @State private var session = PL0LanguageSession()
     @State private var runtime = RuntimeState.idle
+    @State private var grammarWorkbenchSession: GrammarWorkbenchHotReloadSession?
+    @State private var grammarWorkbenchStatus = GrammarWorkbenchHotReloadStatus.disconnected
+    @State private var grammarSource = ""
 
     private enum WorkbenchView: String, CaseIterable, Identifiable {
         case diagnostics = "Problems"
@@ -25,6 +28,7 @@ struct PL0WorkbenchPane: View {
         case syntaxTree = "CST"
         case comparison = "Compare"
         case trace = "Trace"
+        case grammarWorkbench = "Grammar WB"
         case runtime = "Run"
         var id: Self { self }
     }
@@ -60,6 +64,10 @@ struct PL0WorkbenchPane: View {
                 Button("Run", action: runProgram)
                     .controlSize(.small)
                     .disabled(isRunning)
+                if grammarWorkbenchStatus.state == .connected {
+                    Circle().fill(.green).frame(width: 7, height: 7)
+                        .help("Grammar Workbench connected")
+                }
                 if let result {
                     Text(summary(result))
                         .font(.caption.monospacedDigit())
@@ -93,6 +101,11 @@ struct PL0WorkbenchPane: View {
             session = PL0LanguageSession(engine: engine)
         }
         .onChange(of: revision) { _ in runtime = .idle }
+        .task { await watchGrammarWorkbench() }
+        .onDisappear {
+            let session = grammarWorkbenchSession
+            Task { await session?.disconnect() }
+        }
     }
 
     @ViewBuilder
@@ -188,8 +201,60 @@ struct PL0WorkbenchPane: View {
             comparisonContent(result)
         case .trace:
             traceContent(result)
+        case .grammarWorkbench:
+            grammarWorkbenchContent
         case .runtime:
             runtimeContent
+        }
+    }
+
+    @ViewBuilder
+    private var grammarWorkbenchContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(grammarWorkbenchTitle,
+                      systemImage: grammarWorkbenchStatus.state == .connected
+                        ? "bolt.horizontal.circle.fill" : "bolt.slash.circle")
+                    .font(.headline)
+                    .foregroundStyle(grammarWorkbenchStatus.state == .connected
+                                     ? Color.green : Color.secondary)
+                Text(grammarWorkbenchStatus.message)
+                    .font(.caption)
+                    .textSelection(.enabled)
+                if grammarWorkbenchStatus.state == .connected {
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+                        GridRow { Text("Grammar revision"); Text("\(grammarWorkbenchStatus.grammarRevision)") }
+                        GridRow { Text("Reloads"); Text("\(grammarWorkbenchStatus.reloadCount)") }
+                        GridRow { Text("Document revision"); Text(grammarWorkbenchStatus.documentRevision.map(String.init) ?? "—") }
+                        GridRow { Text("Parse status"); Text(grammarWorkbenchStatus.parseStatus ?? "—") }
+                        GridRow { Text("Tokens"); Text("\(grammarWorkbenchStatus.tokenCount)") }
+                        GridRow { Text("Diagnostics"); Text("\(grammarWorkbenchStatus.lexicalDiagnosticCount + grammarWorkbenchStatus.syntaxDiagnosticCount)") }
+                    }
+                    .font(.caption.monospacedDigit())
+                    Button("Reload Now") { Task { await reloadGrammarWorkbench() } }
+                        .controlSize(.small)
+                } else if Self.grammarWorkbenchConfiguration == nil {
+                    Text("Set MODEDIT_GRAMMAR_WORKBENCH_SERVICE to the grammar-workbench-service executable and MODEDIT_PL0_GRAMMAR to a Workbench grammar file, then reopen the document.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                Divider()
+                Text("Grammar replacements are compiled atomically by Grammar Workbench. A rejected file leaves the previous grammar revision active.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var grammarWorkbenchTitle: String {
+        switch grammarWorkbenchStatus.state {
+        case .disconnected: "Grammar Workbench not configured"
+        case .connecting: "Connecting to Grammar Workbench"
+        case .connected: "Grammar Workbench hot reload"
+        case .failed: "Grammar Workbench connection failed"
         }
     }
 
@@ -343,6 +408,70 @@ struct PL0WorkbenchPane: View {
         guard !Task.isCancelled, parsed.version == revision else { return }
         result = parsed
         publish(parsed)
+        if let grammarWorkbenchSession {
+            do {
+                grammarWorkbenchStatus = try await grammarWorkbenchSession.updateDocument(
+                    snapshot.text, revision: revision)
+            } catch {
+                grammarWorkbenchStatus = await grammarWorkbenchSession.status()
+            }
+        }
+    }
+
+    private static var grammarWorkbenchConfiguration: (service: URL, grammar: URL)? {
+        let environment = ProcessInfo.processInfo.environment
+        guard let service = environment["MODEDIT_GRAMMAR_WORKBENCH_SERVICE"],
+              let grammar = environment["MODEDIT_PL0_GRAMMAR"],
+              !service.isEmpty, !grammar.isEmpty else { return nil }
+        return (URL(fileURLWithPath: service), URL(fileURLWithPath: grammar))
+    }
+
+    private func watchGrammarWorkbench() async {
+        guard let configuration = Self.grammarWorkbenchConfiguration else { return }
+        grammarWorkbenchStatus = GrammarWorkbenchHotReloadStatus(
+            state: .connecting, message: "Launching Grammar Workbench service…")
+        do {
+            let transport = try GrammarWorkbenchProcessTransport(
+                executableURL: configuration.service)
+            let session = GrammarWorkbenchHotReloadSession(transport: transport)
+            grammarWorkbenchSession = session
+            grammarSource = try String(contentsOf: configuration.grammar,
+                                       encoding: .utf8)
+            grammarWorkbenchStatus = try await session.connect(
+                grammar: grammarSource, document: source(), revision: revision)
+            var modification = try modificationDate(configuration.grammar)
+            while !Task.isCancelled {
+                try await Task.sleep(for: .milliseconds(500))
+                let next = try modificationDate(configuration.grammar)
+                guard next != modification else { continue }
+                modification = next
+                await reloadGrammarWorkbench()
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            grammarWorkbenchStatus = GrammarWorkbenchHotReloadStatus(
+                state: .failed, message: String(describing: error))
+        }
+    }
+
+    private func reloadGrammarWorkbench() async {
+        guard let configuration = Self.grammarWorkbenchConfiguration,
+              let grammarWorkbenchSession else { return }
+        do {
+            let candidate = try String(contentsOf: configuration.grammar,
+                                       encoding: .utf8)
+            grammarWorkbenchStatus = try await grammarWorkbenchSession.reload(
+                grammar: candidate)
+            grammarSource = candidate
+        } catch {
+            grammarWorkbenchStatus = await grammarWorkbenchSession.status()
+        }
+    }
+
+    private func modificationDate(_ url: URL) throws -> Date {
+        let values = try url.resourceValues(forKeys: [.contentModificationDateKey])
+        return values.contentModificationDate ?? .distantPast
     }
 
     private var isRunning: Bool {
