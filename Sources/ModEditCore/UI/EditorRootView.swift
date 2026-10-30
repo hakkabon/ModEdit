@@ -23,7 +23,8 @@ struct EditorRootView: View {
                                      edit: model.lastSourceEdit,
                                      source: { model.textSnapshot() },
                                      publish: model.publishPL0Visualization,
-                                     reveal: model.revealSourceRange)
+                                     reveal: model.revealSourceRange,
+                                     replaceSource: model.requestSourceReplacement)
                 }
             }
             EditorStatusBar(model: model, formatID: formatID)

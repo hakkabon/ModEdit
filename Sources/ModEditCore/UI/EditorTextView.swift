@@ -104,6 +104,7 @@ extension EditorTextView {
         private var isSynchronizing = false
         private var displayedVisualization: PL0EditorVisualization?
         private var handledRevealID: UInt64 = 0
+        private var handledReplacementID: UInt64 = 0
 
         init(model: EditorModel) {
             self.model = model
@@ -151,6 +152,7 @@ extension EditorTextView {
 
         /// Called from `updateNSView`; starts a full pass when the format changed.
         func modelDidChange() {
+            fulfillSourceReplacementRequest()
             refreshParserVisualization()
             fulfillRevealRequest()
             guard textView != nil, fullPassFormatID != model.format.id else { return }
@@ -278,6 +280,18 @@ extension EditorTextView {
             textView.setSelectedRange(selection)
             textView.scrollRangeToVisible(selection)
             textView.window?.makeFirstResponder(textView)
+            model.acknowledgeRevealRequest(id: request.id)
+        }
+
+        func fulfillSourceReplacementRequest() {
+            guard let request = model.sourceReplacementRequest,
+                  request.id != handledReplacementID,
+                  let textView else { return }
+            handledReplacementID = request.id
+            let range = NSRange(location: 0, length: textView.textStorage?.length ?? 0)
+            textView.window?.makeFirstResponder(textView)
+            textView.insertText(request.text, replacementRange: range)
+            model.acknowledgeSourceReplacement(id: request.id)
         }
 
         private func clearParserVisualization() {

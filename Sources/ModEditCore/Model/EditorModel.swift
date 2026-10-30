@@ -19,6 +19,7 @@ final class EditorModel: ObservableObject {
     @Published private(set) var pl0Visualization: PL0EditorVisualization?
     /// Monotonic request used to reveal workbench items in the source editor.
     @Published private(set) var revealRequest: EditorRevealRequest?
+    @Published private(set) var sourceReplacementRequest: EditorSourceReplacementRequest?
     /// Whether the live-preview pane is shown. Owned here rather than in the
     /// view so the window's toolbar can toggle it.
     @Published var showPreview = true
@@ -28,6 +29,7 @@ final class EditorModel: ObservableObject {
     /// published separately because every edit also publishes `textRevision`.
     private(set) var lastSourceEdit: SourceEdit?
     private var nextRevealID: UInt64 = 0
+    private var nextReplacementID: UInt64 = 0
 
     let tabSize = 4
     /// The format catalogue shown in the status-bar picker.
@@ -52,6 +54,7 @@ final class EditorModel: ObservableObject {
         self.lastSourceEdit = nil
         self.pl0Visualization = nil
         self.revealRequest = nil
+        self.sourceReplacementRequest = nil
         document.setSaveObserver { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refreshDocumentState()
@@ -152,6 +155,21 @@ final class EditorModel: ObservableObject {
     func revealSourceRange(_ range: SourceRange) {
         nextRevealID &+= 1
         revealRequest = EditorRevealRequest(id: nextRevealID, range: range)
+    }
+
+    func acknowledgeRevealRequest(id: UInt64) {
+        if revealRequest?.id == id { revealRequest = nil }
+    }
+
+    func requestSourceReplacement(_ text: String) {
+        guard text != textSnapshot() else { return }
+        nextReplacementID &+= 1
+        sourceReplacementRequest = EditorSourceReplacementRequest(
+            id: nextReplacementID, text: text)
+    }
+
+    func acknowledgeSourceReplacement(id: UInt64) {
+        if sourceReplacementRequest?.id == id { sourceReplacementRequest = nil }
     }
 }
 

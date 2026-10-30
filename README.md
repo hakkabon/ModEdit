@@ -70,7 +70,8 @@ the right shows it as headings, emphasis, symbols and mathematics.
   UTF-16 tokenization and reference LL parsing with identity reuse, robust error
   recovery, a parser-neutral CST with source/missing/skipped terminals,
   Problems/Recovery/Tokens/CST views, reuse metrics and source-editor
-  visualization of diagnostics and repairs.
+  visualization of diagnostics and repairs. A deterministic formatter and
+  bounded bytecode VM turn the workbench into a small executable PL/0 IDE.
 
 ## Requirements
 
@@ -90,7 +91,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (172 tests)
+The current source is verified with `swift build` and `swift test` (184 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -154,6 +155,7 @@ PL0Language (platform-neutral library)
 │ SourceSnapshot/Edit (versioned UTF-16 ranges)                            │
 │ Incremental PL0Lexer → stable PL0Token[] + lexical diagnostics/metrics  │
 │ Incremental reference LL parser → parser-neutral CST + recovery/metrics │
+│ Comment-preserving formatter · lexical-scope compiler · bounded stack VM │
 └──────────────────────────────────────────────────────────────────────────┘
                 │
                 ▼
@@ -166,7 +168,7 @@ ModEditCore (library)
 │               ModEditDocument (NSDocument: read/write/save completion)    │
 │               ModEditWindowController (window, toolbar, SwiftUI hosting) │
 │ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
-│                       └ PL0WorkbenchPane (Problems/Tokens/CST)            │
+│                       └ PL0WorkbenchPane (Problems/CST/Format/Run)        │
 │                 status bar       └ LineNumberRulerView       (WKWebView) │
 │                    │                  │  ▲ edits           (WKWebView)    │
 │ Model         EditorModel (@MainActor, @Published revision/format)       │
@@ -299,6 +301,11 @@ The first implementation is a deliberately small vertical slice:
   capabilities. Diagnostics carry expected terminal sets, while compound
   statements and expressions synchronize past bad tokens so later syntax is
   retained instead of being discarded in a cascade.
+* `PL0Formatter` rejects recovered syntax, preserves `//` and `/* ... */`
+  comments, emits deterministic two-space indentation and is idempotent.
+* `PL0Compiler` lowers the controlled grammar to lexical-addressed bytecode.
+  `PL0VirtualMachine` executes integer arithmetic, conditions, loops, nested
+  procedures and recursion with checked arithmetic and an instruction limit.
 * Parsing starts 120 ms after an edit on a detached task. A result is displayed
   only if its version still matches the document revision.
 
@@ -316,6 +323,13 @@ or saved bytes. Clicking a Problem, Recovery event or Token reveals and selects
 its UTF-16 range in the editor. The status bar reports problem and repair counts.
 Every visualization is tagged with its document version; edits remove the old
 markers immediately and late parser results are rejected.
+
+**Format** rewrites the document through the live text view, so the operation is
+an ordinary dirty, undoable editor change. **Run** compiles and executes on a
+detached task. The Run tab reports global values, instruction count, maximum
+operand-stack depth and a source-linked bytecode listing. Syntax/semantic
+failures, division by zero, integer overflow and the instruction safety limit
+are displayed as controlled failures rather than crashing or blocking the UI.
 
 For an edit, tokenization keeps tokens strictly before a safe token boundary,
 then scans from that boundary until a newly produced token aligns with the
@@ -549,6 +563,9 @@ Examples/squares.pl0                sample controlled-language program
   token plus missing and skipped recovery terminals, but whitespace and comments
   are currently discarded by the lexer. A future lossless-token mode can add
   trivia without changing the grammatical node or recovery contracts.
+* **The PL/0 VM is deliberately small.** Values are checked machine integers;
+  the controlled grammar has no input/output statement, so execution results
+  currently expose final global variables rather than a console stream.
 * **Reference parser only.** LL/LR/Earley/CYK/RNGLR adapters and parse forests
   have not yet been connected to the parser-neutral workbench model. The
   reference engine is deliberately deterministic and does not represent
@@ -562,8 +579,9 @@ Examples/squares.pl0                sample controlled-language program
 2. **Finer incremental parsing.** Add declaration-level reuse, dependency-aware
    invalidation, recovered-region reuse experiments and randomized differential
    testing of every incremental result against the complete reference parse.
-3. **PL/0 language service.** Add symbols/scopes, formatter, bytecode VM and a
-   version-safe LSP server for diagnostics, completion and semantic tokens.
+3. **PL/0 language service.** Reuse the compiler's lexical scopes in a
+   version-safe LSP server for diagnostics, completion, definitions and
+   semantic tokens.
 4. **Rendering inside the editor.** Introduce a
    platform-neutral `TextRenderer` that emits *runs tiling the source exactly*
    (hidden markup = zero-width run) with a two-way source↔display offset map;

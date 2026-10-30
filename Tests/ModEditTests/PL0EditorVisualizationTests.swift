@@ -95,6 +95,34 @@ struct PL0EditorVisualizationTests {
         #expect(harness.textView.selectedRange().length == 0)
     }
 
+    @Test func formatterReplacementFlowsThroughTheLiveTextViewOnce() throws {
+        let source = "var x;begin x:=1 end."
+        let harness = makeHarness(text: source)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = harness.textView
+        window.makeFirstResponder(harness.textView)
+        let formatted = try PL0Formatter().format(source)
+
+        harness.model.requestSourceReplacement(formatted)
+        harness.coordinator.modelDidChange()
+        let generation = harness.model.textRevision
+
+        #expect(harness.textView.string == formatted)
+        #expect(harness.document.content.text == formatted)
+        #expect(harness.model.isDocumentDirty)
+        #expect(harness.model.sourceReplacementRequest == nil)
+
+        harness.coordinator.modelDidChange()
+        #expect(harness.model.textRevision == generation)
+
+        let undoManager = try #require(harness.textView.undoManager)
+        #expect(undoManager.canUndo)
+        undoManager.undo()
+        #expect(harness.textView.string == source)
+        #expect(harness.document.content.text == source)
+    }
+
     private func makeHarness(text: String) -> Harness {
         let document = EditorDocument()
         document.setText(text)
@@ -102,12 +130,15 @@ struct PL0EditorVisualizationTests {
         model.setFormat(PL0Format())
         let coordinator = EditorTextView.Coordinator(model: model)
         let textView = NSTextView(frame: .zero)
+        textView.allowsUndo = true
         textView.string = text
         coordinator.attach(to: textView)
-        return Harness(model: model, coordinator: coordinator, textView: textView)
+        return Harness(document: document, model: model,
+                       coordinator: coordinator, textView: textView)
     }
 
     private struct Harness {
+        let document: EditorDocument
         let model: EditorModel
         let coordinator: EditorTextView.Coordinator
         let textView: NSTextView

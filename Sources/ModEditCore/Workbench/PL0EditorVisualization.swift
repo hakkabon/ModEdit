@@ -58,3 +58,8 @@ struct EditorRevealRequest: Equatable {
     let id: UInt64
     let range: SourceRange
 }
+
+struct EditorSourceReplacementRequest: Equatable {
+    let id: UInt64
+    let text: String
+}
