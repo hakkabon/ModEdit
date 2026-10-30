@@ -120,6 +120,20 @@ struct DocumentSaveTests {
         #expect(written == original)
     }
 
+    @Test func readAndWritePreserveUTF16ByteOrderAndBOM() throws {
+        let document = makeDocument()
+        let body = try #require("héllo".data(using: .utf16BigEndian))
+        let original = Data([0xFE, 0xFF]) + body
+
+        try document.read(from: original, ofType: UTType.plainText.identifier)
+
+        #expect(document.buffer.content.text == "héllo")
+        #expect(document.buffer.content.encoding == .utf16BigEndian)
+        #expect(document.buffer.content.byteOrderMark == .utf16BigEndian)
+        #expect(!document.buffer.content.hasUTF8BOM)
+        #expect(try document.data(ofType: UTType.plainText.identifier) == original)
+    }
+
     @Test func readSelectsTheMarkdownFormatFromTheDocumentType() throws {
         let document = makeDocument()
 

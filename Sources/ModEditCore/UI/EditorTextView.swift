@@ -29,6 +29,11 @@ struct EditorTextView: NSViewRepresentable {
         textView.isAutomaticDataDetectionEnabled = false
         textView.smartInsertDeleteEnabled = false
 
+        let theme = context.coordinator.theme
+        textView.drawsBackground = true
+        textView.backgroundColor = theme.backgroundColor
+        textView.currentLineColor = theme.currentLineColor
+        textView.insertionPointColor = theme.insertionPointColor
         textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
         let paragraphStyle = NSMutableParagraphStyle()
         let spaceWidth = textView.font?.maximumAdvancement.width ?? 8
@@ -49,7 +54,8 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.documentView = textView
         let ruler = LineNumberRulerView(textView: textView,
                                         scrollView: scrollView,
-                                        lineSource: model)
+                                        lineSource: model,
+                                        theme: theme)
         scrollView.verticalRulerView = ruler
         ruler.refreshLineCount()
         scrollView.hasVerticalRuler = true
@@ -80,7 +86,7 @@ extension EditorTextView {
 
         private let model: EditorModel
         private weak var textView: NSTextView?
-        private let theme = EditorTheme()
+        let theme = EditorTheme()
 
         /// Highlighter cache: compiling the regular expressions is expensive,
         /// so build once per format instead of once per pass.

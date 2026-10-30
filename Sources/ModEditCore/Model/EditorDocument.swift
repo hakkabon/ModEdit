@@ -26,8 +26,10 @@ final class EditorDocument: @unchecked Sendable {
     struct Content: Sendable {
         var text: String
         var encoding: String.Encoding
-        var hasUTF8BOM: Bool
+        var byteOrderMark: TextIO.ByteOrderMark?
         var format: any DocumentFormat
+
+        var hasUTF8BOM: Bool { byteOrderMark == .utf8 }
     }
 
     /// An immutable copy of exactly what must be written to disk.
@@ -38,8 +40,10 @@ final class EditorDocument: @unchecked Sendable {
     struct Snapshot: Sendable {
         let text: String
         let encoding: String.Encoding
-        let hasUTF8BOM: Bool
+        let byteOrderMark: TextIO.ByteOrderMark?
         let generation: UInt64
+
+        var hasUTF8BOM: Bool { byteOrderMark == .utf8 }
     }
 
     private let lock = NSLock()
@@ -48,7 +52,7 @@ final class EditorDocument: @unchecked Sendable {
     let registry: FormatRegistry
     private var textStorage: NSMutableString
     private var encoding: String.Encoding
-    private var hasUTF8BOM: Bool
+    private var byteOrderMark: TextIO.ByteOrderMark?
     private var format: any DocumentFormat
     private var generation: UInt64 = 0
     private var savedGeneration: UInt64 = 0
@@ -61,7 +65,7 @@ final class EditorDocument: @unchecked Sendable {
     var content: Content {
         lock.withLock {
             Content(text: String(textStorage), encoding: encoding,
-                    hasUTF8BOM: hasUTF8BOM, format: format)
+                    byteOrderMark: byteOrderMark, format: format)
         }
     }
 
@@ -107,7 +111,7 @@ final class EditorDocument: @unchecked Sendable {
         self.registry = registry
         textStorage = NSMutableString()
         encoding = .utf8
-        hasUTF8BOM = false
+        byteOrderMark = nil
         format = registry.fallback
         lineIndex = LineIndex()
     }
@@ -121,7 +125,7 @@ final class EditorDocument: @unchecked Sendable {
         lock.withLock {
             Snapshot(text: String(textStorage),
                      encoding: encoding,
-                     hasUTF8BOM: hasUTF8BOM,
+                     byteOrderMark: byteOrderMark,
                      generation: generation)
         }
     }
@@ -136,7 +140,7 @@ final class EditorDocument: @unchecked Sendable {
         let result = lock.withLock { () -> (observer: (@Sendable (UInt64) -> Void)?, generation: UInt64) in
             textStorage.setString(decoded.text)
             encoding = decoded.encoding
-            hasUTF8BOM = decoded.hasUTF8BOM
+            byteOrderMark = decoded.byteOrderMark
             format = newFormat
             lineIndex.rebuild(from: decoded.text)
             generation &+= 1

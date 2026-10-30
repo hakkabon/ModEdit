@@ -112,6 +112,7 @@ struct HTMLPreviewTests {
         #expect(html.contains("<head><meta http-equiv=\"Content-Security-Policy\""))
         #expect(html.contains("default-src 'none'"))
         #expect(html.contains("form-action 'none'"))
+        #expect(html.contains("color-scheme: light dark"))
         #expect(html.contains("<title>T</title>"))
         #expect(html.contains("<p>x</p>"))
     }

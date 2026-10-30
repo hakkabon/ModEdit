@@ -73,7 +73,7 @@ enum PreviewPage {
     /// without breaking full documents. Injecting the policy as early as
     /// possible keeps subsequent subresource loads and inline scripts inert.
     static func hardenHTMLDocument(_ source: String) -> String {
-        let meta = policyMeta
+        let meta = policyMeta + colorSchemeStyle
 
         if let head = source.range(of: #"(?i)<head\b[^>]*>"#,
                                    options: .regularExpression) {
@@ -101,4 +101,8 @@ enum PreviewPage {
 
     private static let policyMeta =
         #"<meta http-equiv="Content-Security-Policy" content="\#(contentSecurityPolicy)">"#
+
+    /// User HTML documents are shown as written, but native controls and the
+    /// default canvas should still follow the system appearance.
+    private static let colorSchemeStyle = "<style>:root { color-scheme: light dark; }</style>"
 }

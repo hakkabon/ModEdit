@@ -274,9 +274,10 @@ struct HighlightingTests {
 
         let ns = text as NSString
         let inside = ns.range(of: "# not a heading")
-        #expect(storage.attribute(.foregroundColor,
-                                  at: inside.location,
-                                  effectiveRange: nil) as? NSColor == .systemPink)
+        #expect(sameColor(storage.attribute(.foregroundColor,
+                                             at: inside.location,
+                                             effectiveRange: nil) as? NSColor,
+                           EditorTheme.light.color(for: .code)))
     }
 
     @MainActor
@@ -290,15 +291,18 @@ struct HighlightingTests {
         applyLineChunks(with: highlighter, to: storage, state: &state)
 
         let ns = text as NSString
-        #expect(storage.attribute(.foregroundColor,
-                                  at: ns.range(of: "two").location,
-                                  effectiveRange: nil) as? NSColor == .secondaryLabelColor)
-        #expect(storage.attribute(.foregroundColor,
-                                  at: ns.range(of: "<div").location,
-                                  effectiveRange: nil) as? NSColor == .systemBlue)
-        #expect(storage.attribute(.foregroundColor,
-                                  at: ns.range(of: "\"a > b\"").location,
-                                  effectiveRange: nil) as? NSColor == .systemOrange)
+        #expect(sameColor(storage.attribute(.foregroundColor,
+                                             at: ns.range(of: "two").location,
+                                             effectiveRange: nil) as? NSColor,
+                           EditorTheme.light.color(for: .comment)))
+        #expect(sameColor(storage.attribute(.foregroundColor,
+                                             at: ns.range(of: "<div").location,
+                                             effectiveRange: nil) as? NSColor,
+                           EditorTheme.light.color(for: .tag)))
+        #expect(sameColor(storage.attribute(.foregroundColor,
+                                             at: ns.range(of: "\"a > b\"").location,
+                                             effectiveRange: nil) as? NSColor,
+                           EditorTheme.light.color(for: .string)))
     }
 
     @MainActor
@@ -368,9 +372,10 @@ struct HighlightingTests {
         // The nearest checkpoint is inside the fence, so its open-fence state
         // (and the fence's original start) must have been carried across.
         #expect(highlighter.lastRecoveryStart > 0)
-        #expect(storage.attribute(.foregroundColor,
-                                  at: inside.location,
-                                  effectiveRange: nil) as? NSColor == .systemPink)
+        #expect(sameColor(storage.attribute(.foregroundColor,
+                                             at: inside.location,
+                                             effectiveRange: nil) as? NSColor,
+                           EditorTheme.light.color(for: .code)))
     }
 
     @MainActor
@@ -476,11 +481,17 @@ struct HighlightingTests {
         let storage = NSTextStorage(string: "# Title\nplain")
 
         highlighter.apply(to: storage, in: NSRange(location: 0, length: 1))
-        #expect(storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .systemBlue)
+        #expect(sameColor(storage.attribute(.foregroundColor,
+                                             at: 0,
+                                             effectiveRange: nil) as? NSColor,
+                           EditorTheme.light.color(for: .heading)))
         #expect(storage.attribute(.foregroundColor, at: 9, effectiveRange: nil) == nil)
 
         highlighter.apply(to: storage, in: NSRange(location: 0, length: storage.length))
-        #expect(storage.attribute(.foregroundColor, at: 9, effectiveRange: nil) as? NSColor == .textColor)
+        #expect(sameColor(storage.attribute(.foregroundColor,
+                                             at: 9,
+                                             effectiveRange: nil) as? NSColor,
+                           EditorTheme.light.text))
     }
 
     @MainActor
@@ -493,8 +504,10 @@ struct HighlightingTests {
         // the deletion still needs to be coloured.
         highlighter.apply(to: storage, in: NSRange(location: 7, length: 0))
 
-        #expect(storage.attribute(.foregroundColor, at: 6, effectiveRange: nil) as? NSColor
-            == .systemBlue)
+        #expect(sameColor(storage.attribute(.foregroundColor,
+                                             at: 6,
+                                             effectiveRange: nil) as? NSColor,
+                           EditorTheme.light.color(for: .heading)))
     }
 
     @MainActor
@@ -504,5 +517,24 @@ struct HighlightingTests {
         let storage = NSTextStorage(string: "short")
         highlighter.apply(to: storage, in: NSRange(location: 500, length: 500))
         highlighter.apply(to: NSTextStorage(string: ""), in: NSRange(location: 3, length: 3))
+    }
+
+    /// Resolve adaptive colours under a fixed light appearance so a test run in
+    /// a dark system appearance compares against the same palette.
+    private func sameColor(_ actual: NSColor?, _ expected: NSColor) -> Bool {
+        guard let actual else { return false }
+        let appearance = NSAppearance(named: .aqua)!
+        var actualComponents: [CGFloat] = []
+        var expectedComponents: [CGFloat] = []
+        appearance.performAsCurrentDrawingAppearance {
+            actualComponents = components(actual)
+            expectedComponents = components(expected)
+        }
+        return zip(actualComponents, expectedComponents).allSatisfy { abs($0 - $1) < 0.001 }
+    }
+
+    private func components(_ color: NSColor) -> [CGFloat] {
+        let srgb = color.usingColorSpace(.sRGB) ?? color
+        return [srgb.redComponent, srgb.greenComponent, srgb.blueComponent, srgb.alphaComponent]
     }
 }

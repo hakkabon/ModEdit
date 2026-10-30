@@ -109,7 +109,7 @@ final class ModEditDocument: NSDocument {
         unblockUserInteraction()
         return try TextIO.encode(snapshot.text,
                                  as: snapshot.encoding,
-                                 withUTF8BOM: snapshot.hasUTF8BOM)
+                                 byteOrderMark: snapshot.byteOrderMark)
     }
 
     override func write(to url: URL,
@@ -121,7 +121,7 @@ final class ModEditDocument: NSDocument {
 
         let data = try TextIO.encode(snapshot.text,
                                      as: snapshot.encoding,
-                                     withUTF8BOM: snapshot.hasUTF8BOM)
+                                     byteOrderMark: snapshot.byteOrderMark)
         // `NSDocument.writeSafely` also performs a safe replace; this keeps the
         // inner write atomic as well, so a crash cannot leave a partial file.
         try data.write(to: url, options: .atomic)

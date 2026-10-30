@@ -35,8 +35,10 @@ the right shows it as headings, emphasis, symbols and mathematics.
   text "corrections" disabled** (smart quotes, dashes, replacement), because this
   is a source editor.
 * Adaptive **line-number gutter** with a distinct background, plus synchronized
-  very-light-gray current-line highlighting in the gutter and editor. The bottom status bar
-  shows the one-based cursor position, active text format, tab size and a
+  current-line highlighting in the gutter and editor. A
+  soft-wrapped logical line is numbered once; its continuation rows stay blank,
+  and the current-line highlight spans every visual fragment. The bottom status
+  bar shows the one-based cursor position, active text format, tab size and a
   high-contrast clean/dirty document indicator.
 * **Syntax colouring** for Markdown, LaTeX and HTML: debounced, incremental
   (only the edited lines and only those bytes are copied), chunked on load so
@@ -52,10 +54,14 @@ the right shows it as headings, emphasis, symbols and mathematics.
     operators (`\alpha` → α), super/subscripts (`x^2`, `x_{i}`), comments hidden.
   * *HTML* — your page as written, with scripts, frames and remote loads
     disabled by the preview policy.
-* **Encoding-faithful I/O**: UTF-8 (with/without BOM), UTF-16 and detected legacy
-  encodings are written back the way they were read; saving never silently
-  replaces characters.
-* Light/dark mode aware (dynamic system colours, `color-scheme` in the preview).
+* **Encoding-faithful I/O**: UTF-8 (with/without BOM), UTF-16 little- and
+  big-endian (with BOM, plus unambiguous BOM-less ASCII/Latin text), and
+  detected legacy encodings are written back with the same encoding. UTF-16
+  byte order and the presence or absence of a BOM are preserved, so saving
+  never silently replaces characters or changes the file's byte layout.
+* Light/dark mode aware: `EditorTheme` has explicit light and dark palettes for
+  text, syntax, gutter and current-line colours; preview pages use
+  `color-scheme` so they follow the system appearance too.
 
 ## Requirements
 
@@ -71,11 +77,13 @@ swift test                      # macOS only: the module uses AppKit/SwiftUI/Web
 
 scripts/make-app.sh             # builds .build/.../ModEdit.app (debug)
 scripts/make-app.sh release     # release build
+scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zip
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (120 tests)
-using Swift 6.1.2 and the macOS 15.5 SDK. CI repeats both commands on every
+The current source is verified with `swift build` and `swift test` (134 tests)
+using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
+release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
 see [Large-file benchmark](#large-file-benchmark).
 
@@ -286,6 +294,7 @@ A new preview is a `PreviewRenderer` returning an HTML string; wrap bodies with
 ```
 Package.swift
 scripts/make-app.sh                 build ModEdit.app
+scripts/package-release.sh          build and zip the release app
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 Sources/
   ModEditApp/                       @main entry point, Info.plist
@@ -299,7 +308,7 @@ Sources/
     Preview/                        PreviewRenderer, MarkdownHTML, LaTeXHTML, escaping, page
     UI/                             root/status bar, editor/gutter, preview
 Tests/ModEditTests/                 Swift Testing suites
-.github/workflows/ci.yml            macOS build + test
+.github/workflows/ci.yml            debug + release build, tests and packaged artifact
 ```
 
 ## Design decisions
@@ -307,6 +316,19 @@ Tests/ModEditTests/                 Swift Testing suites
 * **Semantic tokens, not AppKit attributes, in formats.** Formats say *what* text
   is (`TokenKind`); `EditorTheme` says how it looks. Formats become pure,
   `Sendable` and testable; theming is one file.
+* **One adaptive theme, explicit light and dark palettes.** `EditorTheme` builds
+  dynamic `NSColor`s from both palettes, so AppKit resolves the right colours
+  when it draws and an appearance switch needs no re-highlighting. The editor
+  background, current-line fill, gutter, caret and every token kind come from
+  the same theme.
+* **Soft wrapping is a layout concern, not a document concern.** Line numbers
+  come from the shared logical `LineIndex`, so a wrapped line is numbered once.
+  Current-line drawing asks TextKit for every visual fragment of the caret's
+  logical line instead of assuming one fragment per line.
+* **Encoding and BOM are part of the document snapshot.** Saving replays the
+  exact UTF-16 byte order and BOM state that was read. UTF-16 is decoded before
+  UTF-8 when its zero-byte pattern is unambiguous, because ASCII UTF-16 is also
+  valid UTF-8 containing NULs.
 * **Immutable registry, injected where it is used.** No registration step to
   forget or race. `EditorDocument`, `EditorModel`, `ModEditDocument` and the
   status-bar picker take a `FormatRegistry`, so tests can supply a small one
@@ -389,6 +411,10 @@ Tests/ModEditTests/                 Swift Testing suites
   (about 115 ms on a 50 MB Markdown file). Subsequent passes reuse the new
   checkpoint. The initial full pass over that file takes about 18 s, in
   cancellable chunks that yield so editing stays responsive.
+* **BOM-less UTF-16 detection is conservative.** Files without a BOM are
+  recognised when their zero-byte pattern is unambiguous (typically ASCII or
+  Latin text). Other UTF-16 files should carry a BOM; otherwise they may be
+  interpreted as a legacy single-byte encoding.
 * **Status columns use UTF-16 offsets.** This matches AppKit and LSP position
   accounting, but a grapheme such as a composed emoji can occupy several columns.
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
@@ -407,7 +433,7 @@ Tests/ModEditTests/                 Swift Testing suites
    typeset maths; expand stateful highlighting to embedded languages.
 4. **Relative resources in the preview**, using the document URL as the web
    view's base URL.
-5. User-selectable themes, font and size settings; line numbers; soft-wrap toggle.
+5. User-selectable themes, font and size settings; soft-wrap toggle.
 6. Export (HTML/PDF) from the preview.
 
 ## Contributing

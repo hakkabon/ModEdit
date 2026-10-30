@@ -28,6 +28,7 @@ struct PreviewPane: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
+        webView.underPageBackgroundColor = .textBackgroundColor
         return webView
     }
 

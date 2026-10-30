@@ -8,9 +8,26 @@ on:
   pull_request:
 
 jobs:
-  macos:
+  test:
+    name: Debug build and tests
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - run: swift --version
       - run: swift build
       - run: swift test
+
+  release:
+    name: Release build and package
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift build -c release
+      - run: swift test -c release
+      - run: scripts/package-release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ModEdit-release
+          path: dist/*.zip
+          if-no-files-found: error

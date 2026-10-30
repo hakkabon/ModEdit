@@ -22,7 +22,7 @@ struct LargeFileBenchmarkTests {
     func benchmark(megabytes: Int) throws {
         let text = Self.makeDocument(megabytes: megabytes)
         let byteCount = text.lengthOfBytes(using: .utf8)
-        let decoded = TextIO.Decoded(text: text, encoding: .utf8, hasUTF8BOM: false)
+        let decoded = TextIO.Decoded(text: text, encoding: .utf8, byteOrderMark: nil)
         let document = EditorDocument()
         let format = MarkdownFormat()
 
