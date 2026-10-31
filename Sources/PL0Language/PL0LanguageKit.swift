@@ -298,7 +298,7 @@ extension PL0TokenKind {
         $0 != .invalid && $0 != .endOfFile
     }
 
-    fileprivate var grammarName: String {
+    var grammarName: String {
         switch self {
         case .identifier: "IDENTIFIER"
         case .number: "NUMBER"

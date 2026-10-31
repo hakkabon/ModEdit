@@ -367,12 +367,19 @@ The first implementation is a deliberately small vertical slice:
   schema-1 JSON-lines protocol without linking ModEdit to Workbench packages.
   It retains one document session, sends UTF-16 edits and atomically activates
   valid grammar replacements while keeping the last good revision on failure.
+* `PL0EcosystemParserSession` sends the same authoritative grammar productions
+  and current significant-token stream to Grammar-REPL's schema-5 conformance
+  executable. That boundary runs the actual LL(1), LR(0), SLR, LALR, LR(1),
+  Earley, Earley-table SL/EL, CYK and RNGLR packages without loading duplicate
+  `Grammar`, `Lexer` or `Parser` modules into the editor process.
 * Parsing starts 120 ms after an edit on a detached task. A result is displayed
   only if its version still matches the document revision.
 
-The parser menu switches engines for the current document. The **Compare** tab
-shows acceptance, consumed tokens and LR action/stack or Earley chart-item
-metrics side by side. The **Trace** tab exposes LR shift/reduce/state-stack
+The parser menu switches the three editor-native engines for the current
+document. The **Compare** tab shows their acceptance and metrics side by side,
+and can run the ten actual ecosystem engines when the Grammar-REPL adapter is
+configured. It deliberately reports disagreements rather than coercing them
+into the reference result. The **Trace** tab exposes LR shift/reduce/state-stack
 events or Earley predict/scan/complete/chart events, including incremental
 reuse. The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
 cost; Tokens shows lexer locations and classifications; CST shows grammatical
@@ -402,6 +409,31 @@ file's modification date twice per second. A saved change triggers
 the retained PL/0 document. Invalid replacements are reported but do not replace
 the active grammar. Editor changes are sent through `documentChange` as
 revisioned UTF-16 edits. **Reload Now** is available for an explicit refresh.
+
+### Actual ecosystem parser engines
+
+Build Grammar-REPL's non-interactive adapter and launch ModEdit with its path:
+
+```sh
+cd /path/to/Grammar-REPL
+swift build --product grammar-repl-conformance
+
+cd /path/to/ModEdit
+MODEDIT_GRAMMAR_REPL_CONFORMANCE=/path/to/Grammar-REPL/.build/debug/grammar-repl-conformance \
+swift run ModEdit
+```
+
+Open the **Compare** tab and choose **Run actual engines**. Each row reports
+acceptance, derivation count, available forest-node count, ambiguity and
+production-identity evidence. The run is revision-bound: editing the document
+clears it, and a late result for an older revision is discarded.
+
+The executable is an intentional process boundary. Grammar-REPL already owns a
+coherent resolved set of the ecosystem packages; directly adding every sibling
+package to ModEdit would introduce multiple independently resolved copies of
+their shared modules. The schema-5 JSON corpus keeps that dependency graph out
+of the GUI while preserving the authoritative PL/0 grammar and token sequence.
+See [Ecosystem Parser Integration](Docs/EcosystemParserIntegration.md).
 
 The authoritative grammar is
 [PL0.grammar](Sources/PL0Language/Resources/PL0.grammar), compiled as a SwiftPM
@@ -731,6 +763,14 @@ Examples/squares.pl0                sample controlled-language program
   must be supplied through environment variables. The bundled external grammar
   currently skips whitespace and `//` comments; ModEdit's native lexer also
   supports block comments.
+* **Ecosystem engine comparison is opt-in and recognition-oriented.** It needs
+  a separately built `grammar-repl-conformance` executable. The external
+  engines currently return portable acceptance, derivation, forest and replay
+  summaries; their native CSTs, recovery details and complete traces are not
+  yet projected into the editor. The real PL/0 baseline currently exposes a
+  useful disagreement: CYK and LR(0) reject the valid sample accepted by the
+  other eight engines. LR(0) is not expected to handle this grammar; CYK is a
+  tracked normalization/integration investigation.
 
 ## Roadmap
 
@@ -746,10 +786,17 @@ its fingerprinted identity, Workbench drift is visible, and lossless trivia is
 available to formatters and future refactorings. Grammar-Macros generation and
 adoption by sibling repositories remain cross-repository follow-up work.
 
-1. **Parser comparison laboratory.** Extend the connected LL, SLR(1) and Earley
-   traces with stepping and forest visualization; then connect Earley-table,
-   CYK and RNGLR with recovery-cost and full-versus-incremental differential
-   tests.
+The third phase is complete at the comparison boundary: ModEdit can execute the
+actual ten-engine family owned by Grammar-REPL from the single-source PL/0
+artifact, validate canonical engine membership, preserve forest/replay evidence
+and surface differential outcomes in the UI. The next step is to enrich the
+portable result schema so native trees, detailed recovery and algorithm traces
+can flow back into shared experiment bundles.
+
+1. **Parser comparison laboratory.** Add stepping and forest visualization to
+   the connected native traces; project the now-connected Earley-table, CYK and
+   RNGLR results into recovery-cost and full-versus-incremental differential
+   experiment bundles.
 2. **Finer incremental parsing.** Add declaration-level reuse, dependency-aware
    invalidation, recovered-region reuse experiments, mutation minimization and
    grammar-aware mutation operators. The seeded raw-edit differential campaign

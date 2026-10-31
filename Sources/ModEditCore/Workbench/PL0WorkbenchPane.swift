@@ -20,6 +20,7 @@ struct PL0WorkbenchPane: View {
     @State private var grammarWorkbenchSession: GrammarWorkbenchHotReloadSession?
     @State private var grammarWorkbenchStatus = GrammarWorkbenchHotReloadStatus.disconnected
     @State private var grammarSource = ""
+    @State private var ecosystemComparison = EcosystemComparisonState.idle
 
     private enum WorkbenchView: String, CaseIterable, Identifiable {
         case diagnostics = "Problems"
@@ -42,6 +43,13 @@ struct PL0WorkbenchPane: View {
 
     private enum FormatOutcome: Sendable {
         case success(String)
+        case failure(String)
+    }
+
+    private enum EcosystemComparisonState: Sendable {
+        case idle
+        case running
+        case success(EcosystemParserComparison)
         case failure(String)
     }
 
@@ -98,9 +106,13 @@ struct PL0WorkbenchPane: View {
         .onChange(of: selectedEngine) { engine in
             result = nil
             runtime = .idle
+            ecosystemComparison = .idle
             session = PL0LanguageSession(engine: engine)
         }
-        .onChange(of: revision) { _ in runtime = .idle }
+        .onChange(of: revision) { _ in
+            runtime = .idle
+            ecosystemComparison = .idle
+        }
         .task { await watchGrammarWorkbench() }
         .onDisappear {
             let session = grammarWorkbenchSession
@@ -285,14 +297,79 @@ struct PL0WorkbenchPane: View {
                 comparisonRow(name: "Earley Chart", accepted: earley.accepted,
                               detail: "\(earley.configurationCount) items · chart max \(earley.maximumFrontierSize) · consumed \(earley.consumedTokenCount)")
                 Divider()
+                ecosystemComparisonContent
+                Divider()
                 Text("Selected engine: \(result.parser.displayName)")
                     .font(.caption.monospaced())
-                Text("LR and Earley perform independent recognition. Their CST and recovery output is normalized through the reference adapter so results can be compared structurally.")
+                Text("The in-process LR and Earley engines provide editor CST, recovery, reuse and traces. The ecosystem comparison runs the actual external parser packages through Grammar-REPL's portable conformance adapter.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private var ecosystemComparisonContent: some View {
+        HStack {
+            Text("Ecosystem engines").font(.headline)
+            Spacer()
+            if Self.ecosystemParserExecutable != nil {
+                Button("Run actual engines", action: runEcosystemComparison)
+                    .controlSize(.small)
+                    .disabled(isComparingEcosystem)
+            }
+        }
+        switch ecosystemComparison {
+        case .idle:
+            if Self.ecosystemParserExecutable == nil {
+                Text("Set MODEDIT_GRAMMAR_REPL_CONFORMANCE to the grammar-repl-conformance executable to compare the authoritative PL/0 grammar with LL(1), the LR family, Earley variants, CYK and RNGLR.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            } else {
+                Text("Ready to run ten actual ecosystem parser engines against this revision.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .running:
+            ProgressView("Running ten parser engines…")
+                .controlSize(.small)
+        case let .failure(message):
+            Label(message, systemImage: "xmark.octagon.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+        case let .success(comparison):
+            Text("Agreement: \(comparison.agreement.rawValue) · grammar \(comparison.grammarFingerprint)")
+                .font(.caption.monospaced())
+                .foregroundStyle(comparison.agreement == .divergent ? Color.orange : Color.secondary)
+            ForEach(comparison.engines) { observation in
+                ecosystemComparisonRow(observation)
+            }
+        }
+    }
+
+    private func ecosystemComparisonRow(_ observation: EcosystemParserObservation) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: observation.accepted
+                  ? "checkmark.circle.fill"
+                  : observation.supported ? "xmark.circle.fill" : "minus.circle.fill")
+                .foregroundStyle(observation.accepted
+                                 ? Color.green : observation.supported ? Color.red : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(observation.parser.displayName).font(.subheadline.bold())
+                if observation.supported {
+                    Text(ecosystemDetail(observation))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(observation.unsupportedReason ?? "unsupported")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
@@ -432,6 +509,46 @@ struct PL0WorkbenchPane: View {
             $0.isEmpty ? nil : URL(fileURLWithPath: $0)
         }
         return (URL(fileURLWithPath: service), grammar)
+    }
+
+    private static var ecosystemParserExecutable: URL? {
+        guard let path = ProcessInfo.processInfo.environment[
+            "MODEDIT_GRAMMAR_REPL_CONFORMANCE"], !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    private var isComparingEcosystem: Bool {
+        if case .running = ecosystemComparison { true } else { false }
+    }
+
+    private func ecosystemDetail(_ observation: EcosystemParserObservation) -> String {
+        var parts = [observation.status, "\(observation.derivations) derivation(s)"]
+        if let forestNodes = observation.forestNodes {
+            parts.append("\(forestNodes) forest nodes")
+        }
+        if observation.ambiguous == true { parts.append("ambiguous") }
+        if observation.productionIdentified { parts.append("production IDs") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func runEcosystemComparison() {
+        guard let executable = Self.ecosystemParserExecutable else { return }
+        let requestedRevision = revision
+        let snapshot = SourceSnapshot(version: requestedRevision, text: source())
+        ecosystemComparison = .running
+        Task {
+            do {
+                let transport = GrammarREPLConformanceProcessTransport(
+                    executableURL: executable)
+                let comparison = try await PL0EcosystemParserSession(
+                    transport: transport).compare(snapshot)
+                guard requestedRevision == revision else { return }
+                ecosystemComparison = .success(comparison)
+            } catch {
+                guard requestedRevision == revision else { return }
+                ecosystemComparison = .failure(String(describing: error))
+            }
+        }
     }
 
     private func watchGrammarWorkbench() async {

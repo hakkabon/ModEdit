@@ -34,6 +34,9 @@ The same artifact now drives several components:
    identity with a different artifact/revision/fingerprint.
 6. Grammar Workbench uses the exact bundled source by default and reports when
    an experimental external grammar differs from the native artifact.
+7. `PL0EcosystemParserSession` serializes those same terminals and productions
+   into Grammar-REPL's schema-5 corpus and pairs them with token kinds produced
+   by the kit-driven lexer.
 
 The handwritten reference LL parser remains the recovery oracle. Its typed
 token and nonterminal assumptions are checked against the bundled grammar, but
