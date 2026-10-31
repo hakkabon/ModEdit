@@ -22,13 +22,14 @@ the right shows it as headings, emphasis, symbols and mathematics.
 5. [Formats](#formats)
 6. [The preview](#the-preview)
 7. [PL/0 parsing workbench](#pl0-parsing-workbench)
-8. [Adding a format](#adding-a-format)
-9. [Project layout](#project-layout)
-10. [Design decisions](#design-decisions)
-11. [Known limitations](#known-limitations)
-12. [Roadmap](#roadmap)
-13. [Contributing](#contributing)
-14. [License](#license)
+8. [Language experiment protocol](#language-experiment-protocol)
+9. [Adding a format](#adding-a-format)
+10. [Project layout](#project-layout)
+11. [Design decisions](#design-decisions)
+12. [Known limitations](#known-limitations)
+13. [Roadmap](#roadmap)
+14. [Contributing](#contributing)
+15. [License](#license)
 
 ## Features
 
@@ -91,7 +92,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (215 tests)
+The current source is verified with `swift build` and `swift test` (223 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -452,6 +453,55 @@ factor      = ident | number | "(" expression ")" ;
 relation    = "=" | "#" | "<" | "<=" | ">" | ">=" ;
 ```
 
+## Language experiment protocol
+
+`LanguageExperimentProtocol` is a standalone Swift library target containing
+the versioned, transport-neutral integration contract for ModEdit,
+Grammar-REPL, Grammar-Workbench, parser engines, language servers and compiler
+experiments. It deliberately has no dependency on PL/0, AppKit, or any parser
+implementation.
+
+Schema version 1 records:
+
+* exact document revision, full source, coordinate space and FNV-1a fingerprint;
+* grammar artifact identity, revision, notation, normal form and optional
+  normalized-to-source production provenance;
+* stable token identities, spelling, channel and source ranges;
+* requested and effective parser engines, including an explicit fallback reason;
+* completed/limited/cancelled/failed operation disposition and semantic parse status;
+* diagnostics and ordered recovery edits with costs and diagnostic links;
+* separate token, parser-state, syntax, chart, forest and semantic reuse dimensions;
+* typed measurements and a syntax fingerprint; and
+* deterministic, schema-checked JSON experiment bundles containing one engine
+  comparison or an entire edit sequence.
+
+The PL/0 adapter is in
+`Sources/PL0Language/PL0ExperimentContract.swift`. It projects existing
+`ParseResult` values without changing the parser API. In particular, malformed
+LR or Earley input is recorded as a request for that engine whose effective
+result came from reference LL recovery; recovery is not incorrectly attributed
+to the requested recognizer.
+
+```swift
+import LanguageExperimentProtocol
+import PL0Language
+
+let source = SourceSnapshot(version: 1, text: "begin call p end.")
+let result = PL0Frontend(engine: .generatedLR).parse(source)
+let grammarText = try String(contentsOfFile: "Examples/PL0.grammar")
+let grammar = try PL0ExperimentContract.grammarArtifact(source: grammarText)
+let run = try result.experimentRun(
+    snapshot: source,
+    documentURI: "file:///experiment.pl0",
+    grammar: grammar)
+let bundle = try PL0ExperimentContract.bundle(
+    id: "pl0-first-run", title: "PL/0 parser experiment", runs: [run])
+let json = try bundle.json()
+```
+
+See [Language Experiment Protocol](Docs/LanguageExperimentProtocol.md) for the
+field model, invariants and ecosystem adoption path.
+
 ## Adding a format
 
 1. Create a type conforming to `DocumentFormat` (see `MarkdownFormat.swift`):
@@ -502,6 +552,7 @@ scripts/package-release.sh          build and zip the release app
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 scripts/benchmark-pl0.sh            run the LL/LR/Earley benchmark
 Sources/
+  LanguageExperimentProtocol/      versioned cross-tool experiment contract
   PL0Language/                     lexer/parser, CST, formatter, VM and LSP adapter
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
@@ -516,6 +567,7 @@ Sources/
     UI/                             root/status bar, editor/gutter, preview
 Tests/ModEditTests/                 Swift Testing suites
 Tests/PL0LanguageTests/             lexer/parser/recovery contract tests
+Tests/LanguageExperimentProtocolTests/ schema and JSON compatibility tests
 Examples/squares.pl0                sample controlled-language program
 .github/workflows/ci.yml            debug + release build, tests and packaged artifact
 ```
@@ -664,6 +716,12 @@ Examples/squares.pl0                sample controlled-language program
   supports block comments.
 
 ## Roadmap
+
+The first ecosystem-integration phase is complete in ModEdit: the shared
+language experiment schema, deterministic bundle format, PL/0 adapter, fallback
+disclosure and reuse/recovery evidence are implemented. Adoption by the sibling
+repositories and embedding Parser's portable semantic/operational snapshots are
+the next cross-repository steps.
 
 1. **Parser comparison laboratory.** Extend the connected LL, SLR(1) and Earley
    traces with stepping and forest visualization; then connect Earley-table,
