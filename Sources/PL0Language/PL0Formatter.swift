@@ -16,14 +16,23 @@ public enum PL0FormatterError: Error, Sendable, Equatable, CustomStringConvertib
 /// is left untouched rather than formatting a recovered tree.
 public struct PL0Formatter: Sendable {
     public let indentationWidth: Int
+    private let frontend: PL0Frontend
 
     public init(indentationWidth: Int = 2) {
+        self.init(indentationWidth: indentationWidth, frontend: PL0Frontend())
+    }
+
+    public init(indentationWidth: Int = 2, frontend: PL0Frontend) {
         self.indentationWidth = max(1, indentationWidth)
+        self.frontend = frontend
     }
 
     public func format(_ source: String) throws -> String {
-        let snapshot = SourceSnapshot(version: 0, text: source)
-        let parsed = PL0Frontend().parse(snapshot)
+        try format(frontend.prepare(SourceSnapshot(version: 0, text: source)))
+    }
+
+    public func format(_ prepared: PL0PreparedFrontend) throws -> String {
+        let parsed = frontend.parse(prepared)
         guard parsed.diagnostics.isEmpty else {
             throw PL0FormatterError.invalidSource(parsed.diagnostics)
         }

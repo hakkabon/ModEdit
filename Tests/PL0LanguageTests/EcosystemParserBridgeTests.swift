@@ -5,8 +5,9 @@ import Testing
 @Suite("PL/0 direct ecosystem parser integration")
 struct EcosystemParserBridgeTests {
     @Test func runsCanonicalLinkedEngineFamily() async throws {
-        let comparison = try await PL0EcosystemParserSession().compare(
+        let prepared = PL0Frontend().prepare(
             SourceSnapshot(version: 9, text: "var x; begin x := 1 end."))
+        let comparison = try await PL0EcosystemParserSession().compare(prepared)
 
         #expect(comparison.revision == 9)
         #expect(comparison.grammarFingerprint
@@ -28,8 +29,15 @@ struct EcosystemParserBridgeTests {
     }
 
     @Test func comparisonRoundTripsForExperimentStorage() async throws {
-        let comparison = try await PL0EcosystemParserSession().compare(
-            SourceSnapshot(version: 3, text: "."))
+        let snapshot = SourceSnapshot(version: 3, text: ".")
+        let session = PL0LanguageSession(engine: .generatedLR)
+        let parsed = await session.parse(snapshot)
+        let comparison = try await session.compare(snapshot)
+        let formatted = try await session.format(snapshot)
+        _ = try await session.compile(snapshot)
+        #expect(formatted == ".\n")
+        #expect(parsed.version == comparison.revision)
+        #expect(parsed.grammarArtifact.fingerprint == comparison.grammarFingerprint)
         let encoded = try JSONEncoder().encode(comparison)
         #expect(try JSONDecoder().decode(
             EcosystemParserComparison.self, from: encoded) == comparison)

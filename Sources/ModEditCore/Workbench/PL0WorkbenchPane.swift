@@ -522,7 +522,7 @@ struct PL0WorkbenchPane: View {
         ecosystemComparison = .running
         Task {
             do {
-                let comparison = try await PL0EcosystemParserSession().compare(snapshot)
+                let comparison = try await session.compare(snapshot)
                 guard requestedRevision == revision else { return }
                 ecosystemComparison = .success(comparison)
             } catch {
@@ -589,12 +589,14 @@ struct PL0WorkbenchPane: View {
 
     private func formatDocument() {
         let requestedRevision = revision
-        let text = source()
+        let snapshot = SourceSnapshot(version: requestedRevision, text: source())
         Task {
-            let outcome = await Task.detached {
-                do { return FormatOutcome.success(try PL0Formatter().format(text)) }
-                catch { return FormatOutcome.failure(String(describing: error)) }
-            }.value
+            let outcome: FormatOutcome
+            do {
+                outcome = .success(try await session.format(snapshot))
+            } catch {
+                outcome = .failure(String(describing: error))
+            }
             guard requestedRevision == revision else { return }
             switch outcome {
             case let .success(formatted): replaceSource(formatted)
@@ -611,15 +613,20 @@ struct PL0WorkbenchPane: View {
         runtime = .running
         selectedView = .runtime
         Task {
-            let completed = await Task.detached { () -> RuntimeState in
-                do {
-                    let program = try PL0Compiler().compile(snapshot)
-                    let execution = try PL0VirtualMachine().run(program)
-                    return .success(program, execution)
-                } catch {
-                    return .failure(String(describing: error))
-                }
-            }.value
+            let completed: RuntimeState
+            do {
+                let program = try await session.compile(snapshot)
+                completed = await Task.detached { () -> RuntimeState in
+                    do {
+                        let execution = try PL0VirtualMachine().run(program)
+                        return .success(program, execution)
+                    } catch {
+                        return .failure(String(describing: error))
+                    }
+                }.value
+            } catch {
+                completed = .failure(String(describing: error))
+            }
             guard requestedRevision == revision else { return }
             runtime = completed
         }

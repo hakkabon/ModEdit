@@ -537,6 +537,24 @@ let json = try bundle.json()
 See [Language Experiment Protocol](Docs/LanguageExperimentProtocol.md) for the
 field model, invariants and ecosystem adoption path.
 
+## Unified experimental front end
+
+PL/0 editor analysis, parser comparison, formatting, compilation, and LSP
+features now share `PL0Frontend`. Its `prepare(_:)` operation creates one
+immutable `PL0PreparedFrontend` containing the versioned source, tokenization,
+parser input, grammar fingerprint, and lexer measurements. Local engines and
+the directly linked Grammar/Parser ecosystem consume that prepared value
+without independently reconstructing the input.
+
+`PL0LanguageSession` retains the prepared value produced by incremental editor
+analysis. The **Run actual engines** action reuses it when the source revision
+matches, ensuring that the comparison sees the same token identities shown in
+the workbench. Formatter, compiler, and LSP adapters also accept an injected
+front end so a compiled or hot-reloaded language kit can be used consistently.
+
+See [Unified experimental front ends](Docs/UnifiedExperimentalFrontends.md) for
+the data flow, invariants, and next cross-repository integration boundary.
+
 ## Adding a format
 
 1. Create a type conforming to `DocumentFormat` (see `MarkdownFormat.swift`):
@@ -775,6 +793,12 @@ have been deleted. Remaining migration work is deliberately visible: replace
 the compatibility recovery parser with LL-Parsing recovery projection, move
 the PL/0 scanner onto Lexer while retaining incremental trivia identities, and
 adapt PL/0 lowering to Compiler rather than maintaining parallel infrastructure.
+
+The fourth phase is complete inside ModEdit: editor parsing, direct engine
+comparison, formatting and compilation share one prepared document input, and
+the LSP/standalone consumers use the same configurable front-end abstraction.
+Promoting that prepared-session boundary into a shared ecosystem package is the
+next cross-repository step for Grammar-REPL and Grammar-Workbench.
 
 1. **Parser comparison laboratory.** Add stepping and forest visualization to
    the connected native traces; project the now-connected Earley-table, CYK and

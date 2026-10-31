@@ -164,8 +164,15 @@ public actor PL0LSPAdapter {
     }
 
     private var documents: [String: Document] = [:]
+    private let frontend: PL0Frontend
 
-    public init() {}
+    public init() {
+        frontend = PL0Frontend()
+    }
+
+    public init(frontend: PL0Frontend) {
+        self.frontend = frontend
+    }
 
     @discardableResult
     public func open(uri: String, version: UInt64, text: String) -> [LSPDiagnostic] {
@@ -250,7 +257,7 @@ public actor PL0LSPAdapter {
 
     private func analyze(version: UInt64, text: String) -> Document {
         let snapshot = SourceSnapshot(version: version, text: text)
-        let parse = PL0Frontend().parse(snapshot)
+        let parse = frontend.parse(snapshot)
         return Document(version: version, text: text, parse: parse,
                         symbols: SymbolIndexer(tokens: parse.tokens).build())
     }

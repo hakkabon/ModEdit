@@ -45,9 +45,35 @@ public struct ReferencePL0Parser: PL0ParserProtocol {
     }
 }
 
-/// Facade used by ModEdit and tests. The implementation is intentionally a
-/// small reference recursive-descent parser: correctness and transparent
-/// recovery matter more than cleverness at this stage.
+/// Immutable output of the shared lexical front end. Editor analysis,
+/// ecosystem comparisons, formatting, compilation and LSP features can pass
+/// this value onward without rebuilding a token stream or losing its exact
+/// source/revision relationship.
+public struct PL0PreparedFrontend: Sendable {
+    public let snapshot: SourceSnapshot
+    public let lexed: LexResult
+    public let input: ParserInput
+    public let grammarFingerprint: String
+    public let lexingNanoseconds: UInt64
+    public let lexMetrics: IncrementalLexMetrics
+
+    init(snapshot: SourceSnapshot, lexed: LexResult,
+         languageKit: PL0LanguageKit,
+         lexingNanoseconds: UInt64, lexMetrics: IncrementalLexMetrics) {
+        self.snapshot = snapshot
+        self.lexed = lexed
+        input = ParserInput(tokens: lexed.tokens,
+                            lexicalDiagnostics: lexed.diagnostics,
+                            source: snapshot.text)
+        grammarFingerprint = languageKit.artifact.fingerprint
+        self.lexingNanoseconds = lexingNanoseconds
+        self.lexMetrics = lexMetrics
+    }
+}
+
+/// Shared PL/0 front end used by every experimental client. Preparation is
+/// separated from parsing so all parser engines can consume one authoritative
+/// source snapshot and tokenization.
 public struct PL0Frontend: Sendable {
     public let engine: ParserEngine
     public let languageKit: PL0LanguageKit
@@ -58,7 +84,7 @@ public struct PL0Frontend: Sendable {
         self.languageKit = languageKit
     }
 
-    public func parse(_ snapshot: SourceSnapshot) -> ParseResult {
+    public func prepare(_ snapshot: SourceSnapshot) -> PL0PreparedFrontend {
         let clock = ContinuousClock()
         let lexStart = clock.now
         let lexed = PL0Lexer(languageKit: languageKit).tokenize(snapshot)
@@ -68,30 +94,32 @@ public struct PL0Frontend: Sendable {
             generatedTokenCount: lexed.tokens.count,
             reusedPrefixTokenCount: 0, reusedSuffixTokenCount: 0,
             converged: false, incremental: false)
-        return parse(snapshot, lexed: lexed,
-                     lexingNanoseconds: Self.nanoseconds(lexDuration),
-                     lexMetrics: lexMetrics)
+        return PL0PreparedFrontend(
+            snapshot: snapshot, lexed: lexed, languageKit: languageKit,
+            lexingNanoseconds: Self.nanoseconds(lexDuration),
+            lexMetrics: lexMetrics)
     }
 
-    func parse(_ snapshot: SourceSnapshot, lexed: LexResult,
-               lexingNanoseconds: UInt64,
-               lexMetrics: IncrementalLexMetrics) -> ParseResult {
+    public func parse(_ snapshot: SourceSnapshot) -> ParseResult {
+        parse(prepare(snapshot))
+    }
+
+    public func parse(_ prepared: PL0PreparedFrontend) -> ParseResult {
+        precondition(prepared.grammarFingerprint == languageKit.artifact.fingerprint,
+                     "Prepared PL/0 input belongs to a different grammar artifact")
         var cache: ReferenceParserCache?
         var lrParser = IncrementalLRPL0Parser(languageKit: languageKit)
         var earleyParser = IncrementalEarleyPL0Parser(languageKit: languageKit)
-        return parse(snapshot, lexed: lexed,
-                     lexingNanoseconds: lexingNanoseconds,
-                     lexMetrics: lexMetrics,
-                     parserCache: &cache,
+        return parse(prepared, parserCache: &cache,
                      lrParser: &lrParser, earleyParser: &earleyParser)
     }
 
-    func parse(_ snapshot: SourceSnapshot, lexed: LexResult,
-               lexingNanoseconds: UInt64,
-               lexMetrics: IncrementalLexMetrics,
+    func parse(_ prepared: PL0PreparedFrontend,
                parserCache: inout ReferenceParserCache?,
                lrParser: inout IncrementalLRPL0Parser,
                earleyParser: inout IncrementalEarleyPL0Parser) -> ParseResult {
+        let snapshot = prepared.snapshot
+        let lexed = prepared.lexed
         let clock = ContinuousClock()
         let parseStart = clock.now
         let descriptor: ParserDescriptor
@@ -100,9 +128,7 @@ public struct PL0Frontend: Sendable {
         switch engine {
         case .referenceLL:
             let parser = ReferencePL0Parser()
-            let run = parser.parse(ParserInput(tokens: lexed.tokens,
-                                               lexicalDiagnostics: lexed.diagnostics,
-                                               source: snapshot.text),
+            let run = parser.parse(prepared.input,
                                    reusing: parserCache)
             parserCache = run.cache
             descriptor = parser.descriptor
@@ -111,9 +137,7 @@ public struct PL0Frontend: Sendable {
         case .generatedLR:
             parserCache = nil
             let parser = LRPL0Parser(languageKit: languageKit)
-            let input = ParserInput(tokens: lexed.tokens,
-                                    lexicalDiagnostics: lexed.diagnostics,
-                                    source: snapshot.text)
+            let input = prepared.input
             let detailed = lrParser.parse(input)
             descriptor = parser.descriptor
             parsed = parser.output(for: detailed, input: input)
@@ -121,9 +145,7 @@ public struct PL0Frontend: Sendable {
         case .earley:
             parserCache = nil
             let parser = EarleyPL0Parser(languageKit: languageKit)
-            let input = ParserInput(tokens: lexed.tokens,
-                                    lexicalDiagnostics: lexed.diagnostics,
-                                    source: snapshot.text)
+            let input = prepared.input
             let detailed = earleyParser.parse(input)
             descriptor = parser.descriptor
             parsed = parser.output(for: detailed, input: input)
@@ -139,10 +161,10 @@ public struct PL0Frontend: Sendable {
             metrics: ParseMetrics(
                 sourceLength: snapshot.text.utf16.count,
                 tokenCount: max(0, lexed.tokens.count - 1),
-                lexingNanoseconds: lexingNanoseconds,
+                lexingNanoseconds: prepared.lexingNanoseconds,
                 parsingNanoseconds: Self.nanoseconds(parseDuration),
                 recoveryCount: parsed.recoveryActions.count,
-                incrementalLexing: lexMetrics,
+                incrementalLexing: prepared.lexMetrics,
                 incrementalParsing: parsed.reuseMetrics),
             algorithmArtifact: algorithmArtifact)
     }
@@ -162,6 +184,8 @@ public actor PL0LanguageSession {
     private var lrParser: IncrementalLRPL0Parser
     private var earleyParser: IncrementalEarleyPL0Parser
     private let frontend: PL0Frontend
+    private let ecosystem: PL0EcosystemParserSession
+    private var lastPrepared: PL0PreparedFrontend?
 
     public init(engine: ParserEngine = .referenceLL,
                 languageKit: PL0LanguageKit = .bundled) {
@@ -169,6 +193,7 @@ public actor PL0LanguageSession {
         lrParser = IncrementalLRPL0Parser(languageKit: languageKit)
         earleyParser = IncrementalEarleyPL0Parser(languageKit: languageKit)
         frontend = PL0Frontend(engine: engine, languageKit: languageKit)
+        ecosystem = PL0EcosystemParserSession(languageKit: languageKit)
     }
 
     public func parse(_ snapshot: SourceSnapshot) -> ParseResult {
@@ -184,12 +209,29 @@ public actor PL0LanguageSession {
             lrParser.reset()
             earleyParser.reset()
         }
-        return frontend.parse(snapshot, lexed: tokenized.lexed,
-                              lexingNanoseconds: nanoseconds,
-                              lexMetrics: tokenized.metrics,
-                              parserCache: &parserCache,
-                              lrParser: &lrParser,
-                              earleyParser: &earleyParser)
+        let prepared = PL0PreparedFrontend(
+            snapshot: snapshot, lexed: tokenized.lexed,
+            languageKit: frontend.languageKit,
+            lexingNanoseconds: nanoseconds, lexMetrics: tokenized.metrics)
+        lastPrepared = prepared
+        return frontend.parse(prepared, parserCache: &parserCache,
+                              lrParser: &lrParser, earleyParser: &earleyParser)
+    }
+
+    /// Compares the linked parser ecosystem using the exact prepared input
+    /// most recently shown by the editor whenever the revision still matches.
+    public func compare(_ snapshot: SourceSnapshot) async throws -> EcosystemParserComparison {
+        try await ecosystem.compare(prepared(for: snapshot))
+    }
+
+    public func format(_ snapshot: SourceSnapshot,
+                       indentationWidth: Int = 2) throws -> String {
+        try PL0Formatter(indentationWidth: indentationWidth, frontend: frontend)
+            .format(prepared(for: snapshot))
+    }
+
+    public func compile(_ snapshot: SourceSnapshot) throws -> PL0Program {
+        try PL0Compiler(frontend: frontend).compile(prepared(for: snapshot))
     }
 
     public func reset() {
@@ -197,6 +239,14 @@ public actor PL0LanguageSession {
         parserCache = nil
         lrParser.reset()
         earleyParser.reset()
+        lastPrepared = nil
+    }
+
+    private func prepared(for snapshot: SourceSnapshot) -> PL0PreparedFrontend {
+        if let lastPrepared, lastPrepared.snapshot == snapshot { return lastPrepared }
+        let prepared = frontend.prepare(snapshot)
+        lastPrepared = prepared
+        return prepared
     }
 }
 

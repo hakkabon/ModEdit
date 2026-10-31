@@ -84,11 +84,15 @@ public actor PL0EcosystemParserSession {
     }
 
     public func compare(_ snapshot: SourceSnapshot) throws -> EcosystemParserComparison {
-        let lexed = PL0Lexer(languageKit: languageKit).tokenize(snapshot)
-        let input = ParserInput(tokens: lexed.tokens,
-                                lexicalDiagnostics: lexed.diagnostics,
-                                source: snapshot.text)
-        let stream = try PL0EcosystemTokenStream(input)
+        try compare(PL0Frontend(languageKit: languageKit).prepare(snapshot))
+    }
+
+    /// Runs every linked engine over one prepared editor input. This is the
+    /// common comparison boundary; it never lexes or reconstructs source.
+    public func compare(_ prepared: PL0PreparedFrontend) throws -> EcosystemParserComparison {
+        try languageKit.artifact.requireFingerprint(prepared.grammarFingerprint)
+        let snapshot = prepared.snapshot
+        let stream = try PL0EcosystemTokenStream(prepared.input)
         let grammar = ecosystemGrammar(languageKit.artifact)
         let engines = EcosystemParserEngine.allCases.map {
             run($0, grammar: grammar, stream: stream)

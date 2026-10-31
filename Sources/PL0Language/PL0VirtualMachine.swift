@@ -101,10 +101,22 @@ public enum PL0RuntimeError: Error, Sendable, Equatable, CustomStringConvertible
 
 /// Grammar-directed compiler for the controlled PL/0 language.
 public struct PL0Compiler: Sendable {
-    public init() {}
+    private let frontend: PL0Frontend
+
+    public init() {
+        self.init(frontend: PL0Frontend())
+    }
+
+    public init(frontend: PL0Frontend) {
+        self.frontend = frontend
+    }
 
     public func compile(_ snapshot: SourceSnapshot) throws -> PL0Program {
-        let parsed = PL0Frontend().parse(snapshot)
+        try compile(frontend.prepare(snapshot))
+    }
+
+    public func compile(_ prepared: PL0PreparedFrontend) throws -> PL0Program {
+        let parsed = frontend.parse(prepared)
         guard parsed.diagnostics.isEmpty else {
             throw PL0CompilationError.syntax(parsed.diagnostics)
         }
