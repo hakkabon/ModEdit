@@ -1,4 +1,5 @@
 import Foundation
+import LanguageExperimentProtocol
 
 public protocol GrammarWorkbenchTransport: Sendable {
     func send(_ request: Data) async throws -> Data
@@ -40,13 +41,21 @@ public struct GrammarWorkbenchHotReloadStatus: Sendable, Equatable {
     public let lexicalDiagnosticCount: Int
     public let syntaxDiagnosticCount: Int
     public let reloadCount: Int
+    public let grammarFingerprint: String?
+    public let nativeGrammarFingerprint: String
     public let message: String
+
+    public var matchesNativeGrammar: Bool {
+        grammarFingerprint == nil || grammarFingerprint == nativeGrammarFingerprint
+    }
 
     public init(state: GrammarWorkbenchConnectionState,
                 grammarRevision: Int = 0, documentRevision: UInt64? = nil,
                 parseStatus: String? = nil, tokenCount: Int = 0,
                 lexicalDiagnosticCount: Int = 0,
                 syntaxDiagnosticCount: Int = 0, reloadCount: Int = 0,
+                grammarFingerprint: String? = nil,
+                nativeGrammarFingerprint: String = PL0LanguageKit.bundled.artifact.fingerprint,
                 message: String = "Not connected") {
         self.state = state
         self.grammarRevision = grammarRevision
@@ -56,6 +65,8 @@ public struct GrammarWorkbenchHotReloadStatus: Sendable, Equatable {
         self.lexicalDiagnosticCount = lexicalDiagnosticCount
         self.syntaxDiagnosticCount = syntaxDiagnosticCount
         self.reloadCount = reloadCount
+        self.grammarFingerprint = grammarFingerprint
+        self.nativeGrammarFingerprint = nativeGrammarFingerprint
         self.message = message
     }
 
@@ -70,6 +81,7 @@ public actor GrammarWorkbenchHotReloadSession {
     private let sessionID: String
     private let documentID: String
     private var sourceText = ""
+    private var activeGrammarFingerprint: String?
     private var statusValue = GrammarWorkbenchHotReloadStatus.disconnected
 
     public init(transport: any GrammarWorkbenchTransport,
@@ -93,6 +105,7 @@ public actor GrammarWorkbenchHotReloadSession {
             let opened = try await request(operation: "documentOpen", input: document,
                                            revision: revision)
             sourceText = document
+            activeGrammarFingerprint = StableFingerprint.fnv1a64(grammar)
             statusValue = makeStatus(opened, state: .connected,
                                      message: "Grammar Workbench connected")
             return statusValue
@@ -130,6 +143,7 @@ public actor GrammarWorkbenchHotReloadSession {
         do {
             let response = try await request(operation: "sessionReplaceGrammar",
                                              grammar: grammar)
+            activeGrammarFingerprint = StableFingerprint.fnv1a64(grammar)
             statusValue = makeStatus(
                 response, state: .connected,
                 reloadCount: previous.reloadCount + 1,
@@ -143,6 +157,8 @@ public actor GrammarWorkbenchHotReloadSession {
                 lexicalDiagnosticCount: previous.lexicalDiagnosticCount,
                 syntaxDiagnosticCount: previous.syntaxDiagnosticCount,
                 reloadCount: previous.reloadCount,
+                grammarFingerprint: previous.grammarFingerprint,
+                nativeGrammarFingerprint: previous.nativeGrammarFingerprint,
                 message: "Reload rejected: \(error)")
             throw error
         }
@@ -153,6 +169,7 @@ public actor GrammarWorkbenchHotReloadSession {
             _ = try? await request(operation: "sessionClose")
         }
         sourceText = ""
+        activeGrammarFingerprint = nil
         statusValue = .disconnected
         await transport.close()
     }
@@ -206,6 +223,7 @@ public actor GrammarWorkbenchHotReloadSession {
             syntaxDiagnosticCount: document?.parse.diagnostics.count
                 ?? summary?.syntaxDiagnosticCount ?? statusValue.syntaxDiagnosticCount,
             reloadCount: reloadCount ?? statusValue.reloadCount,
+            grammarFingerprint: activeGrammarFingerprint,
             message: message)
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import LanguageExperimentProtocol
 
 public enum SyntaxOrigin: String, Sendable {
     case source
@@ -88,7 +89,9 @@ public struct ParseMetrics: Sendable, Equatable {
 public struct ParseResult: Sendable, Equatable {
     public let version: UInt64
     public let parser: ParserDescriptor
+    public let grammarArtifact: GrammarArtifactIdentity
     public let tokens: [PL0Token]
+    public let losslessTokens: [PL0LosslessToken]
     public let syntaxTree: ConcreteSyntaxTree
     public let diagnostics: [ParseDiagnostic]
     public let recovery: RecoveryModel
@@ -100,13 +103,17 @@ public struct ParseResult: Sendable, Equatable {
     public var expectations: [ParseExpectation] { recovery.expectations }
 
     public init(version: UInt64, parser: ParserDescriptor,
-                tokens: [PL0Token], syntaxTree: ConcreteSyntaxTree,
+                grammarArtifact: GrammarArtifactIdentity = PL0LanguageKit.bundled.artifact.grammarIdentity,
+                tokens: [PL0Token], losslessTokens: [PL0LosslessToken] = [],
+                syntaxTree: ConcreteSyntaxTree,
                 diagnostics: [ParseDiagnostic], recovery: RecoveryModel,
                 metrics: ParseMetrics,
                 algorithmArtifact: ParserAlgorithmArtifact? = nil) {
         self.version = version
         self.parser = parser
+        self.grammarArtifact = grammarArtifact
         self.tokens = tokens
+        self.losslessTokens = losslessTokens
         self.syntaxTree = syntaxTree
         self.diagnostics = diagnostics
         self.recovery = recovery

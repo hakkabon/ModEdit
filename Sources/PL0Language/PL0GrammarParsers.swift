@@ -87,14 +87,18 @@ public struct LRPL0Parser: PL0ParserProtocol {
         id: "slr-1", displayName: "Generated SLR(1)",
         capabilities: [.deterministicTree, .errorRecovery, .expectedTokens, .incremental])
 
-    public init() {}
+    public let languageKit: PL0LanguageKit
+
+    public init(languageKit: PL0LanguageKit = .bundled) {
+        self.languageKit = languageKit
+    }
 
     public func recognize(_ input: ParserInput) -> GrammarRecognition {
         parseDetailed(input).recognition
     }
 
     public func parseDetailed(_ input: ParserInput) -> LRParseArtifact {
-        LRMachine.run(input.tokens).artifact
+        LRMachine.run(input.tokens, grammar: PL0Grammar(artifact: languageKit.artifact)).artifact
     }
 
     public func parse(_ input: ParserInput) -> ParserOutput {
@@ -122,14 +126,18 @@ public struct EarleyPL0Parser: PL0ParserProtocol {
         capabilities: [.deterministicTree, .errorRecovery, .expectedTokens,
                        .incremental, .ambiguity])
 
-    public init() {}
+    public let languageKit: PL0LanguageKit
+
+    public init(languageKit: PL0LanguageKit = .bundled) {
+        self.languageKit = languageKit
+    }
 
     public func recognize(_ input: ParserInput) -> GrammarRecognition {
         parseDetailed(input).recognition
     }
 
     public func parseDetailed(_ input: ParserInput) -> EarleyParseArtifact {
-        EarleyMachine.run(input.tokens).artifact
+        EarleyMachine.run(input.tokens, grammar: PL0Grammar(artifact: languageKit.artifact)).artifact
     }
 
     public func parse(_ input: ParserInput) -> ParserOutput {
@@ -152,9 +160,12 @@ public struct EarleyPL0Parser: PL0ParserProtocol {
 /// lexer determine the maximal safe checkpoint from which parsing resumes.
 public struct IncrementalLRPL0Parser: Sendable {
     private var cache: LRCache?
-    public init() {}
+    private let grammar: PL0Grammar
+    public init(languageKit: PL0LanguageKit = .bundled) {
+        grammar = PL0Grammar(artifact: languageKit.artifact)
+    }
     public mutating func parse(_ input: ParserInput) -> LRParseArtifact {
-        let run = LRMachine.run(input.tokens, previous: cache)
+        let run = LRMachine.run(input.tokens, previous: cache, grammar: grammar)
         cache = run.cache
         return run.artifact
     }
@@ -165,9 +176,12 @@ public struct IncrementalLRPL0Parser: Sendable {
 /// are immutable and can be reused without prediction/completion work.
 public struct IncrementalEarleyPL0Parser: Sendable {
     private var cache: EarleyCache?
-    public init() {}
+    private let grammar: PL0Grammar
+    public init(languageKit: PL0LanguageKit = .bundled) {
+        grammar = PL0Grammar(artifact: languageKit.artifact)
+    }
     public mutating func parse(_ input: ParserInput) -> EarleyParseArtifact {
-        let run = EarleyMachine.run(input.tokens, previous: cache)
+        let run = EarleyMachine.run(input.tokens, previous: cache, grammar: grammar)
         cache = run.cache
         return run.artifact
     }
@@ -185,64 +199,25 @@ private struct GrammarProduction: Hashable, Sendable {
 }
 
 private struct PL0Grammar: Sendable {
-    let start = "Program"
+    let start: String
     let productions: [GrammarProduction]
     let byLHS: [String: [Int]]
 
-    init() {
-        typealias S = GrammarSymbol
-        func t(_ kind: PL0TokenKind) -> S { .terminal(kind) }
-        func n(_ name: String) -> S { .nonterminal(name) }
-        let p: [GrammarProduction] = [
-            .init(lhs: "Program", rhs: [n("Block"), t(.period)]),
-            .init(lhs: "Block", rhs: [n("ConstPart"), n("VarPart"), n("Procedures"), n("Statement")]),
-            .init(lhs: "ConstPart", rhs: [t(.const), n("ConstDefinition"), n("MoreConsts"), t(.semicolon)]),
-            .init(lhs: "ConstPart", rhs: []),
-            .init(lhs: "ConstDefinition", rhs: [t(.identifier), t(.equal), t(.number)]),
-            .init(lhs: "MoreConsts", rhs: [t(.comma), n("ConstDefinition"), n("MoreConsts")]),
-            .init(lhs: "MoreConsts", rhs: []),
-            .init(lhs: "VarPart", rhs: [t(.varKeyword), t(.identifier), n("MoreVars"), t(.semicolon)]),
-            .init(lhs: "VarPart", rhs: []),
-            .init(lhs: "MoreVars", rhs: [t(.comma), t(.identifier), n("MoreVars")]),
-            .init(lhs: "MoreVars", rhs: []),
-            .init(lhs: "Procedures", rhs: [t(.procedure), t(.identifier), t(.semicolon), n("Block"), t(.semicolon), n("Procedures")]),
-            .init(lhs: "Procedures", rhs: []),
-            .init(lhs: "Statement", rhs: [t(.identifier), t(.assign), n("Expression")]),
-            .init(lhs: "Statement", rhs: [t(.call), t(.identifier)]),
-            .init(lhs: "Statement", rhs: [t(.begin), n("Statement"), n("MoreStatements"), t(.end)]),
-            .init(lhs: "Statement", rhs: [t(.ifKeyword), n("Condition"), t(.then), n("Statement")]),
-            .init(lhs: "Statement", rhs: [t(.whileKeyword), n("Condition"), t(.doKeyword), n("Statement")]),
-            .init(lhs: "Statement", rhs: []),
-            .init(lhs: "MoreStatements", rhs: [t(.semicolon), n("Statement"), n("MoreStatements")]),
-            .init(lhs: "MoreStatements", rhs: []),
-            .init(lhs: "Condition", rhs: [t(.odd), n("Expression")]),
-            .init(lhs: "Condition", rhs: [n("Expression"), n("Relation"), n("Expression")]),
-            .init(lhs: "Relation", rhs: [t(.equal)]),
-            .init(lhs: "Relation", rhs: [t(.notEqual)]),
-            .init(lhs: "Relation", rhs: [t(.less)]),
-            .init(lhs: "Relation", rhs: [t(.lessEqual)]),
-            .init(lhs: "Relation", rhs: [t(.greater)]),
-            .init(lhs: "Relation", rhs: [t(.greaterEqual)]),
-            .init(lhs: "Expression", rhs: [n("Sign"), n("Term"), n("MoreTerms")]),
-            .init(lhs: "Sign", rhs: [t(.plus)]),
-            .init(lhs: "Sign", rhs: [t(.minus)]),
-            .init(lhs: "Sign", rhs: []),
-            .init(lhs: "MoreTerms", rhs: [t(.plus), n("Term"), n("MoreTerms")]),
-            .init(lhs: "MoreTerms", rhs: [t(.minus), n("Term"), n("MoreTerms")]),
-            .init(lhs: "MoreTerms", rhs: []),
-            .init(lhs: "Term", rhs: [n("Factor"), n("MoreFactors")]),
-            .init(lhs: "MoreFactors", rhs: [t(.star), n("Factor"), n("MoreFactors")]),
-            .init(lhs: "MoreFactors", rhs: [t(.slash), n("Factor"), n("MoreFactors")]),
-            .init(lhs: "MoreFactors", rhs: []),
-            .init(lhs: "Factor", rhs: [t(.identifier)]),
-            .init(lhs: "Factor", rhs: [t(.number)]),
-            .init(lhs: "Factor", rhs: [t(.leftParen), n("Expression"), t(.rightParen)]),
-        ]
-        productions = p
-        byLHS = Dictionary(grouping: p.indices, by: { p[$0].lhs })
+    init(artifact: PL0GrammarArtifact) {
+        start = artifact.startSymbol
+        let converted = artifact.productions.map { production in
+            GrammarProduction(lhs: production.lhs, rhs: production.rhs.map { symbol in
+                switch symbol {
+                case .terminal(_, let kind): .terminal(kind)
+                case .nonterminal(let name): .nonterminal(name)
+                }
+            })
+        }
+        productions = converted
+        byLHS = Dictionary(grouping: converted.indices, by: { converted[$0].lhs })
     }
 
-    static let shared = PL0Grammar()
+    static let shared = PL0Grammar(artifact: PL0LanguageKit.bundled.artifact)
 }
 
 private struct LRItem: Hashable { let production: Int; let dot: Int }
@@ -415,9 +390,12 @@ private struct LRRun {
 }
 
 private enum LRMachine {
-    static let table = SLRTable(grammar: .shared)
+    static let bundledTable = SLRTable(grammar: .shared)
 
-    static func run(_ sourceTokens: [PL0Token], previous: LRCache? = nil) -> LRRun {
+    static func run(_ sourceTokens: [PL0Token], previous: LRCache? = nil,
+                    grammar: PL0Grammar = .shared) -> LRRun {
+        let table = grammar.productions == PL0Grammar.shared.productions
+            ? bundledTable : SLRTable(grammar: grammar)
         let tokens = normalizedTokens(sourceTokens)
         let ids = tokens.dropLast().map(\.id)
         let reusable = previous.map { commonPrefix(ids, $0.tokenIDs) } ?? 0
@@ -540,8 +518,8 @@ private struct EarleyRun {
 }
 
 private enum EarleyMachine {
-    static func run(_ sourceTokens: [PL0Token], previous: EarleyCache? = nil) -> EarleyRun {
-        let grammar = PL0Grammar.shared
+    static func run(_ sourceTokens: [PL0Token], previous: EarleyCache? = nil,
+                    grammar: PL0Grammar = .shared) -> EarleyRun {
         let augmented = GrammarProduction(lhs: "$Start", rhs: [.nonterminal(grammar.start)])
         let productions = [augmented] + grammar.productions
         let byLHS = Dictionary(grouping: productions.indices, by: { productions[$0].lhs })

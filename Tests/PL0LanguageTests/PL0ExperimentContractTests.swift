@@ -5,29 +5,26 @@ import Testing
 
 @Suite("PL/0 experiment contract adapter")
 struct PL0ExperimentContractTests {
-    private let grammarSource = "Program ::= Block '.'"
-
     @Test func exportsCleanReferenceParse() throws {
         let snapshot = SourceSnapshot(version: 4, text: "begin call p end.")
         let result = PL0Frontend().parse(snapshot)
-        let grammar = try PL0ExperimentContract.grammarArtifact(source: grammarSource)
         let run = try result.experimentRun(
-            snapshot: snapshot, documentURI: "file:///program.pl0", grammar: grammar)
+            snapshot: snapshot, documentURI: "file:///program.pl0")
 
         #expect(run.status == .accepted)
         #expect(run.execution.requested.id == "reference-ll")
         #expect(!run.execution.usedFallback)
         #expect(run.source.document.coordinateSpace == .utf16)
         #expect(run.tokenSnapshot.tokens.last?.channel == .endOfFile)
+        #expect(run.tokenSnapshot.tokens.contains { $0.channel == .trivia })
         #expect(run.syntaxFingerprint != nil)
     }
 
     @Test func exposesLRFallbackInsteadOfAttributingRecoveryToLR() throws {
         let snapshot = SourceSnapshot(version: 1, text: "var x; if x < 10 x := 1.")
         let result = PL0Frontend(engine: .generatedLR).parse(snapshot)
-        let grammar = try PL0ExperimentContract.grammarArtifact(source: grammarSource)
         let run = try result.experimentRun(
-            snapshot: snapshot, documentURI: "file:///broken.pl0", grammar: grammar)
+            snapshot: snapshot, documentURI: "file:///broken.pl0")
 
         #expect(run.execution.requested.id == "slr-1")
         #expect(run.execution.effective.id == "reference-ll")
@@ -49,9 +46,8 @@ struct PL0ExperimentContractTests {
                                                         length: range.length),
                              replacementLength: 2))
         let result = await session.parse(snapshot)
-        let grammar = try PL0ExperimentContract.grammarArtifact(source: grammarSource)
         let run = try result.experimentRun(
-            snapshot: snapshot, documentURI: "file:///incremental.pl0", grammar: grammar)
+            snapshot: snapshot, documentURI: "file:///incremental.pl0")
 
         #expect(run.reuse.incremental)
         #expect(run.reuse.baseRevision == 1)
@@ -59,5 +55,18 @@ struct PL0ExperimentContractTests {
         let syntaxReuse = run.reuse.measurements.first { $0.dimension == .syntaxNodes }
         #expect(tokenReuse?.reused ?? 0 > 0)
         #expect(syntaxReuse?.reused ?? 0 > 0)
+    }
+
+    @Test func rejectsGrammarIdentityThatDidNotProduceTheParse() throws {
+        let snapshot = SourceSnapshot(version: 1, text: ".")
+        let result = PL0Frontend().parse(snapshot)
+        let other = try PL0ExperimentContract.grammarArtifact(
+            source: PL0LanguageKit.bundled.artifact.source + "\n")
+
+        #expect(throws: PL0LanguageKitError.self) {
+            try result.experimentRun(snapshot: snapshot,
+                                     documentURI: "file:///mismatch.pl0",
+                                     grammar: other)
+        }
     }
 }

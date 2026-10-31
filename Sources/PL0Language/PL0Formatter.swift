@@ -29,7 +29,14 @@ public struct PL0Formatter: Sendable {
         }
 
         let tokens = parsed.tokens.filter { $0.kind != .endOfFile }
-        let comments = comments(in: source as NSString)
+        let comments = parsed.losslessTokens.compactMap { token -> Comment? in
+            switch token.kind {
+            case .trivia(.lineComment), .trivia(.blockComment):
+                Comment(range: token.range, text: token.lexeme)
+            default:
+                nil
+            }
+        }
         let items = (tokens.map { Item(offset: $0.range.location, value: .token($0)) }
             + comments.map { Item(offset: $0.range.location, value: .comment($0.text)) })
             .sorted { lhs, rhs in lhs.offset < rhs.offset }
@@ -59,38 +66,6 @@ public struct PL0Formatter: Sendable {
         let value: ItemValue
     }
 
-    private func comments(in source: NSString) -> [Comment] {
-        var result: [Comment] = []
-        var offset = 0
-        while offset + 1 < source.length {
-            guard source.character(at: offset) == 47 else {
-                offset += 1
-                continue
-            }
-            let next = source.character(at: offset + 1)
-            let start = offset
-            if next == 47 {
-                offset += 2
-                while offset < source.length,
-                      source.character(at: offset) != 10,
-                      source.character(at: offset) != 13 { offset += 1 }
-            } else if next == 42 {
-                offset += 2
-                while offset + 1 < source.length,
-                      !(source.character(at: offset) == 42
-                        && source.character(at: offset + 1) == 47) { offset += 1 }
-                offset = min(source.length, offset + 2)
-            } else {
-                offset += 1
-                continue
-            }
-            let range = NSRange(location: start, length: offset - start)
-            result.append(Comment(
-                range: SourceRange(location: range.location, length: range.length),
-                text: source.substring(with: range)))
-        }
-        return result
-    }
 }
 
 private struct Writer {

@@ -40,8 +40,11 @@ public struct PL0IncrementalTokenizer: Sendable {
     }
 
     private var previous: State?
+    private let languageKit: PL0LanguageKit
 
-    public init() {}
+    public init(languageKit: PL0LanguageKit = .bundled) {
+        self.languageKit = languageKit
+    }
 
     public mutating func tokenize(_ snapshot: SourceSnapshot) -> IncrementalLexResult {
         guard let old = previous,
@@ -70,7 +73,7 @@ public struct PL0IncrementalTokenizer: Sendable {
         var convergedOldIndex: Int?
         var convergencePair: (new: PL0Token, old: PL0Token)?
 
-        let scanned = PL0Lexer().scan(snapshot.text as NSString,
+        let scanned = PL0Lexer(languageKit: languageKit).scan(snapshot.text as NSString,
                                       from: restart,
                                       version: snapshot.version) { newToken in
             guard newToken.range.location >= newEditEnd else { return false }
@@ -86,12 +89,21 @@ public struct PL0IncrementalTokenizer: Sendable {
         }
 
         var tokens = prefix + scanned.tokens
+        let losslessPrefix = old.lexed.losslessTokens.filter { $0.range.end <= restart.offset }
+        var losslessTokens = losslessPrefix + scanned.losslessTokens
         var suffix: [PL0Token] = []
         if let oldIndex = convergedOldIndex, let pair = convergencePair {
             suffix = oldTokens[oldIndex...].map {
                 relocate($0, delta: delta, oldAnchor: pair.old, newAnchor: pair.new)
             }
             tokens.append(contentsOf: suffix)
+            if let losslessIndex = old.lexed.losslessTokens.firstIndex(where: {
+                $0.id == pair.old.id
+            }) {
+                losslessTokens.append(contentsOf: old.lexed.losslessTokens[losslessIndex...].map {
+                    relocate($0, delta: delta, oldAnchor: pair.old, newAnchor: pair.new)
+                })
+            }
         }
 
         let prefixDiagnostics = old.lexed.diagnostics.filter {
@@ -104,7 +116,8 @@ public struct PL0IncrementalTokenizer: Sendable {
                 .map { relocate($0, delta: delta) })
         }
 
-        let result = LexResult(tokens: tokens, diagnostics: diagnostics)
+        let result = LexResult(tokens: tokens, losslessTokens: losslessTokens,
+                               diagnostics: diagnostics)
         previous = State(version: snapshot.version, text: snapshot.text, lexed: result)
         return IncrementalLexResult(
             version: snapshot.version,
@@ -121,7 +134,7 @@ public struct PL0IncrementalTokenizer: Sendable {
     public mutating func reset() { previous = nil }
 
     private mutating func fullTokenize(_ snapshot: SourceSnapshot) -> IncrementalLexResult {
-        let lexed = PL0Lexer().tokenize(snapshot)
+        let lexed = PL0Lexer(languageKit: languageKit).tokenize(snapshot)
         previous = State(version: snapshot.version, text: snapshot.text, lexed: lexed)
         return IncrementalLexResult(
             version: snapshot.version,
@@ -167,5 +180,24 @@ public struct PL0IncrementalTokenizer: Sendable {
         ParseDiagnostic(severity: diagnostic.severity, message: diagnostic.message,
                         range: SourceRange(location: diagnostic.range.location + delta,
                                            length: diagnostic.range.length))
+    }
+
+    private func relocate(_ token: PL0LosslessToken, delta: Int,
+                          oldAnchor: PL0Token, newAnchor: PL0Token) -> PL0LosslessToken {
+        let line: Int
+        let column: Int
+        if token.location.line == oldAnchor.location.line {
+            line = newAnchor.location.line
+            column = newAnchor.location.column
+                + token.location.column - oldAnchor.location.column
+        } else {
+            line = newAnchor.location.line + token.location.line - oldAnchor.location.line
+            column = token.location.column
+        }
+        let offset = token.range.location + delta
+        return PL0LosslessToken(
+            id: token.id, kind: token.kind, lexeme: token.lexeme,
+            range: SourceRange(location: offset, length: token.range.length),
+            location: SourceLocation(offset: offset, line: line, column: column))
     }
 }

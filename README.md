@@ -92,7 +92,7 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (223 tests)
+The current source is verified with `swift build` and `swift test` (231 tests)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -325,8 +325,15 @@ The first implementation is a deliberately small vertical slice:
   AppKit or know about ModEdit.
 * `SourceSnapshot` carries a document version, text and optional `SourceEdit`.
   Public ranges use UTF-16, matching TextKit and LSP.
-* `PL0Lexer` recognizes classic PL/0 plus `//` and `/* ... */` comments. The
-  stateful `PL0IncrementalTokenizer` preserves identities for reusable tokens.
+* `PL0LanguageKit` compiles the bundled authoritative `PL0.grammar` resource
+  into fingerprinted lexical and production artifacts. Token declarations feed
+  `PL0Lexer`; productions feed the generated SLR and Earley engines. Typed token
+  and nonterminal bindings are validated at load time, so grammar drift fails
+  immediately rather than silently selecting the wrong symbols.
+* `PL0Lexer` recognizes classic PL/0 plus `//` and `/* ... */` comments. It emits
+  significant parser tokens and a lossless source stream containing whitespace
+  and comment trivia. The stateful `PL0IncrementalTokenizer` preserves identities
+  in both streams for reusable prefixes and suffixes.
 * `PL0Frontend` selects **Reference LL**, generated **SLR(1)** or **Earley**.
   `PL0ParserProtocol` is their common immutable input/output contract. LR emits
   its native reduction tree. Earley retains a shared packed forest keyed by
@@ -380,9 +387,13 @@ variables (absolute paths are recommended):
 
 ```sh
 MODEDIT_GRAMMAR_WORKBENCH_SERVICE=/path/to/grammar-workbench-service \
-MODEDIT_PL0_GRAMMAR=/path/to/ModEdit/Examples/PL0.grammar \
 swift run ModEdit
 ```
+
+The bundled language-kit grammar is used automatically. Set
+`MODEDIT_PL0_GRAMMAR=/path/to/experimental.grammar` only when deliberately
+testing a grammar override. The Grammar WB tab then reports whether the external
+grammar fingerprint still matches the native parser artifact.
 
 The **Grammar WB** tab reports connection state, grammar and document
 revisions, parse status, token count and diagnostics. ModEdit polls the grammar
@@ -392,8 +403,16 @@ the retained PL/0 document. Invalid replacements are reported but do not replace
 the active grammar. Editor changes are sent through `documentChange` as
 revisioned UTF-16 edits. **Reload Now** is available for an explicit refresh.
 
-The repository includes [Examples/PL0.grammar](Examples/PL0.grammar), validated
-against Grammar Workbench as 43 productions and 29 terminals.
+The authoritative grammar is
+[PL0.grammar](Sources/PL0Language/Resources/PL0.grammar), compiled as a SwiftPM
+resource and validated as 43 productions, 29 terminals and 18 typed
+nonterminals. `PL0LanguageKit.compile` can load an experimental revision; the
+generated SLR and Earley parser types accept that kit directly. Parse results
+retain the grammar artifact identity, and experiment export rejects a result
+paired with a different grammar fingerprint.
+
+See [PL/0 Single-Source Language Kit](Docs/PL0LanguageKit.md) for the artifact
+model, validation rules, custom-kit API and lossless-token design.
 
 The source editor projects the current result directly onto the text: errors and
 warnings are underlined, missing tokens receive an orange insertion marker, and
@@ -488,12 +507,9 @@ import PL0Language
 
 let source = SourceSnapshot(version: 1, text: "begin call p end.")
 let result = PL0Frontend(engine: .generatedLR).parse(source)
-let grammarText = try String(contentsOfFile: "Examples/PL0.grammar")
-let grammar = try PL0ExperimentContract.grammarArtifact(source: grammarText)
 let run = try result.experimentRun(
     snapshot: source,
-    documentURI: "file:///experiment.pl0",
-    grammar: grammar)
+    documentURI: "file:///experiment.pl0")
 let bundle = try PL0ExperimentContract.bundle(
     id: "pl0-first-run", title: "PL/0 parser experiment", runs: [run])
 let json = try bundle.json()
@@ -553,7 +569,8 @@ scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 scripts/benchmark-pl0.sh            run the LL/LR/Earley benchmark
 Sources/
   LanguageExperimentProtocol/      versioned cross-tool experiment contract
-  PL0Language/                     lexer/parser, CST, formatter, VM and LSP adapter
+  PL0Language/                     language kit, lexer/parser, CST, formatter, VM and LSP adapter
+    Resources/PL0.grammar          authoritative PL/0 lexical and grammar source
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
     ModEditApplication.swift        AppKit application, delegate and main menu
@@ -691,10 +708,10 @@ Examples/squares.pl0                sample controlled-language program
   memoizes successful grammar regions; it does not yet incrementally repair an
   individual production or reuse recovered subtrees. Invalidated ancestor paths
   and the program root are rebuilt.
-* **The PL/0 CST is normalized, not trivia-preserving.** It retains every lexer
-  token plus missing and skipped recovery terminals, but whitespace and comments
-  are currently discarded by the lexer. A future lossless-token mode can add
-  trivia without changing the grammatical node or recovery contracts.
+* **The PL/0 grammatical CST is normalized.** Its terminal view contains
+  significant source, missing and skipped tokens. The lexer now separately
+  retains a lossless, identity-preserving stream of whitespace, comments and
+  significant tokens, but trivia is not yet attached to individual CST nodes.
 * **The PL/0 VM is deliberately small.** Values are checked machine integers;
   the controlled grammar has no input/output statement, so execution results
   currently expose final global variables rather than a console stream.
@@ -722,6 +739,12 @@ language experiment schema, deterministic bundle format, PL/0 adapter, fallback
 disclosure and reuse/recovery evidence are implemented. Adoption by the sibling
 repositories and embedding Parser's portable semantic/operational snapshots are
 the next cross-repository steps.
+
+The second phase is also complete locally: `PL0.grammar` is a packaged single
+source for lexical declarations and generated-parser productions, results carry
+its fingerprinted identity, Workbench drift is visible, and lossless trivia is
+available to formatters and future refactorings. Grammar-Macros generation and
+adoption by sibling repositories remain cross-repository follow-up work.
 
 1. **Parser comparison laboratory.** Extend the connected LL, SLR(1) and Earley
    traces with stepping and forest visualization; then connect Earley-table,

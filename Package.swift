@@ -25,7 +25,8 @@ let package = Package(
             name: "LanguageExperimentProtocol"),
         .target(
             name: "PL0Language",
-            dependencies: ["LanguageExperimentProtocol"]),
+            dependencies: ["LanguageExperimentProtocol"],
+            resources: [.process("Resources")]),
         .target(
             name: "ModEditCore",
             dependencies: ["PL0Language"]),

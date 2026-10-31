@@ -229,12 +229,18 @@ struct PL0WorkbenchPane: View {
                         GridRow { Text("Parse status"); Text(grammarWorkbenchStatus.parseStatus ?? "—") }
                         GridRow { Text("Tokens"); Text("\(grammarWorkbenchStatus.tokenCount)") }
                         GridRow { Text("Diagnostics"); Text("\(grammarWorkbenchStatus.lexicalDiagnosticCount + grammarWorkbenchStatus.syntaxDiagnosticCount)") }
+                        GridRow {
+                            Text("Native artifact")
+                            Text(grammarWorkbenchStatus.matchesNativeGrammar ? "matched" : "different")
+                                .foregroundStyle(grammarWorkbenchStatus.matchesNativeGrammar
+                                                 ? Color.green : Color.orange)
+                        }
                     }
                     .font(.caption.monospacedDigit())
                     Button("Reload Now") { Task { await reloadGrammarWorkbench() } }
                         .controlSize(.small)
                 } else if Self.grammarWorkbenchConfiguration == nil {
-                    Text("Set MODEDIT_GRAMMAR_WORKBENCH_SERVICE to the grammar-workbench-service executable and MODEDIT_PL0_GRAMMAR to a Workbench grammar file, then reopen the document.")
+                    Text("Set MODEDIT_GRAMMAR_WORKBENCH_SERVICE to the grammar-workbench-service executable. The bundled PL/0 language-kit grammar is used unless MODEDIT_PL0_GRAMMAR supplies an experimental override.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -418,12 +424,14 @@ struct PL0WorkbenchPane: View {
         }
     }
 
-    private static var grammarWorkbenchConfiguration: (service: URL, grammar: URL)? {
+    private static var grammarWorkbenchConfiguration: (service: URL, grammar: URL?)? {
         let environment = ProcessInfo.processInfo.environment
         guard let service = environment["MODEDIT_GRAMMAR_WORKBENCH_SERVICE"],
-              let grammar = environment["MODEDIT_PL0_GRAMMAR"],
-              !service.isEmpty, !grammar.isEmpty else { return nil }
-        return (URL(fileURLWithPath: service), URL(fileURLWithPath: grammar))
+              !service.isEmpty else { return nil }
+        let grammar = environment["MODEDIT_PL0_GRAMMAR"].flatMap {
+            $0.isEmpty ? nil : URL(fileURLWithPath: $0)
+        }
+        return (URL(fileURLWithPath: service), grammar)
     }
 
     private func watchGrammarWorkbench() async {
@@ -435,14 +443,16 @@ struct PL0WorkbenchPane: View {
                 executableURL: configuration.service)
             let session = GrammarWorkbenchHotReloadSession(transport: transport)
             grammarWorkbenchSession = session
-            grammarSource = try String(contentsOf: configuration.grammar,
-                                       encoding: .utf8)
+            grammarSource = try configuration.grammar.map {
+                try String(contentsOf: $0, encoding: .utf8)
+            } ?? PL0LanguageKit.bundled.artifact.source
             grammarWorkbenchStatus = try await session.connect(
                 grammar: grammarSource, document: source(), revision: revision)
-            var modification = try modificationDate(configuration.grammar)
+            guard let grammarURL = configuration.grammar else { return }
+            var modification = try modificationDate(grammarURL)
             while !Task.isCancelled {
                 try await Task.sleep(for: .milliseconds(500))
-                let next = try modificationDate(configuration.grammar)
+                let next = try modificationDate(grammarURL)
                 guard next != modification else { continue }
                 modification = next
                 await reloadGrammarWorkbench()
@@ -459,8 +469,9 @@ struct PL0WorkbenchPane: View {
         guard let configuration = Self.grammarWorkbenchConfiguration,
               let grammarWorkbenchSession else { return }
         do {
-            let candidate = try String(contentsOf: configuration.grammar,
-                                       encoding: .utf8)
+            let candidate = try configuration.grammar.map {
+                try String(contentsOf: $0, encoding: .utf8)
+            } ?? PL0LanguageKit.bundled.artifact.source
             grammarWorkbenchStatus = try await grammarWorkbenchSession.reload(
                 grammar: candidate)
             grammarSource = candidate

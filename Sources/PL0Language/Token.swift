@@ -48,3 +48,34 @@ public struct PL0Token: Sendable, Equatable, Identifiable {
         self.location = location
     }
 }
+
+public enum PL0TriviaKind: String, Sendable, Equatable, Hashable {
+    case whitespace
+    case lineComment
+    case blockComment
+}
+
+/// One lossless lexical element. Concatenating `lexeme` for the complete stream
+/// reconstructs the source byte-for-byte at the Swift string level. Parsers
+/// continue to consume `PL0Token`; formatters and refactorings can retain trivia.
+public enum PL0LosslessTokenKind: Sendable, Equatable, Hashable {
+    case token(PL0TokenKind)
+    case trivia(PL0TriviaKind)
+}
+
+public struct PL0LosslessToken: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let kind: PL0LosslessTokenKind
+    public let lexeme: String
+    public let range: SourceRange
+    public let location: SourceLocation
+
+    public init(id: String, kind: PL0LosslessTokenKind, lexeme: String,
+                range: SourceRange, location: SourceLocation) {
+        self.id = id
+        self.kind = kind
+        self.lexeme = lexeme
+        self.range = range
+        self.location = location
+    }
+}

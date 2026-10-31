@@ -158,6 +158,9 @@ struct IncrementalTokenizerTests {
 
             expectEquivalent(result.lexed, toFullLexOf: next, version: version)
             #expect(Set(result.lexed.tokens.map(\.id)).count == result.lexed.tokens.count)
+            #expect(Set(result.lexed.losslessTokens.map(\.id)).count
+                    == result.lexed.losslessTokens.count)
+            #expect(result.lexed.losslessTokens.map(\.lexeme).joined() == next)
             text = next
         }
     }
@@ -166,6 +169,9 @@ struct IncrementalTokenizerTests {
                                   version: UInt64) {
         let expected = PL0Lexer().tokenize(SourceSnapshot(version: version, text: text))
         #expect(actual.tokens.map(TokenView.init) == expected.tokens.map(TokenView.init))
+        #expect(actual.losslessTokens.map(LosslessTokenView.init)
+                == expected.losslessTokens.map(LosslessTokenView.init))
+        #expect(actual.losslessTokens.map(\.lexeme).joined() == text)
         #expect(actual.diagnostics.map(DiagnosticView.init)
                 == expected.diagnostics.map(DiagnosticView.init))
     }
@@ -197,6 +203,20 @@ struct IncrementalTokenizerTests {
             severity = diagnostic.severity
             message = diagnostic.message
             range = diagnostic.range
+        }
+    }
+
+    private struct LosslessTokenView: Equatable {
+        let kind: PL0LosslessTokenKind
+        let lexeme: String
+        let range: SourceRange
+        let location: PL0Language.SourceLocation
+
+        init(_ token: PL0LosslessToken) {
+            kind = token.kind
+            lexeme = token.lexeme
+            range = token.range
+            location = token.location
         }
     }
 

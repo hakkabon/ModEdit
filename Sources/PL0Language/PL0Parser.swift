@@ -50,13 +50,18 @@ public struct ReferencePL0Parser: PL0ParserProtocol {
 /// recovery matter more than cleverness at this stage.
 public struct PL0Frontend: Sendable {
     public let engine: ParserEngine
+    public let languageKit: PL0LanguageKit
 
-    public init(engine: ParserEngine = .referenceLL) { self.engine = engine }
+    public init(engine: ParserEngine = .referenceLL,
+                languageKit: PL0LanguageKit = .bundled) {
+        self.engine = engine
+        self.languageKit = languageKit
+    }
 
     public func parse(_ snapshot: SourceSnapshot) -> ParseResult {
         let clock = ContinuousClock()
         let lexStart = clock.now
-        let lexed = PL0Lexer().tokenize(snapshot)
+        let lexed = PL0Lexer(languageKit: languageKit).tokenize(snapshot)
         let lexDuration = lexStart.duration(to: clock.now)
         let lexMetrics = IncrementalLexMetrics(
             scannedUTF16Length: snapshot.text.utf16.count,
@@ -72,8 +77,8 @@ public struct PL0Frontend: Sendable {
                lexingNanoseconds: UInt64,
                lexMetrics: IncrementalLexMetrics) -> ParseResult {
         var cache: ReferenceParserCache?
-        var lrParser = IncrementalLRPL0Parser()
-        var earleyParser = IncrementalEarleyPL0Parser()
+        var lrParser = IncrementalLRPL0Parser(languageKit: languageKit)
+        var earleyParser = IncrementalEarleyPL0Parser(languageKit: languageKit)
         return parse(snapshot, lexed: lexed,
                      lexingNanoseconds: lexingNanoseconds,
                      lexMetrics: lexMetrics,
@@ -104,7 +109,7 @@ public struct PL0Frontend: Sendable {
             algorithmArtifact = nil
         case .generatedLR:
             parserCache = nil
-            let parser = LRPL0Parser()
+            let parser = LRPL0Parser(languageKit: languageKit)
             let input = ParserInput(tokens: lexed.tokens,
                                     lexicalDiagnostics: lexed.diagnostics)
             let detailed = lrParser.parse(input)
@@ -113,7 +118,7 @@ public struct PL0Frontend: Sendable {
             algorithmArtifact = .lr(detailed)
         case .earley:
             parserCache = nil
-            let parser = EarleyPL0Parser()
+            let parser = EarleyPL0Parser(languageKit: languageKit)
             let input = ParserInput(tokens: lexed.tokens,
                                     lexicalDiagnostics: lexed.diagnostics)
             let detailed = earleyParser.parse(input)
@@ -124,7 +129,9 @@ public struct PL0Frontend: Sendable {
         let parseDuration = parseStart.duration(to: clock.now)
         return ParseResult(
             version: snapshot.version, parser: descriptor,
-            tokens: lexed.tokens, syntaxTree: parsed.syntaxTree,
+            grammarArtifact: languageKit.artifact.grammarIdentity,
+            tokens: lexed.tokens, losslessTokens: lexed.losslessTokens,
+            syntaxTree: parsed.syntaxTree,
             diagnostics: parsed.diagnostics, recovery: parsed.recovery,
             metrics: ParseMetrics(
                 sourceLength: snapshot.text.utf16.count,
@@ -147,14 +154,18 @@ public struct PL0Frontend: Sendable {
 /// Serializes incremental tokenizer state for one open document. The editor
 /// may cancel an awaiting UI task without racing the token cache itself.
 public actor PL0LanguageSession {
-    private var tokenizer = PL0IncrementalTokenizer()
+    private var tokenizer: PL0IncrementalTokenizer
     private var parserCache: ReferenceParserCache?
-    private var lrParser = IncrementalLRPL0Parser()
-    private var earleyParser = IncrementalEarleyPL0Parser()
+    private var lrParser: IncrementalLRPL0Parser
+    private var earleyParser: IncrementalEarleyPL0Parser
     private let frontend: PL0Frontend
 
-    public init(engine: ParserEngine = .referenceLL) {
-        frontend = PL0Frontend(engine: engine)
+    public init(engine: ParserEngine = .referenceLL,
+                languageKit: PL0LanguageKit = .bundled) {
+        tokenizer = PL0IncrementalTokenizer(languageKit: languageKit)
+        lrParser = IncrementalLRPL0Parser(languageKit: languageKit)
+        earleyParser = IncrementalEarleyPL0Parser(languageKit: languageKit)
+        frontend = PL0Frontend(engine: engine, languageKit: languageKit)
     }
 
     public func parse(_ snapshot: SourceSnapshot) -> ParseResult {

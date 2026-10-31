@@ -35,25 +35,48 @@ public extension ParseResult {
     func experimentRun(
         snapshot: SourceSnapshot,
         documentURI: String,
-        grammar: GrammarArtifactIdentity,
+        grammar: GrammarArtifactIdentity? = nil,
         runID: String? = nil
     ) throws -> ParseExperimentRun {
         guard version == snapshot.version else {
             throw ExperimentContractError.inconsistentRevision
         }
 
+        let grammar = grammar ?? grammarArtifact
+        guard grammar.artifactID == grammarArtifact.artifactID,
+              grammar.revision == grammarArtifact.revision,
+              grammar.fingerprint == grammarArtifact.fingerprint else {
+            throw PL0LanguageKitError.artifactMismatch(
+                expected: grammarArtifact.fingerprint, actual: grammar.fingerprint)
+        }
         let document = try DocumentRevision(
             uri: documentURI, languageID: "pl0", revision: snapshot.version,
             coordinateSpace: .utf16, sourceLength: snapshot.text.utf16.count,
             sourceFingerprint: StableFingerprint.fnv1a64(snapshot.text))
         let source = try SourceArtifact(document: document, text: snapshot.text)
-        let experimentTokens = try tokens.map { token in
-            try ExperimentToken(
-                id: token.id, kind: token.kind.rawValue, lexeme: token.lexeme,
+        var experimentTokens = try losslessTokens.map { token in
+            let kind: String
+            let channel: ExperimentTokenChannel
+            switch token.kind {
+            case .token(let tokenKind):
+                kind = tokenKind.rawValue
+                channel = tokenKind == .invalid ? .invalid : .source
+            case .trivia(let triviaKind):
+                kind = "trivia.\(triviaKind.rawValue)"
+                channel = .trivia
+            }
+            return try ExperimentToken(
+                id: token.id, kind: kind, lexeme: token.lexeme,
                 range: ExperimentRange(location: token.range.location,
                                        length: token.range.length),
-                channel: token.kind == .endOfFile ? .endOfFile
-                    : token.kind == .invalid ? .invalid : .source)
+                channel: channel)
+        }
+        if let eof = tokens.last(where: { $0.kind == .endOfFile }) {
+            experimentTokens.append(try ExperimentToken(
+                id: eof.id, kind: eof.kind.rawValue, lexeme: eof.lexeme,
+                range: ExperimentRange(location: eof.range.location,
+                                       length: eof.range.length),
+                channel: .endOfFile))
         }
         let tokenSnapshot = try TokenSnapshot(document: document, grammar: grammar,
                                               tokens: experimentTokens)

@@ -37,6 +37,17 @@ struct GrammarWorkbenchBridgeTests {
         #expect(status.grammarRevision == 1)
         #expect(status.reloadCount == 1)
         #expect(status.message == "Grammar hot-reloaded")
+        #expect(!status.matchesNativeGrammar)
+    }
+
+    @Test func bundledGrammarMatchesNativeArtifactIdentity() async throws {
+        let bridge = GrammarWorkbenchHotReloadSession(transport: MockWorkbenchTransport())
+        let status = try await bridge.connect(
+            grammar: PL0LanguageKit.bundled.artifact.source,
+            document: ".", revision: 1)
+
+        #expect(status.matchesNativeGrammar)
+        #expect(status.grammarFingerprint == PL0LanguageKit.bundled.artifact.fingerprint)
     }
 
     @Test func invalidReloadPreservesActiveRevisionAndDocumentSummary() async throws {

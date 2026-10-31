@@ -2,16 +2,20 @@ import Foundation
 
 public struct LexResult: Sendable {
     public let tokens: [PL0Token]
+    public let losslessTokens: [PL0LosslessToken]
     public let diagnostics: [ParseDiagnostic]
 
-    public init(tokens: [PL0Token], diagnostics: [ParseDiagnostic]) {
+    public init(tokens: [PL0Token], losslessTokens: [PL0LosslessToken] = [],
+                diagnostics: [ParseDiagnostic]) {
         self.tokens = tokens
+        self.losslessTokens = losslessTokens
         self.diagnostics = diagnostics
     }
 }
 
 struct ScannerOutput {
     var tokens: [PL0Token]
+    var losslessTokens: [PL0LosslessToken]
     var diagnostics: [ParseDiagnostic]
     var scannedEnd: Int
     var stoppedForConvergence: Bool
@@ -20,19 +24,18 @@ struct ScannerOutput {
 /// Reference PL/0 scanner using UTF-16 offsets throughout, so ranges can be
 /// passed directly to TextKit and LSP without lossy conversions.
 public struct PL0Lexer: Sendable {
-    static let keywords: [String: PL0TokenKind] = [
-        "const": .const, "var": .varKeyword, "procedure": .procedure,
-        "call": .call, "begin": .begin, "end": .end, "if": .ifKeyword,
-        "then": .then, "while": .whileKeyword, "do": .doKeyword, "odd": .odd,
-    ]
+    public let languageKit: PL0LanguageKit
 
-    public init() {}
+    public init(languageKit: PL0LanguageKit = .bundled) {
+        self.languageKit = languageKit
+    }
 
     public func tokenize(_ snapshot: SourceSnapshot) -> LexResult {
         let output = scan(snapshot.text as NSString,
                           from: SourceLocation(offset: 0, line: 1, column: 1),
                           version: snapshot.version)
-        return LexResult(tokens: output.tokens, diagnostics: output.diagnostics)
+        return LexResult(tokens: output.tokens, losslessTokens: output.losslessTokens,
+                         diagnostics: output.diagnostics)
     }
 
     /// Scans from a known-normal token boundary. The convergence predicate is
@@ -43,11 +46,13 @@ public struct PL0Lexer: Sendable {
               version: UInt64,
               shouldConverge: ((PL0Token) -> Bool)? = nil) -> ScannerOutput {
         var tokens: [PL0Token] = []
+        var losslessTokens: [PL0LosslessToken] = []
         var diagnostics: [ParseDiagnostic] = []
         var offset = initial.offset
         var line = initial.line
         var column = initial.column
         var ordinal = 0
+        var triviaOrdinal = 0
 
         func isLetter(_ value: unichar) -> Bool {
             (65...90).contains(value) || (97...122).contains(value) || value == 95
@@ -55,6 +60,10 @@ public struct PL0Lexer: Sendable {
         func isASCIIDigit(_ value: unichar) -> Bool { (48...57).contains(value) }
         func isIdentifierContinuation(_ value: unichar) -> Bool {
             isLetter(value) || isASCIIDigit(value)
+        }
+        func isWhitespace(_ value: unichar) -> Bool {
+            guard let scalar = UnicodeScalar(value) else { return false }
+            return CharacterSet.whitespacesAndNewlines.contains(scalar)
         }
         func makeToken(_ kind: PL0TokenKind, from start: Int,
                        line: Int, column: Int) -> PL0Token {
@@ -64,6 +73,17 @@ public struct PL0Lexer: Sendable {
                             lexeme: text.substring(with: range),
                             range: SourceRange(location: range.location, length: range.length),
                             location: SourceLocation(offset: start, line: line, column: column))
+        }
+        func appendTrivia(_ kind: PL0TriviaKind, from start: Int,
+                          line: Int, column: Int) {
+            let range = SourceRange(location: start, length: offset - start)
+            let value = text.substring(with: NSRange(location: start,
+                                                      length: offset - start))
+            losslessTokens.append(PL0LosslessToken(
+                id: "v\(version):trivia:\(start):\(triviaOrdinal)",
+                kind: .trivia(kind), lexeme: value, range: range,
+                location: SourceLocation(offset: start, line: line, column: column)))
+            triviaOrdinal += 1
         }
         func advance() {
             guard offset < text.length else { return }
@@ -84,6 +104,11 @@ public struct PL0Lexer: Sendable {
         func emit(_ token: PL0Token) -> Bool {
             if shouldConverge?(token) == true { return true }
             tokens.append(token)
+            if token.kind != .endOfFile {
+                losslessTokens.append(PL0LosslessToken(
+                    id: token.id, kind: .token(token.kind), lexeme: token.lexeme,
+                    range: token.range, location: token.location))
+            }
             if token.kind == .invalid {
                 diagnostics.append(ParseDiagnostic(
                     severity: .error, message: "Unexpected character '\(token.lexeme)'",
@@ -92,15 +117,22 @@ public struct PL0Lexer: Sendable {
             return false
         }
         func stopped(at token: PL0Token) -> ScannerOutput {
-            ScannerOutput(tokens: tokens, diagnostics: diagnostics,
+            ScannerOutput(tokens: tokens, losslessTokens: losslessTokens,
+                          diagnostics: diagnostics,
                           scannedEnd: token.range.location,
                           stoppedForConvergence: true)
         }
 
         while offset < text.length {
             let character = text.character(at: offset)
-            if CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(character)!) {
+            if isWhitespace(character) {
+                let start = offset, startLine = line, startColumn = column
                 advance()
+                while offset < text.length
+                        && isWhitespace(text.character(at: offset)) {
+                    advance()
+                }
+                appendTrivia(.whitespace, from: start, line: startLine, column: startColumn)
                 continue
             }
 
@@ -114,7 +146,7 @@ public struct PL0Lexer: Sendable {
                     advance()
                 }
                 let spelling = text.substring(with: NSRange(location: start, length: offset - start))
-                let token = makeToken(Self.keywords[spelling.lowercased()] ?? .identifier,
+                let token = makeToken(languageKit.keywordKind(spelling) ?? .identifier,
                                       from: start, line: startLine, column: startColumn)
                 if emit(token) { return stopped(at: token) }
                 continue
@@ -137,6 +169,8 @@ public struct PL0Lexer: Sendable {
                 while offset < text.length
                         && text.character(at: offset) != 10
                         && text.character(at: offset) != 13 { advance() }
+                appendTrivia(.lineComment, from: start,
+                             line: startLine, column: startColumn)
                 continue
             }
             if character == 47, offset + 1 < text.length,
@@ -152,33 +186,22 @@ public struct PL0Lexer: Sendable {
                         severity: .error, message: "Unterminated block comment",
                         range: SourceRange(location: start, length: offset - start)))
                 }
+                appendTrivia(.blockComment, from: start,
+                             line: startLine, column: startColumn)
                 continue
             }
 
-            let kind: PL0TokenKind
-            switch character {
-            case 43: kind = .plus
-            case 45: kind = .minus
-            case 42: kind = .star
-            case 47: kind = .slash
-            case 61: kind = .equal
-            case 35: kind = .notEqual
-            case 44: kind = .comma
-            case 59: kind = .semicolon
-            case 46: kind = .period
-            case 40: kind = .leftParen
-            case 41: kind = .rightParen
-            case 58 where offset + 1 < text.length && text.character(at: offset + 1) == 61:
-                advance(); kind = .assign
-            case 60 where offset + 1 < text.length && text.character(at: offset + 1) == 61:
-                advance(); kind = .lessEqual
-            case 62 where offset + 1 < text.length && text.character(at: offset + 1) == 61:
-                advance(); kind = .greaterEqual
-            case 60: kind = .less
-            case 62: kind = .greater
-            default: kind = .invalid
+            let scalarLength = (0xD800...0xDBFF).contains(character)
+                && offset + 1 < text.length
+                && (0xDC00...0xDFFF).contains(text.character(at: offset + 1)) ? 2 : 1
+            var spelling = text.substring(with: NSRange(location: offset,
+                                                         length: scalarLength))
+            if offset + 1 < text.length {
+                let pair = text.substring(with: NSRange(location: offset, length: 2))
+                if languageKit.operatorKind(pair) != nil { spelling = pair }
             }
-            advance()
+            for _ in spelling.utf16 { advance() }
+            let kind = languageKit.operatorKind(spelling) ?? .invalid
             let token = makeToken(kind, from: start, line: startLine, column: startColumn)
             if emit(token) { return stopped(at: token) }
         }
@@ -187,7 +210,8 @@ public struct PL0Lexer: Sendable {
             range: SourceRange(location: offset, length: 0),
             location: SourceLocation(offset: offset, line: line, column: column))
         if emit(eof) { return stopped(at: eof) }
-        return ScannerOutput(tokens: tokens, diagnostics: diagnostics,
+        return ScannerOutput(tokens: tokens, losslessTokens: losslessTokens,
+                             diagnostics: diagnostics,
                              scannedEnd: offset, stoppedForConvergence: false)
     }
 }

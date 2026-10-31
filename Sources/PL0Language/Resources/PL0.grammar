@@ -30,6 +30,7 @@
 %token RPAREN /\)/
 %skip /\s+/
 %skip /\/\/[^\r\n]*/
+%skip /\/\*(?:[^*]|\*(?!\/))*\*\//
 
 Program : Block PERIOD ;
 Block : ConstPart VarPart Procedures Statement ;
