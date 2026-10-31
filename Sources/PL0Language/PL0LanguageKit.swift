@@ -86,6 +86,8 @@ public struct PL0LanguageKit: Sendable, Equatable {
     let keywordKinds: [String: PL0TokenKind]
     let operatorKinds: [String: PL0TokenKind]
 
+    public var keywordSpellings: [String] { keywordKinds.keys.sorted() }
+
     public static func loadBundled() throws -> PL0LanguageKit {
         guard let url = Bundle.module.url(forResource: "PL0", withExtension: "grammar") else {
             throw PL0LanguageKitError.resourceMissing

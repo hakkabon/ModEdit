@@ -47,6 +47,11 @@ public struct LSPLocation: Sendable, Equatable {
     public let range: LSPRange
 }
 
+public struct LSPHover: Sendable, Equatable {
+    public let contents: String
+    public let range: LSPRange
+}
+
 public enum LSPSemanticTokenType: String, Sendable, CaseIterable {
     case keyword, number, operatorToken = "operator"
     case variable, constant, function
@@ -57,6 +62,13 @@ public struct LSPSemanticToken: Sendable, Equatable, Identifiable {
     public let type: LSPSemanticTokenType
     public let isDeclaration: Bool
     public var id: String { "\(range):\(type.rawValue):\(isDeclaration)" }
+}
+
+/// Standard LSP semantic-token integer stream. Token types use the order in
+/// `LSPSemanticTokenType.allCases`; modifier bit zero means declaration.
+public struct LSPSemanticTokensResult: Sendable, Equatable {
+    public let resultID: String
+    public let data: [Int]
 }
 
 public struct LSPTextChange: Sendable, Equatable {
@@ -159,8 +171,8 @@ public actor PL0LSPAdapter {
     private struct Document: Sendable {
         var version: UInt64
         var text: String
-        var parse: ParseResult
-        var symbols: SymbolIndex
+        var analysis: PL0Analysis
+        let session: PL0LanguageSession
     }
 
     private var documents: [String: Document] = [:]
@@ -175,20 +187,28 @@ public actor PL0LSPAdapter {
     }
 
     @discardableResult
-    public func open(uri: String, version: UInt64, text: String) -> [LSPDiagnostic] {
-        let document = analyze(version: version, text: text)
+    public func open(uri: String, version: UInt64,
+                     text: String) async -> [LSPDiagnostic] {
+        let session = PL0LanguageSession(
+            engine: frontend.engine, languageKit: frontend.languageKit)
+        let snapshot = SourceSnapshot(version: version, text: text)
+        let document = Document(
+            version: version, text: text,
+            analysis: await session.analyze(snapshot), session: session)
         documents[uri] = document
         return diagnostics(for: document)
     }
 
     @discardableResult
     public func change(uri: String, version: UInt64,
-                       changes: [LSPTextChange]) throws -> [LSPDiagnostic] {
+                       changes: [LSPTextChange]) async throws -> [LSPDiagnostic] {
         guard var document = documents[uri] else { throw PL0LSPError.documentNotOpen(uri) }
         guard version > document.version else {
             throw PL0LSPError.staleVersion(current: document.version, received: version)
         }
-        for change in changes {
+        var sourceEdit: SourceEdit?
+        for (changeIndex, change) in changes.enumerated() {
+            let oldText = document.text
             if let range = change.range {
                 let map = LSPLineMap(document.text)
                 guard let start = map.offset(of: range.start),
@@ -197,11 +217,26 @@ public actor PL0LSPAdapter {
                 }
                 document.text = (document.text as NSString).replacingCharacters(
                     in: NSRange(location: start, length: end - start), with: change.text)
+                if changes.count == 1, changeIndex == 0 {
+                    sourceEdit = SourceEdit(
+                        baseVersion: document.version,
+                        replacedRange: SourceRange(location: start, length: end - start),
+                        replacementLength: change.text.utf16.count)
+                }
             } else {
                 document.text = change.text
+                if changes.count == 1, changeIndex == 0 {
+                    sourceEdit = SourceEdit(
+                        baseVersion: document.version,
+                        replacedRange: SourceRange(
+                            location: 0, length: oldText.utf16.count),
+                        replacementLength: change.text.utf16.count)
+                }
             }
         }
-        document = analyze(version: version, text: document.text)
+        document.version = version
+        document.analysis = await document.session.analyze(SourceSnapshot(
+            version: version, text: document.text, edit: sourceEdit))
         documents[uri] = document
         return diagnostics(for: document)
     }
@@ -218,14 +253,13 @@ public actor PL0LSPAdapter {
         guard let offset = LSPLineMap(document.text).offset(of: position) else {
             throw PL0LSPError.invalidRange(LSPRange(start: position, end: position))
         }
-        let keywords = ["begin", "call", "const", "do", "end", "if", "odd",
-                        "procedure", "then", "var", "while"].map {
+        let keywords = frontend.languageKit.keywordSpellings.map {
             LSPCompletionItem(label: $0, kind: .keyword,
                               detail: "PL/0 keyword", insertText: $0)
         }
-        return (keywords + document.symbols.visible(at: offset).map { symbol in
-            LSPCompletionItem(label: symbol.name, kind: symbol.kind.completionKind,
-                              detail: symbol.kind.detail, insertText: symbol.name)
+        return (keywords + document.analysis.semantics.visibleSymbols(at: offset).map { symbol in
+            LSPCompletionItem(label: symbol.name, kind: completionKind(symbol.kind),
+                              detail: symbol.kind.rawValue, insertText: symbol.name)
         }).uniquedByID().sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
     }
 
@@ -235,19 +269,90 @@ public actor PL0LSPAdapter {
         guard let offset = map.offset(of: position) else {
             throw PL0LSPError.invalidRange(LSPRange(start: position, end: position))
         }
-        guard let reference = document.symbols.references.first(where: {
-            offset >= $0.range.location && offset <= $0.range.end
-        }), let declaration = document.symbols.declarations[reference.declarationID] else { return nil }
-        return LSPLocation(uri: uri, range: map.lspRange(declaration.range))
+        guard let declaration = document.analysis.semantics
+            .declaration(referencedAt: offset) else { return nil }
+        return LSPLocation(uri: uri,
+                           range: map.lspRange(declaration.declarationRange))
+    }
+
+    public func hover(uri: String, at position: LSPPosition) throws -> LSPHover? {
+        guard let document = documents[uri] else { throw PL0LSPError.documentNotOpen(uri) }
+        let map = LSPLineMap(document.text)
+        guard let offset = map.offset(of: position) else {
+            throw PL0LSPError.invalidRange(LSPRange(start: position, end: position))
+        }
+        let semantics = document.analysis.semantics
+        let symbol = semantics.declaration(referencedAt: offset)
+            ?? semantics.symbols.first(where: {
+                offset >= $0.declarationRange.location
+                    && offset <= $0.declarationRange.end
+            })
+        guard let symbol else { return nil }
+        var details = "\(symbol.kind.rawValue) \(symbol.name)"
+        if let value = symbol.constantValue { details += " = \(value)" }
+        if let slot = symbol.slot { details += " · level \(symbol.lexicalLevel), slot \(slot)" }
+        return LSPHover(contents: details,
+                        range: map.lspRange(symbol.declarationRange))
+    }
+
+    public func references(uri: String, at position: LSPPosition,
+                           includeDeclaration: Bool = true) throws -> [LSPLocation] {
+        guard let document = documents[uri] else { throw PL0LSPError.documentNotOpen(uri) }
+        let map = LSPLineMap(document.text)
+        guard let offset = map.offset(of: position) else {
+            throw PL0LSPError.invalidRange(LSPRange(start: position, end: position))
+        }
+        let semantics = document.analysis.semantics
+        let symbol = semantics.declaration(referencedAt: offset)
+            ?? semantics.symbols.first(where: {
+                offset >= $0.declarationRange.location
+                    && offset <= $0.declarationRange.end
+            })
+        guard let symbol else { return [] }
+        var ranges = semantics.references
+            .filter { $0.symbolID == symbol.id }.map(\.range)
+        if includeDeclaration { ranges.insert(symbol.declarationRange, at: 0) }
+        return ranges.map { LSPLocation(uri: uri, range: map.lspRange($0)) }
     }
 
     public func semanticTokens(uri: String) throws -> [LSPSemanticToken] {
         guard let document = documents[uri] else { throw PL0LSPError.documentNotOpen(uri) }
         let map = LSPLineMap(document.text)
-        return document.symbols.semanticTokens.map {
-            LSPSemanticToken(range: map.lspRange($0.range), type: $0.type,
+        return document.analysis.semantics.semanticTokens.compactMap {
+            guard let type = semanticTokenType($0.classification) else { return nil }
+            return LSPSemanticToken(range: map.lspRange($0.range), type: type,
                              isDeclaration: $0.isDeclaration)
         }
+    }
+
+    public func semanticTokenData(uri: String) throws -> LSPSemanticTokensResult {
+        guard let document = documents[uri] else { throw PL0LSPError.documentNotOpen(uri) }
+        let tokens = try semanticTokens(uri: uri).sorted {
+            if $0.range.start.line == $1.range.start.line {
+                $0.range.start.character < $1.range.start.character
+            } else {
+                $0.range.start.line < $1.range.start.line
+            }
+        }
+        var previousLine = 0
+        var previousCharacter = 0
+        var data: [Int] = []
+        for token in tokens where token.range.start.line == token.range.end.line {
+            guard let typeIndex = LSPSemanticTokenType.allCases.firstIndex(of: token.type)
+            else { continue }
+            let deltaLine = token.range.start.line - previousLine
+            let deltaCharacter = deltaLine == 0
+                ? token.range.start.character - previousCharacter
+                : token.range.start.character
+            data += [deltaLine, deltaCharacter,
+                     token.range.end.character - token.range.start.character,
+                     typeIndex, token.isDeclaration ? 1 : 0]
+            previousLine = token.range.start.line
+            previousCharacter = token.range.start.character
+        }
+        return LSPSemanticTokensResult(
+            resultID: "\(document.version):\(document.analysis.semantics.grammarFingerprint)",
+            data: data)
     }
 
     public func snapshot(uri: String) throws -> SourceSnapshot {
@@ -255,264 +360,46 @@ public actor PL0LSPAdapter {
         return SourceSnapshot(version: document.version, text: document.text)
     }
 
-    private func analyze(version: UInt64, text: String) -> Document {
-        let snapshot = SourceSnapshot(version: version, text: text)
-        let parse = frontend.parse(snapshot)
-        return Document(version: version, text: text, parse: parse,
-                        symbols: SymbolIndexer(tokens: parse.tokens).build())
+    public func analysis(uri: String) throws -> PL0Analysis {
+        guard let document = documents[uri] else {
+            throw PL0LSPError.documentNotOpen(uri)
+        }
+        return document.analysis
     }
 
     private func diagnostics(for document: Document) -> [LSPDiagnostic] {
         let map = LSPLineMap(document.text)
-        var result = document.parse.diagnostics.map {
+        var result = document.analysis.parse.diagnostics.map {
             LSPDiagnostic(range: map.lspRange($0.range), severity: $0.severity,
                           message: $0.message, source: "pl0-parser")
         }
-        result.append(contentsOf: document.symbols.diagnostics.map {
+        result.append(contentsOf: document.analysis.semantics.diagnostics.map {
             LSPDiagnostic(range: map.lspRange($0.range), severity: .error,
                           message: $0.message, source: "pl0-semantics")
         })
         return result.uniquedByID()
     }
-}
 
-// MARK: - Lexical symbol index
-
-private enum SymbolKind: Sendable {
-    case constant, variable, procedure
-
-    var completionKind: LSPCompletionKind {
-        switch self { case .constant: .constant; case .variable: .variable; case .procedure: .function }
-    }
-    var semanticType: LSPSemanticTokenType {
-        switch self { case .constant: .constant; case .variable: .variable; case .procedure: .function }
-    }
-    var detail: String {
-        switch self { case .constant: "constant"; case .variable: "variable"; case .procedure: "procedure" }
-    }
-}
-
-private struct IndexedSymbol: Sendable {
-    let id: Int
-    let name: String
-    let kind: SymbolKind
-    let range: SourceRange
-    let scopeID: Int
-}
-
-private struct SymbolReference: Sendable {
-    let range: SourceRange
-    let declarationID: Int
-}
-
-private struct IndexedSemanticToken: Sendable {
-    let range: SourceRange
-    let type: LSPSemanticTokenType
-    let isDeclaration: Bool
-}
-
-private struct SemanticDiagnostic: Sendable {
-    let range: SourceRange
-    let message: String
-}
-
-private struct IndexedScope: Sendable {
-    let id: Int
-    let parentID: Int?
-    var range: SourceRange
-    var symbols: [String: Int] = [:]
-}
-
-private struct SymbolIndex: Sendable {
-    var declarations: [Int: IndexedSymbol] = [:]
-    var references: [SymbolReference] = []
-    var scopes: [IndexedScope] = []
-    var semanticTokens: [IndexedSemanticToken] = []
-    var diagnostics: [SemanticDiagnostic] = []
-
-    func visible(at offset: Int) -> [IndexedSymbol] {
-        guard var scope = scopes.filter({ offset >= $0.range.location && offset <= $0.range.end })
-            .max(by: { $0.range.length > $1.range.length }) else { return [] }
-        var result: [IndexedSymbol] = []
-        var names = Set<String>()
-        while true {
-            for (name, id) in scope.symbols where names.insert(name).inserted {
-                if let symbol = declarations[id] { result.append(symbol) }
-            }
-            guard let parent = scope.parentID, parent < scopes.count else { break }
-            scope = scopes[parent]
-        }
-        return result
-    }
-}
-
-private final class SymbolIndexer {
-    private let tokens: [PL0Token]
-    private var index = 0
-    private var result = SymbolIndex()
-    private var scopeStack: [Int] = []
-
-    init(tokens: [PL0Token]) { self.tokens = tokens }
-    private var current: PL0Token { tokens[min(index, tokens.count - 1)] }
-
-    func build() -> SymbolIndex {
-        parseBlock(parent: nil)
-        for token in tokens where token.kind != .identifier && token.kind != .endOfFile {
-            if let type = semanticType(token.kind) {
-                result.semanticTokens.append(IndexedSemanticToken(
-                    range: token.range, type: type, isDeclaration: false))
-            }
-        }
-        result.semanticTokens.sort { $0.range.location < $1.range.location }
-        return result
-    }
-
-    private func parseBlock(parent: Int?) {
-        let start = current.range.location
-        let scopeID = result.scopes.count
-        result.scopes.append(IndexedScope(id: scopeID, parentID: parent,
-                                          range: SourceRange(location: start, length: 0)))
-        scopeStack.append(scopeID)
-        if consume(.const) {
-            repeat {
-                if current.kind == .identifier { declare(current, kind: .constant); advance() }
-                skip(.equal); skip(.number)
-            } while consume(.comma)
-            skip(.semicolon)
-        }
-        if consume(.varKeyword) {
-            repeat {
-                if current.kind == .identifier { declare(current, kind: .variable); advance() }
-            } while consume(.comma)
-            skip(.semicolon)
-        }
-        while consume(.procedure) {
-            if current.kind == .identifier { declare(current, kind: .procedure); advance() }
-            skip(.semicolon)
-            parseBlock(parent: scopeID)
-            skip(.semicolon)
-        }
-        parseStatement()
-        let end = current.range.location
-        result.scopes[scopeID].range = SourceRange(location: start, length: max(0, end - start))
-        scopeStack.removeLast()
-    }
-
-    private func parseStatement() {
-        switch current.kind {
-        case .identifier:
-            reference(current, required: .variable); advance(); skip(.assign); parseExpression()
-        case .call:
-            advance()
-            if current.kind == .identifier { reference(current, required: .procedure); advance() }
-        case .begin:
-            advance()
-            if current.kind != .end { parseStatement() }
-            while consume(.semicolon) { parseStatement() }
-            skip(.end)
-        case .ifKeyword:
-            advance(); parseCondition(); skip(.then); parseStatement()
-        case .whileKeyword:
-            advance(); parseCondition(); skip(.doKeyword); parseStatement()
-        default: break
-        }
-    }
-
-    private func parseCondition() {
-        if consume(.odd) { parseExpression(); return }
-        parseExpression()
-        if current.kind.isRelationalOperator { advance(); parseExpression() }
-    }
-
-    private func parseExpression() {
-        if current.kind == .plus || current.kind == .minus { advance() }
-        parseTerm()
-        while current.kind == .plus || current.kind == .minus { advance(); parseTerm() }
-    }
-
-    private func parseTerm() {
-        parseFactor()
-        while current.kind == .star || current.kind == .slash { advance(); parseFactor() }
-    }
-
-    private func parseFactor() {
-        if current.kind == .identifier {
-            reference(current, required: nil); advance()
-        } else if current.kind == .number {
-            advance()
-        } else if consume(.leftParen) {
-            parseExpression(); skip(.rightParen)
-        } else if current.kind != .endOfFile {
-            advance()
-        }
-    }
-
-    private func declare(_ token: PL0Token, kind: SymbolKind) {
-        guard let scopeID = scopeStack.last else { return }
-        let key = token.lexeme.lowercased()
-        if result.scopes[scopeID].symbols[key] != nil {
-            result.diagnostics.append(SemanticDiagnostic(
-                range: token.range, message: "Duplicate declaration of '\(token.lexeme)'"))
-            return
-        }
-        let id = result.declarations.count
-        let symbol = IndexedSymbol(id: id, name: token.lexeme, kind: kind,
-                                   range: token.range, scopeID: scopeID)
-        result.declarations[id] = symbol
-        result.scopes[scopeID].symbols[key] = id
-        result.semanticTokens.append(IndexedSemanticToken(
-            range: token.range, type: kind.semanticType, isDeclaration: true))
-    }
-
-    private func reference(_ token: PL0Token, required: SymbolKind?) {
-        guard let symbol = resolve(token.lexeme) else {
-            result.diagnostics.append(SemanticDiagnostic(
-                range: token.range, message: "Unknown identifier '\(token.lexeme)'"))
-            return
-        }
-        if let required, !sameKind(symbol.kind, required) {
-            result.diagnostics.append(SemanticDiagnostic(
-                range: token.range,
-                message: "'\(token.lexeme)' is not a \(required.detail)"))
-        }
-        result.references.append(SymbolReference(range: token.range,
-                                                 declarationID: symbol.id))
-        result.semanticTokens.append(IndexedSemanticToken(
-            range: token.range, type: symbol.kind.semanticType, isDeclaration: false))
-    }
-
-    private func resolve(_ name: String) -> IndexedSymbol? {
-        let key = name.lowercased()
-        for scopeID in scopeStack.reversed() {
-            if let id = result.scopes[scopeID].symbols[key] { return result.declarations[id] }
-        }
-        return nil
-    }
-
-    private func sameKind(_ lhs: SymbolKind, _ rhs: SymbolKind) -> Bool {
-        switch (lhs, rhs) {
-        case (.constant, .constant), (.variable, .variable), (.procedure, .procedure): true
-        default: false
-        }
-    }
-
-    private func semanticType(_ kind: PL0TokenKind) -> LSPSemanticTokenType? {
+    private func completionKind(_ kind: PL0SymbolKind) -> LSPCompletionKind {
         switch kind {
-        case .const, .varKeyword, .procedure, .call, .begin, .end,
-             .ifKeyword, .then, .whileKeyword, .doKeyword, .odd: .keyword
-        case .number: .number
-        case .plus, .minus, .star, .slash, .equal, .notEqual, .less,
-             .lessEqual, .greater, .greaterEqual, .assign: .operatorToken
-        default: nil
+        case .constant: .constant
+        case .variable: .variable
+        case .procedure: .function
         }
     }
 
-    private func consume(_ kind: PL0TokenKind) -> Bool {
-        guard current.kind == kind else { return false }
-        advance(); return true
+    private func semanticTokenType(
+        _ classification: PL0SemanticClassification
+    ) -> LSPSemanticTokenType? {
+        switch classification {
+        case .keyword: .keyword
+        case .number: .number
+        case .operatorToken: .operatorToken
+        case .symbol(.constant): .constant
+        case .symbol(.variable): .variable
+        case .symbol(.procedure): .function
+        }
     }
-    private func skip(_ kind: PL0TokenKind) { if current.kind == kind { advance() } }
-    private func advance() { if current.kind != .endOfFile { index += 1 } }
 }
 
 private extension Array where Element: Identifiable, Element.ID: Hashable {

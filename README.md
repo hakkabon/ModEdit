@@ -358,12 +358,15 @@ The first implementation is a deliberately small vertical slice:
 * `PL0Formatter` rejects recovered syntax, preserves `//` and `/* ... */`
   comments, emits deterministic two-space indentation and is idempotent.
 * `PL0Compiler` lowers the controlled grammar to lexical-addressed bytecode.
+  It consumes the shared `PL0SemanticModel` rather than resolving names again,
+  and publishes the recovered CST through Compiler's public syntax boundary.
   `PL0VirtualMachine` executes integer arithmetic, conditions, loops, nested
   procedures and recursion with checked arithmetic and an instruction limit.
 * `PL0LSPAdapter` is a transport-neutral, multi-document language service. It
   accepts full or ranged LSP changes, rejects stale versions and provides
-  parser plus semantic diagnostics, scope-aware completion, go-to-definition
-  and semantic tokens. Positions are zero-based UTF-16 line/character pairs.
+  parser plus semantic diagnostics, scope-aware completion, definition, hover,
+  references, semantic tokens and their standard delta-encoded integer stream.
+  Positions are zero-based UTF-16 line/character pairs.
 * `GrammarWorkbenchHotReloadSession` speaks Grammar Workbench's published
   schema-1 JSON-lines protocol without linking ModEdit to Workbench packages.
   It retains one document session, sends UTF-16 edits and atomically activates
@@ -382,7 +385,8 @@ into the reference result. The **Trace** tab exposes LR shift/reduce/state-stack
 events or Earley predict/scan/complete/chart events, including incremental
 reuse. The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
 cost; Tokens shows lexer locations and classifications; CST shows grammatical
-nesting followed by the recovered terminal stream. The header reports snapshot
+nesting followed by the recovered terminal stream; Semantics shows lexical
+scopes, declarations, levels and slots. The header reports snapshot
 version, token count, scanned UTF-16 length, lexer reuse, parser node/token reuse
 and lexer+parser time.
 
@@ -554,6 +558,20 @@ front end so a compiled or hot-reloaded language kit can be used consistently.
 
 See [Unified experimental front ends](Docs/UnifiedExperimentalFrontends.md) for
 the data flow, invariants, and next cross-repository integration boundary.
+
+## Shared semantics, compiler, and LSP
+
+`PL0LanguageSession.analyze(_:)` produces one `PL0Analysis` for an exact editor
+revision. Its public semantic model contains stable declaration identities,
+lexical scopes, resolved references, storage slots, constant values, semantic
+classifications, and source-located diagnostics. Compilation and LSP features
+consume this same evidence.
+
+The bytecode lowerer therefore no longer performs a separate symbol-resolution
+pass. LSP documents retain their own incremental language session, and a ranged
+change preserves unchanged token and symbol identities. See
+[Semantics, Compiler, and LSP](Docs/SemanticsCompilerLSP.md) for the model,
+Compiler package boundary, and transport roadmap.
 
 ## Adding a format
 
@@ -799,6 +817,14 @@ comparison, formatting and compilation share one prepared document input, and
 the LSP/standalone consumers use the same configurable front-end abstraction.
 Promoting that prepared-session boundary into a shared ecosystem package is the
 next cross-repository step for Grammar-REPL and Grammar-Workbench.
+
+The fifth phase is complete locally: semantics has one public, source-located
+model shared by the compiler, workbench, and LSP adapter. Compilation lowers
+resolved lexical addresses and exports Compiler-compatible syntax artifacts;
+LSP analysis is incremental and provides diagnostics, completion, definition,
+hover, references, and encoded semantic tokens. The next ecosystem step is to
+extend Compiler's IR with explicit static-link operations so nested PL/0
+procedures can move onto the shared backend without weakening their semantics.
 
 1. **Parser comparison laboratory.** Add stepping and forest visualization to
    the connected native traces; project the now-connected Earley-table, CYK and

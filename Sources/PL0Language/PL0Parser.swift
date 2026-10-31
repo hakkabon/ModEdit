@@ -186,6 +186,9 @@ public actor PL0LanguageSession {
     private let frontend: PL0Frontend
     private let ecosystem: PL0EcosystemParserSession
     private var lastPrepared: PL0PreparedFrontend?
+    private var lastParse: ParseResult?
+    private var lastParseSnapshot: SourceSnapshot?
+    private var lastAnalysis: PL0Analysis?
 
     public init(engine: ParserEngine = .referenceLL,
                 languageKit: PL0LanguageKit = .bundled) {
@@ -214,8 +217,12 @@ public actor PL0LanguageSession {
             languageKit: frontend.languageKit,
             lexingNanoseconds: nanoseconds, lexMetrics: tokenized.metrics)
         lastPrepared = prepared
-        return frontend.parse(prepared, parserCache: &parserCache,
-                              lrParser: &lrParser, earleyParser: &earleyParser)
+        let result = frontend.parse(prepared, parserCache: &parserCache,
+                                    lrParser: &lrParser, earleyParser: &earleyParser)
+        lastParse = result
+        lastParseSnapshot = snapshot
+        lastAnalysis = nil
+        return result
     }
 
     /// Compares the linked parser ecosystem using the exact prepared input
@@ -231,7 +238,17 @@ public actor PL0LanguageSession {
     }
 
     public func compile(_ snapshot: SourceSnapshot) throws -> PL0Program {
-        try PL0Compiler(frontend: frontend).compile(prepared(for: snapshot))
+        try compileArtifacts(snapshot).program
+    }
+
+    public func compileArtifacts(
+        _ snapshot: SourceSnapshot
+    ) throws -> PL0CompilationArtifacts {
+        try PL0Compiler(frontend: frontend).compileArtifacts(analysis(for: snapshot))
+    }
+
+    public func analyze(_ snapshot: SourceSnapshot) -> PL0Analysis {
+        analysis(for: snapshot)
     }
 
     public func reset() {
@@ -240,6 +257,9 @@ public actor PL0LanguageSession {
         lrParser.reset()
         earleyParser.reset()
         lastPrepared = nil
+        lastParse = nil
+        lastParseSnapshot = nil
+        lastAnalysis = nil
     }
 
     private func prepared(for snapshot: SourceSnapshot) -> PL0PreparedFrontend {
@@ -247,6 +267,25 @@ public actor PL0LanguageSession {
         let prepared = frontend.prepare(snapshot)
         lastPrepared = prepared
         return prepared
+    }
+
+    private func analysis(for snapshot: SourceSnapshot) -> PL0Analysis {
+        if let lastAnalysis, lastAnalysis.prepared.snapshot == snapshot {
+            return lastAnalysis
+        }
+        let parsed: ParseResult
+        if let lastParse, lastParseSnapshot == snapshot,
+           lastPrepared?.snapshot == snapshot {
+            parsed = lastParse
+        } else {
+            parsed = parse(snapshot)
+        }
+        let prepared = lastPrepared ?? frontend.prepare(snapshot)
+        let semantics = PL0SemanticAnalyzer().analyze(prepared, parse: parsed)
+        let analysis = PL0Analysis(prepared: prepared, parse: parsed,
+                                   semantics: semantics)
+        lastAnalysis = analysis
+        return analysis
     }
 }
 

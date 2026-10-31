@@ -76,6 +76,28 @@ struct PL0LSPAdapterTests {
         #expect(tokens.contains { $0.type == .variable && !$0.isDeclaration })
         #expect(tokens.contains { $0.type == .keyword })
         #expect(tokens.contains { $0.type == .operatorToken })
+
+        let encoded = try await adapter.semanticTokenData(uri: uri)
+        #expect(encoded.data.count == tokens.count * 5)
+        #expect(encoded.data.enumerated().allSatisfy {
+            $0.offset % 5 != 2 || $0.element > 0
+        })
+        #expect(encoded.resultID.hasPrefix("1:"))
+    }
+
+    @Test func hoverAndReferencesUseSharedSymbolIdentity() async throws {
+        let source = "const n = 2; var x; begin x := n + n end."
+        let adapter = PL0LSPAdapter()
+        _ = await adapter.open(uri: uri, version: 1, text: source)
+        let use = (source as NSString).range(of: "n + n").location
+        let position = LSPLineMap(source).position(of: use)
+
+        let hover = try await adapter.hover(uri: uri, at: position)
+        let references = try await adapter.references(uri: uri, at: position)
+
+        #expect(hover?.contents == "constant n = 2")
+        #expect(references.count == 3)
+        #expect(references.first?.range.start == LSPPosition(line: 0, character: 6))
     }
 
     @Test func closeReleasesDocumentState() async throws {

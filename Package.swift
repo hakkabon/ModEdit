@@ -37,9 +37,15 @@ let package = Package(
         .target(
             name: "LanguageExperimentProtocol"),
         .target(
+            name: "CompilerBridge",
+            dependencies: [
+                .product(name: "Compiler", package: "Compiler"),
+            ]),
+        .target(
             name: "PL0Language",
             dependencies: [
                 "LanguageExperimentProtocol",
+                "CompilerBridge",
                 .product(name: "Grammar", package: "Grammar"),
                 .product(name: "Parser", package: "Parser"),
                 .product(name: "Lexer", package: "Lexer"),
@@ -50,7 +56,6 @@ let package = Package(
                 .product(name: "LL-Parsing", package: "LL-Parsing"),
                 .product(name: "Earley-TableParser", package: "Earley-TableParser"),
                 .product(name: "GrammarDiagram", package: "GrammarDiagram"),
-                .product(name: "Compiler", package: "Compiler"),
             ],
             resources: [.process("Resources")]),
         .target(

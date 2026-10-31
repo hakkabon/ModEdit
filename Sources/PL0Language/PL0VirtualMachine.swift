@@ -1,3 +1,4 @@
+import CompilerBridge
 import Foundation
 
 public enum PL0Opcode: String, Sendable {
@@ -78,6 +79,14 @@ public enum PL0CompilationError: Error, Sendable, Equatable, CustomStringConvert
     }
 }
 
+/// Phase-5 compiler handoff: the shared analysis, Compiler package syntax
+/// boundary, and executable PL/0 bytecode remain inspectable together.
+public struct PL0CompilationArtifacts: Sendable {
+    public let analysis: PL0Analysis
+    public let compilerSyntax: EcosystemSyntaxNode
+    public let program: PL0Program
+}
+
 public enum PL0RuntimeError: Error, Sendable, Equatable, CustomStringConvertible {
     case instructionLimitExceeded(Int)
     case divisionByZero(Int)
@@ -116,12 +125,115 @@ public struct PL0Compiler: Sendable {
     }
 
     public func compile(_ prepared: PL0PreparedFrontend) throws -> PL0Program {
+        try compile(analyze(prepared))
+    }
+
+    public func analyze(_ prepared: PL0PreparedFrontend) -> PL0Analysis {
         let parsed = frontend.parse(prepared)
-        guard parsed.diagnostics.isEmpty else {
-            throw PL0CompilationError.syntax(parsed.diagnostics)
+        return PL0Analysis(
+            prepared: prepared, parse: parsed,
+            semantics: PL0SemanticAnalyzer().analyze(prepared, parse: parsed))
+    }
+
+    public func compile(_ analysis: PL0Analysis) throws -> PL0Program {
+        try compileArtifacts(analysis).program
+    }
+
+    public func compileArtifacts(_ analysis: PL0Analysis) throws -> PL0CompilationArtifacts {
+        try frontend.languageKit.artifact.requireFingerprint(
+            analysis.prepared.grammarFingerprint)
+        try frontend.languageKit.artifact.requireFingerprint(
+            analysis.semantics.grammarFingerprint)
+        guard analysis.parse.diagnostics.isEmpty else {
+            throw PL0CompilationError.syntax(analysis.parse.diagnostics)
         }
-        let compiler = Compiler(tokens: parsed.tokens)
-        return try compiler.compileProgram()
+        if let diagnostic = analysis.semantics.diagnostics.first {
+            throw PL0CompilationError.semantic(
+                message: diagnostic.message, range: diagnostic.range)
+        }
+        let program = try PL0BytecodeLowerer(
+            tokens: analysis.parse.tokens,
+            semantics: analysis.semantics).compileProgram()
+        return PL0CompilationArtifacts(
+            analysis: analysis,
+            compilerSyntax: PL0CompilerSyntaxAdapter().adapt(analysis),
+            program: program)
+    }
+}
+
+/// Projects ModEdit's concrete, recovered CST into Compiler's public parser
+/// boundary. PL/0 retains its own semantics because Compiler's demonstration
+/// language does not model lexical levels or static links.
+public struct PL0CompilerSyntaxAdapter: Sendable {
+    public init() {}
+
+    public func adapt(_ analysis: PL0Analysis) -> EcosystemSyntaxNode {
+        let rangeMap = CompilerRangeMap(analysis.prepared.snapshot.text)
+        let structure = adapt(analysis.parse.root, rangeMap: rangeMap)
+        let terminals = analysis.parse.syntaxTree.terminals.map { terminal in
+            let range = rangeMap.range(terminal.range)
+            return EcosystemSyntaxNode(
+                rule: "terminal.\(terminal.disposition.rawValue)",
+                token: EcosystemSyntaxToken(
+                    kind: terminal.kind.grammarName,
+                    lexeme: terminal.lexeme, range: range),
+                range: range)
+        }
+        return EcosystemSyntaxNode(
+            rule: "PL0Document", children: [
+                structure,
+                EcosystemSyntaxNode(rule: "ConcreteTerminals", children: terminals)
+            ], range: rangeMap.range(analysis.parse.root.range))
+    }
+
+    private func adapt(_ node: SyntaxNode,
+                       rangeMap: CompilerRangeMap) -> EcosystemSyntaxNode {
+        EcosystemSyntaxNode(
+            rule: node.kind,
+            children: node.children.map { adapt($0, rangeMap: rangeMap) },
+            range: rangeMap.range(node.range))
+    }
+}
+
+private struct CompilerRangeMap {
+    private let units: [UInt16]
+    private let lineStarts: [Int]
+
+    init(_ source: String) {
+        units = Array(source.utf16)
+        var starts = [0]
+        var index = 0
+        while index < units.count {
+            if units[index] == 13 {
+                index += 1
+                if index < units.count, units[index] == 10 { index += 1 }
+                starts.append(index)
+            } else if units[index] == 10 {
+                index += 1
+                starts.append(index)
+            } else {
+                index += 1
+            }
+        }
+        lineStarts = starts
+    }
+
+    func range(_ sourceRange: SourceRange) -> EcosystemSourceRange {
+        EcosystemSourceRange(start: location(sourceRange.location),
+                             end: location(sourceRange.end))
+    }
+
+    private func location(_ requested: Int) -> EcosystemSourceLocation {
+        let offset = min(max(0, requested), units.count)
+        var low = 0, high = lineStarts.count
+        while low < high {
+            let middle = (low + high) / 2
+            if lineStarts[middle] <= offset { low = middle + 1 } else { high = middle }
+        }
+        let line = max(0, low - 1)
+        return EcosystemSourceLocation(
+            offset: offset, line: line + 1,
+            column: offset - lineStarts[line] + 1)
     }
 }
 
@@ -269,25 +381,23 @@ public struct PL0VirtualMachine: Sendable {
     }
 }
 
-private final class Compiler {
-    private enum Symbol {
-        case constant(Int)
-        case variable(level: Int, slot: Int)
-        case procedure(level: Int, address: Int)
-    }
-
+private final class PL0BytecodeLowerer {
     private struct Scope {
         let level: Int
-        var symbols: [String: Symbol] = [:]
         var variables: [PL0Global] = []
     }
 
     private let tokens: [PL0Token]
+    private let semantics: PL0SemanticModel
     private var index = 0
     private var instructions: [PL0Instruction] = []
     private var scopes = [Scope(level: 0)]
+    private var procedureAddresses: [String: Int] = [:]
 
-    init(tokens: [PL0Token]) { self.tokens = tokens }
+    init(tokens: [PL0Token], semantics: PL0SemanticModel) {
+        self.tokens = tokens
+        self.semantics = semantics
+    }
 
     private var current: PL0Token { tokens[min(index, tokens.count - 1)] }
     private var level: Int { scopes.count - 1 }
@@ -303,14 +413,13 @@ private final class Compiler {
 
         if match(.const) {
             repeat {
-                let name = try identifier()
+                _ = try identifier()
                 try expect(.equal)
                 let valueToken = current
                 try expect(.number)
-                guard let value = Int(valueToken.lexeme) else {
+                guard Int(valueToken.lexeme) != nil else {
                     throw semantic("Integer literal is outside the VM range", at: valueToken.range)
                 }
-                try define(name.lexeme, symbol: .constant(value), at: name.range)
             } while match(.comma)
             try expect(.semicolon)
         }
@@ -318,11 +427,12 @@ private final class Compiler {
         if match(.varKeyword) {
             repeat {
                 let name = try identifier()
-                let slot = scopes[scopes.count - 1].variables.count
+                guard let declaration = declared(at: name.range),
+                      let slot = declaration.slot else {
+                    throw semantic("Unresolved variable '\(name.lexeme)'", at: name.range)
+                }
                 scopes[scopes.count - 1].variables.append(
                     PL0Global(name: name.lexeme, slot: slot))
-                try define(name.lexeme, symbol: .variable(level: level, slot: slot),
-                           at: name.range)
             } while match(.comma)
             try expect(.semicolon)
         }
@@ -331,8 +441,10 @@ private final class Compiler {
             let name = try identifier()
             try expect(.semicolon)
             let address = instructions.count
-            try define(name.lexeme, symbol: .procedure(level: level, address: address),
-                       at: name.range)
+            guard let declaration = declared(at: name.range) else {
+                throw semantic("Unresolved procedure '\(name.lexeme)'", at: name.range)
+            }
+            procedureAddresses[declaration.id] = address
             scopes.append(Scope(level: level + 1))
             try compileBlock(isMain: false)
             scopes.removeLast()
@@ -353,18 +465,20 @@ private final class Compiler {
             advance()
             try expect(.assign)
             try compileExpression()
-            guard case let .variable(declarationLevel, slot)? = resolve(name.lexeme) else {
+            guard let symbol = referenced(by: name), symbol.kind == .variable,
+                  let slot = symbol.slot else {
                 throw semantic("'\(name.lexeme)' is not a variable", at: name.range)
             }
-            emit(.store, operand: level - declarationLevel,
+            emit(.store, operand: level - symbol.lexicalLevel,
                  secondary: slot, at: name.range)
         case .call:
             advance()
             let name = try identifier()
-            guard case let .procedure(declarationLevel, address)? = resolve(name.lexeme) else {
+            guard let symbol = referenced(by: name), symbol.kind == .procedure,
+                  let address = procedureAddresses[symbol.id] else {
                 throw semantic("Unknown procedure '\(name.lexeme)'", at: name.range)
             }
-            emit(.call, operand: level - declarationLevel,
+            emit(.call, operand: level - symbol.lexicalLevel,
                  secondary: address, at: name.range)
         case .begin:
             advance()
@@ -450,13 +564,20 @@ private final class Compiler {
         switch token.kind {
         case .identifier:
             advance()
-            guard let symbol = resolve(token.lexeme) else {
+            guard let symbol = referenced(by: token) else {
                 throw semantic("Unknown identifier '\(token.lexeme)'", at: token.range)
             }
-            switch symbol {
-            case let .constant(value): emit(.push, operand: value, at: token.range)
-            case let .variable(declarationLevel, slot):
-                emit(.load, operand: level - declarationLevel,
+            switch symbol.kind {
+            case .constant:
+                guard let value = symbol.constantValue else {
+                    throw semantic("Invalid constant '\(token.lexeme)'", at: token.range)
+                }
+                emit(.push, operand: value, at: token.range)
+            case .variable:
+                guard let slot = symbol.slot else {
+                    throw semantic("Unresolved variable '\(token.lexeme)'", at: token.range)
+                }
+                emit(.load, operand: level - symbol.lexicalLevel,
                      secondary: slot, at: token.range)
             case .procedure:
                 throw semantic("Procedure '\(token.lexeme)' is not a value", at: token.range)
@@ -476,21 +597,15 @@ private final class Compiler {
         }
     }
 
-    private func resolve(_ name: String) -> Symbol? {
-        let key = name.lowercased()
-        for scope in scopes.reversed() {
-            if let symbol = scope.symbols[key] { return symbol }
-        }
-        return nil
+    private func declared(at range: SourceRange) -> PL0Symbol? {
+        semantics.symbols.first { $0.declarationRange == range }
     }
 
-    private func define(_ name: String, symbol: Symbol,
-                        at range: SourceRange) throws {
-        let key = name.lowercased()
-        guard scopes[scopes.count - 1].symbols[key] == nil else {
-            throw semantic("Duplicate declaration of '\(name)'", at: range)
-        }
-        scopes[scopes.count - 1].symbols[key] = symbol
+    private func referenced(by token: PL0Token) -> PL0Symbol? {
+        guard let reference = semantics.references.first(where: {
+            $0.range == token.range
+        }) else { return nil }
+        return semantics.symbol(id: reference.symbolID)
     }
 
     private func identifier() throws -> PL0Token {

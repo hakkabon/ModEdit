@@ -13,6 +13,7 @@ struct PL0WorkbenchPane: View {
     let replaceSource: (String) -> Void
 
     @State private var result: ParseResult?
+    @State private var semantics: PL0SemanticModel?
     @State private var selectedView = WorkbenchView.diagnostics
     @State private var selectedEngine = ParserEngine.referenceLL
     @State private var session = PL0LanguageSession()
@@ -27,6 +28,7 @@ struct PL0WorkbenchPane: View {
         case recovery = "Recovery"
         case tokens = "Tokens"
         case syntaxTree = "CST"
+        case semantics = "Semantics"
         case comparison = "Compare"
         case trace = "Trace"
         case grammarWorkbench = "Grammar WB"
@@ -105,6 +107,7 @@ struct PL0WorkbenchPane: View {
         }
         .onChange(of: selectedEngine) { engine in
             result = nil
+            semantics = nil
             runtime = .idle
             ecosystemComparison = .idle
             session = PL0LanguageSession(engine: engine)
@@ -112,6 +115,7 @@ struct PL0WorkbenchPane: View {
         .onChange(of: revision) { _ in
             runtime = .idle
             ecosystemComparison = .idle
+            semantics = nil
         }
         .task { await watchGrammarWorkbench() }
         .onDisappear {
@@ -126,11 +130,13 @@ struct PL0WorkbenchPane: View {
         case .diagnostics:
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if result.diagnostics.isEmpty {
-                        Label("No syntax problems", systemImage: "checkmark.circle.fill")
+                    let problems = result.diagnostics + (semantics?.diagnostics ?? [])
+                    if problems.isEmpty {
+                        Label("No syntax or semantic problems",
+                              systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                     }
-                    ForEach(result.diagnostics) { diagnostic in
+                    ForEach(problems) { diagnostic in
                         Button { reveal(diagnostic.range) } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Label(diagnostic.message,
@@ -209,6 +215,8 @@ struct PL0WorkbenchPane: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        case .semantics:
+            semanticContent
         case .comparison:
             comparisonContent(result)
         case .trace:
@@ -217,6 +225,39 @@ struct PL0WorkbenchPane: View {
             grammarWorkbenchContent
         case .runtime:
             runtimeContent
+        }
+    }
+
+    @ViewBuilder
+    private var semanticContent: some View {
+        if let semantics {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    Text("\(semantics.symbols.count) symbols · \(semantics.references.count) references · \(semantics.scopes.count) scopes")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    ForEach(semantics.scopes) { scope in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Scope \(scope.id) · parent \(scope.parentID.map { String($0) } ?? "none") · UTF-16 \(scope.range.location)..<\(scope.range.end)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                            ForEach(semantics.symbols.filter { $0.scopeID == scope.id }) { symbol in
+                                Button { reveal(symbol.declarationRange) } label: {
+                                    Text("\(symbol.kind.rawValue) \(symbol.name) · level \(symbol.lexicalLevel)\(symbol.slot.map { " · slot \($0)" } ?? "")")
+                                        .font(.caption.monospaced())
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else {
+            ProgressView("Analyzing semantics…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -478,9 +519,11 @@ struct PL0WorkbenchPane: View {
         do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
         guard !Task.isCancelled else { return }
         let snapshot = SourceSnapshot(version: revision, text: source(), edit: edit)
-        let parsed = await session.parse(snapshot)
+        let analysis = await session.analyze(snapshot)
+        let parsed = analysis.parse
         guard !Task.isCancelled, parsed.version == revision else { return }
         result = parsed
+        semantics = analysis.semantics
         publish(parsed)
         if let grammarWorkbenchSession {
             do {
