@@ -38,10 +38,15 @@ public struct ParseExpectation: Sendable, Equatable, Identifiable {
 public struct ParserInput: Sendable {
     public let tokens: [PL0Token]
     public let lexicalDiagnostics: [ParseDiagnostic]
+    /// Original source when available. Ecosystem parsers consume positioned
+    /// token streams and use this text to retain editor-compatible ranges.
+    public let source: String?
 
-    public init(tokens: [PL0Token], lexicalDiagnostics: [ParseDiagnostic]) {
+    public init(tokens: [PL0Token], lexicalDiagnostics: [ParseDiagnostic],
+                source: String? = nil) {
         self.tokens = tokens
         self.lexicalDiagnostics = lexicalDiagnostics
+        self.source = source
     }
 }
 

@@ -27,16 +27,16 @@ output without changing the runtime artifact.
 The same artifact now drives several components:
 
 1. `PL0Lexer` derives keywords and operators from `%token` patterns.
-2. `LRPL0Parser` builds its SLR table from the compiled productions.
-3. `EarleyPL0Parser` builds its chart grammar from those same productions.
+2. `LRPL0Parser` projects the productions into Grammar and invokes
+   LR-Parsing's SLR implementation.
+3. `EarleyPL0Parser` invokes Earley-Parser with that same Grammar value.
 4. `PL0Frontend` records the artifact identity in every `ParseResult`.
 5. `PL0ExperimentContract` uses that identity by default and rejects a supplied
    identity with a different artifact/revision/fingerprint.
 6. Grammar Workbench uses the exact bundled source by default and reports when
    an experimental external grammar differs from the native artifact.
-7. `PL0EcosystemParserSession` serializes those same terminals and productions
-   into Grammar-REPL's schema-5 corpus and pairs them with token kinds produced
-   by the kit-driven lexer.
+7. `PL0EcosystemParserSession` runs the complete directly linked engine family
+   with the same Grammar value and positioned Lexer token stream.
 
 The handwritten reference LL parser remains the recovery oracle. Its typed
 token and nonterminal assumptions are checked against the bundled grammar, but

@@ -101,7 +101,8 @@ public struct PL0Frontend: Sendable {
         case .referenceLL:
             let parser = ReferencePL0Parser()
             let run = parser.parse(ParserInput(tokens: lexed.tokens,
-                                               lexicalDiagnostics: lexed.diagnostics),
+                                               lexicalDiagnostics: lexed.diagnostics,
+                                               source: snapshot.text),
                                    reusing: parserCache)
             parserCache = run.cache
             descriptor = parser.descriptor
@@ -111,7 +112,8 @@ public struct PL0Frontend: Sendable {
             parserCache = nil
             let parser = LRPL0Parser(languageKit: languageKit)
             let input = ParserInput(tokens: lexed.tokens,
-                                    lexicalDiagnostics: lexed.diagnostics)
+                                    lexicalDiagnostics: lexed.diagnostics,
+                                    source: snapshot.text)
             let detailed = lrParser.parse(input)
             descriptor = parser.descriptor
             parsed = parser.output(for: detailed, input: input)
@@ -120,7 +122,8 @@ public struct PL0Frontend: Sendable {
             parserCache = nil
             let parser = EarleyPL0Parser(languageKit: languageKit)
             let input = ParserInput(tokens: lexed.tokens,
-                                    lexicalDiagnostics: lexed.diagnostics)
+                                    lexicalDiagnostics: lexed.diagnostics,
+                                    source: snapshot.text)
             let detailed = earleyParser.parse(input)
             descriptor = parser.descriptor
             parsed = parser.output(for: detailed, input: input)

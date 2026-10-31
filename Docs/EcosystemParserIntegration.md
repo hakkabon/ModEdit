@@ -1,13 +1,38 @@
-# Ecosystem Parser Integration
+# Direct Ecosystem Parser Integration
 
-## Purpose
+## Dependency model
 
-Phase 3 connects ModEdit's controlled PL/0 language to the actual parser
-packages used across the Grammar ecosystem. The integration is differential:
-it preserves each engine's answer and evidence so a disagreement remains a
-testable result rather than being hidden behind the reference parser.
+ModEdit directly links the released Grammar/Parser ecosystem packages through
+SwiftPM. `PL0Language` depends on Grammar, Parser, Lexer, LL-Parsing,
+LR-Parsing, Earley-Parser, Earley-TableParser, CYK-Parser, RNGLR-Parser,
+GrammarDiagram and Compiler. SwiftPM resolves one shared package identity for
+each dependency; there is no copied parser implementation or subprocess
+required to compare engines.
 
-The canonical engine family is:
+The resolved versions are recorded in `Package.resolved`. They deliberately
+follow the compatible release ranges proven by Grammar-REPL rather than sibling
+repositories' potentially newer development branches.
+
+## PL/0 adapters
+
+`ecosystemGrammar(_:)` projects the authoritative `PL0.grammar` artifact into
+Grammar's `Grammar`, `Production`, `Symbol`, `Terminal` and `NonTerminal`
+types. `PL0EcosystemTokenStream` implements Lexer's positioned `TokenStream`
+contract and converts ModEdit's UTF-16 token ranges to `String.Index` ranges.
+All engines therefore receive the same grammar instance and terminal sequence.
+
+The editor's SLR and Earley choices are thin adapters:
+
+* `LRPL0Parser` invokes `LR_Parsing.LRParser` with `.slr`, projects its native
+  reduction tree and retains its actual shift/reduce trace.
+* `EarleyPL0Parser` invokes `Earley_Parser.EarleyParser`, exports the package
+  SPPF through Parser's `ParseForestSnapshot`, and projects that portable forest
+  into the existing workbench view.
+
+The former local SLR table generator, LR machine, Earley chart algorithm and
+private packed-forest builder have been deleted.
+
+`PL0EcosystemParserSession` runs the canonical family directly:
 
 1. Earley
 2. Earley Table SL
@@ -20,81 +45,47 @@ The canonical engine family is:
 9. LALR(1)
 10. Canonical LR(1)
 
-## Architecture
-
-`PL0EcosystemParserSession` is platform-neutral and depends on the
-`EcosystemParserTransport` protocol. It lexes a versioned source snapshot with
-`PL0LanguageKit`, then creates a deterministic schema-5 corpus containing:
-
-* all 29 terminals from `PL0.grammar`;
-* all 43 productions and their stable IDs;
-* the authoritative start symbol and grammar fingerprint; and
-* the current significant token-kind sequence, excluding EOF.
-
-The production transport, `GrammarREPLConformanceProcessTransport`, writes that
-corpus to an isolated temporary directory, executes
-`grammar-repl-conformance`, reads its observation file and removes the
-directory. ModEdit validates that the response contains exactly the canonical
-ten engines in stable order before exposing an `EcosystemParserComparison`.
-
-This out-of-process design is deliberate. Grammar-REPL already integrates and
-resolves compatible versions of Grammar, Lexer, Parser, LL-Parsing, LR-Parsing,
-Earley-Parser, both Earley table variants, CYK-Parser and RNGLR-Parser. Linking
-all sibling packages directly into ModEdit would risk duplicate Swift module
-identities and competing dependency resolutions. The conformance executable is
-the ecosystem-owned integration host; ModEdit remains a consumer of its
-portable contract.
-
-## Running it
-
-Build the adapter in Grammar-REPL:
-
-```sh
-swift build --product grammar-repl-conformance
-```
-
-Set `MODEDIT_GRAMMAR_REPL_CONFORMANCE` to the resulting absolute executable
-path before starting ModEdit. In a PL/0 document, open the **Compare** tab and
-choose **Run actual engines**.
-
-For the optional real-engine test:
-
-```sh
-MODEDIT_TEST_GRAMMAR_REPL_CONFORMANCE=/absolute/path/to/grammar-repl-conformance \
-swift test --filter realGrammarREPLRunsCanonicalEngineFamilyWhenConfigured
-```
-
-Ordinary unit tests use an injected transport and do not require sibling
-repositories or external executables.
+No environment variable or Grammar-REPL executable is needed. Open the
+workbench's **Compare** tab and select **Run actual engines**.
 
 ## Result semantics
 
-Every engine observation includes support status, parse status, derivation
-count, optional forest size and ambiguity, production-identity coverage and a
-portable replay-event summary. `agreement` is:
+Each observation retains support and parse status, derivation count, available
+forest size and ambiguity, production-identity coverage, and portable replay
+events. The comparison records document revision, grammar fingerprint and
+source fingerprint. Editing clears the displayed comparison, and late results
+for an older revision are discarded.
 
-* `complete` when at least two supported engines share the same acceptance;
-* `divergent` when supported engines disagree; or
-* `inconclusive` when fewer than two engines are supported.
+`agreement` is `complete` when at least two supported engines agree on
+acceptance, `divergent` when they disagree, and `inconclusive` when fewer than
+two engines are supported. ModEdit never changes an engine's decision to match
+the compatibility parser.
 
-The comparison records both document revision and source fingerprint. The UI
-also discards results if the live revision changed while the process was
-running.
+RNGLR 0.2.x does not yet accept Lexer's `TokenStream`, so its adapter feeds the
+same normalized terminal names as a synthetic source string. This is an API
+compatibility shim, not another recognizer.
 
-The current real-engine baseline for `var x; begin x := 1 end.` is intentionally
-recorded in the optional integration test. Earley, Earley SL/EL, RNGLR, LL(1),
-SLR, LALR and LR(1) accept. LR(0) rejects, which is expected for a grammar that
-is not LR(0). CYK also rejects and is retained as a normalization/integration
-issue to investigate rather than being relabelled as acceptance.
+## Remaining duplication
 
-## Current boundary and next work
+The course correction is intentionally staged around behavior-preserving
+deletion. These pieces remain and should be removed in subsequent migrations:
 
-The bridge currently transports recognition and compact forest/replay evidence.
-The editor-native reference LL, generated SLR and Earley implementations still
-own the rich CST, recovery, reuse and detailed trace views.
+* The handwritten PL/0 recovery parser still supplies the editor's normalized
+  missing/skipped-token CST on malformed input. LL-Parsing already performs
+  recovery; the missing work is a lossless projection into ModEdit's concrete
+  terminal model.
+* The PL/0 scanner retains UTF-16 incremental identities and lossless comment
+  trivia. Lexer supplies the DFA scanner and `TokenStream`; its result must be
+  combined with incremental trivia ownership before the local scanner can be
+  deleted without regressing editing behavior.
+* The PL/0 compiler and VM predate the direct Compiler dependency. PL/0
+  semantic lowering should target Compiler's syntax adapter, IR, bytecode and
+  runtime contracts, retaining only genuinely language-specific semantics.
+* Stable-prefix counts are currently adapter evidence, not native incremental
+  LR stack or Earley chart reuse. Genuine reusable states belong in the shared
+  parser packages so Grammar-REPL, Grammar-Workbench and ModEdit exercise the
+  same implementation.
 
-The next contract revision should transport native reduction trees, packed
-forest nodes and edges, recovery edits, conflicts, timing and detailed replay
-events using the shared `LanguageExperimentProtocol` identities. That will let
-Grammar-REPL, Grammar-Workbench, benchmarks and mutation campaigns replay the
-same artifact without weakening engine-specific evidence.
+Tests cover the directly linked ten-engine family, editor-facing LR/Earley
+adapters, deterministic comparison serialization, recovery compatibility,
+mutation campaigns and the existing editor/LSP/compiler behavior.

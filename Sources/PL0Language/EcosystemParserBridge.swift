@@ -1,69 +1,13 @@
+import CYK_Parser
+import Earley_Parser
+import Earley_TableParser
 import Foundation
+import Grammar
 import LanguageExperimentProtocol
-
-public protocol EcosystemParserTransport: Sendable {
-    func evaluate(_ corpus: Data) async throws -> Data
-}
-
-public enum EcosystemParserBridgeError: Error, Sendable, Equatable, CustomStringConvertible {
-    case launch(String)
-    case processFailed(status: Int32, message: String)
-    case invalidResponse(String)
-
-    public var description: String {
-        switch self {
-        case .launch(let message): "Could not launch Grammar-REPL conformance adapter: \(message)"
-        case let .processFailed(status, message):
-            "Grammar-REPL conformance adapter exited with status \(status): \(message)"
-        case .invalidResponse(let message): "Invalid Grammar-REPL engine response: \(message)"
-        }
-    }
-}
-
-/// Executes Grammar-REPL's non-interactive corpus adapter. That executable owns
-/// the actual Grammar, Parser, LL, LR, Earley, Earley Table, CYK, and RNGLR
-/// dependencies, avoiding duplicate Swift modules inside the editor process.
-public actor GrammarREPLConformanceProcessTransport: EcosystemParserTransport {
-    private let executableURL: URL
-
-    public init(executableURL: URL) {
-        self.executableURL = executableURL
-    }
-
-    public func evaluate(_ corpus: Data) async throws -> Data {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("modedit-grammar-repl-\(UUID().uuidString)",
-                                    isDirectory: true)
-        do { try FileManager.default.createDirectory(at: directory,
-                                                      withIntermediateDirectories: true) }
-        catch { throw EcosystemParserBridgeError.launch(error.localizedDescription) }
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let input = directory.appendingPathComponent("corpus.json")
-        let output = directory.appendingPathComponent("observations.json")
-        do { try corpus.write(to: input, options: .atomic) }
-        catch { throw EcosystemParserBridgeError.launch(error.localizedDescription) }
-
-        let process = Process()
-        let errorPipe = Pipe()
-        process.executableURL = executableURL
-        process.arguments = [input.path, output.path]
-        process.standardOutput = Pipe()
-        process.standardError = errorPipe
-        do { try process.run() }
-        catch { throw EcosystemParserBridgeError.launch(error.localizedDescription) }
-        process.waitUntilExit()
-        let errorText = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
-                               encoding: .utf8) ?? ""
-        guard process.terminationStatus == 0 else {
-            throw EcosystemParserBridgeError.processFailed(
-                status: process.terminationStatus,
-                message: errorText.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        do { return try Data(contentsOf: output) }
-        catch { throw EcosystemParserBridgeError.invalidResponse(error.localizedDescription) }
-    }
-}
+import LL_Parsing
+import LR_Parsing
+import Parser
+import RNGLR_Parser
 
 public enum EcosystemParserEngine: String, CaseIterable, Codable, Sendable, Hashable {
     case earley
@@ -103,15 +47,12 @@ public struct EcosystemParserObservation: Codable, Sendable, Equatable, Identifi
     public let replayEvents: [String]
     public let supported: Bool
     public let unsupportedReason: String?
-
     public var id: EcosystemParserEngine { parser }
     public var accepted: Bool { status == "accepted" || status == "acceptedWithRecovery" }
 }
 
 public enum EcosystemParserAgreement: String, Codable, Sendable, Equatable {
-    case complete
-    case divergent
-    case inconclusive
+    case complete, divergent, inconclusive
 }
 
 public struct EcosystemParserComparison: Codable, Sendable, Equatable {
@@ -122,46 +63,35 @@ public struct EcosystemParserComparison: Codable, Sendable, Equatable {
     public let agreement: EcosystemParserAgreement
 
     public init(revision: UInt64, grammarFingerprint: String,
-                sourceFingerprint: String,
-                engines: [EcosystemParserObservation]) {
+                sourceFingerprint: String, engines: [EcosystemParserObservation]) {
         self.revision = revision
         self.grammarFingerprint = grammarFingerprint
         self.sourceFingerprint = sourceFingerprint
         self.engines = engines
         let supported = engines.filter(\.supported)
-        if supported.count < 2 {
-            agreement = .inconclusive
-        } else {
-            agreement = Set(supported.map(\.accepted)).count == 1
-                ? .complete : .divergent
-        }
+        agreement = supported.count < 2 ? .inconclusive
+            : Set(supported.map(\.accepted)).count == 1 ? .complete : .divergent
     }
 }
 
+/// Runs the linked Grammar/Parser ecosystem packages directly. The comparison
+/// has no duplicated engine implementation and no Grammar-REPL subprocess.
 public actor PL0EcosystemParserSession {
-    private let transport: any EcosystemParserTransport
     private let languageKit: PL0LanguageKit
 
-    public init(transport: any EcosystemParserTransport,
-                languageKit: PL0LanguageKit = .bundled) {
-        self.transport = transport
+    public init(languageKit: PL0LanguageKit = .bundled) {
         self.languageKit = languageKit
     }
 
-    public func compare(_ snapshot: SourceSnapshot) async throws -> EcosystemParserComparison {
+    public func compare(_ snapshot: SourceSnapshot) throws -> EcosystemParserComparison {
         let lexed = PL0Lexer(languageKit: languageKit).tokenize(snapshot)
-        let corpus = try makeCorpus(snapshot: snapshot, tokens: lexed.tokens)
-        let response = try await transport.evaluate(corpus)
-        let observations: [WireObservation]
-        do { observations = try JSONDecoder().decode([WireObservation].self, from: response) }
-        catch { throw EcosystemParserBridgeError.invalidResponse(error.localizedDescription) }
-        guard observations.count == 1, observations[0].id == "modedit-pl0" else {
-            throw EcosystemParserBridgeError.invalidResponse("missing modedit-pl0 observation")
-        }
-        let engines = observations[0].engines ?? []
-        guard engines.map(\.parser) == EcosystemParserEngine.allCases else {
-            throw EcosystemParserBridgeError.invalidResponse(
-                "engine order or membership differs from the canonical ten-engine set")
+        let input = ParserInput(tokens: lexed.tokens,
+                                lexicalDiagnostics: lexed.diagnostics,
+                                source: snapshot.text)
+        let stream = try PL0EcosystemTokenStream(input)
+        let grammar = ecosystemGrammar(languageKit.artifact)
+        let engines = EcosystemParserEngine.allCases.map {
+            run($0, grammar: grammar, stream: stream)
         }
         return EcosystemParserComparison(
             revision: snapshot.version,
@@ -170,65 +100,103 @@ public actor PL0EcosystemParserSession {
             engines: engines)
     }
 
-    private func makeCorpus(snapshot: SourceSnapshot,
-                            tokens: [PL0Token]) throws -> Data {
-        let artifact = languageKit.artifact
-        let grammar = WireGrammar(
-            id: "pl0-\(artifact.fingerprint)", start: artifact.startSymbol,
-            terminals: artifact.tokenDefinitions.map(\.name), precedence: [],
-            productions: artifact.productions.map { production in
-                WireProduction(
-                    id: production.id, lhs: production.lhs,
-                    rhs: production.rhs.map { symbol in
-                        switch symbol {
-                        case .terminal(let name, _): name
-                        case .nonterminal(let name): name
-                        }
-                    })
-            })
-        let significant = tokens.filter { $0.kind != .endOfFile }.map { $0.kind.grammarName }
-        let corpus = WireCorpus(
-            schemaVersion: 5, grammars: [grammar],
-            cases: [WireCase(
-                id: "modedit-pl0", grammar: grammar.id, input: snapshot.text,
-                expectedTokenKinds: significant,
-                expectedStatus: "accepted", tags: ["engine-comparison"])])
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return try encoder.encode(corpus)
+    private func run(_ engine: EcosystemParserEngine, grammar: Grammar,
+                     stream: PL0EcosystemTokenStream) -> EcosystemParserObservation {
+        do {
+            switch engine {
+            case .earley:
+                return try generalized(engine,
+                    Earley_Parser.EarleyParser(grammar: grammar).parse(stream: stream))
+            case .earleySL, .earleyEL:
+                return try generalized(engine, Earley_TableParser.EarleyTableParser(
+                    grammar: grammar, useExtendedLookahead: engine == .earleyEL)
+                    .parse(stream: stream))
+            case .cyk:
+                return try generalized(engine,
+                    CYK_Parser.CYKParser(grammar: grammar).parse(stream: stream))
+            case .rnglr:
+                // RNGLR 0.2.x predates TokenStream conformance. Feed it the
+                // same normalized terminal names, not the PL/0 lexemes.
+                let normalized = stream.tokens.map { $0.kind.grammarName }
+                    .joined(separator: " ")
+                return try generalized(engine,
+                    RNGLR_Parser.RNGLRParser(grammar: grammar).parse(normalized))
+            case .ll1:
+                let result = LL_Parsing.LLParser(grammar: grammar)
+                    .parseWithRecovery(stream: stream)
+                return deterministic(engine, status: result.status,
+                    replay: ["start"] + stream.tokens.indices.map { _ in "consume" }
+                        + [result.status == .rejected ? "reject" : "accept"])
+            case .lr0, .slr, .lalr, .lr1:
+                let algorithm: LR_Parsing.LRParser.Algorithm = switch engine {
+                case .lr0: .lr0
+                case .slr: .slr
+                case .lalr: .lalr
+                case .lr1: .lr1
+                default: preconditionFailure("not an LR engine")
+                }
+                let result = try LR_Parsing.LRParser(
+                    grammar: grammar, algorithm: algorithm).parseOutcome(
+                        stream: stream, recovery: LR_Parsing.RecoveryPolicy.none,
+                        tracing: true)
+                let events = result.trace.map {
+                    $0.parseContractEvent.kind.rawValue
+                }
+                return deterministic(engine, status: result.status,
+                    replay: events.isEmpty
+                        ? ["start", result.status == .rejected ? "reject" : "accept"]
+                        : events)
+            }
+        } catch {
+            return EcosystemParserObservation(
+                parser: engine, status: "rejected", derivations: 0,
+                forestNodes: nil, ambiguous: nil,
+                productionIdentified: false,
+                replayEvents: ["start", "reject"], supported: true,
+                unsupportedReason: String(describing: error))
+        }
     }
 }
 
-private struct WireCorpus: Encodable {
-    let schemaVersion: Int
-    let grammars: [WireGrammar]
-    let cases: [WireCase]
+private func generalized<Label>(
+    _ engine: EcosystemParserEngine, _ result: Parser.ParseResult<Label>
+) throws -> EcosystemParserObservation
+where Label: ProductionIdentifiedSPPFLabel & Codable {
+    let forest = try result.sppfGraph?.portableSnapshot()
+    let identified = forest?.nodes.filter {
+        $0.kind == .intermediate || $0.kind == .packed
+    }.allSatisfy { $0.productionID != nil } ?? false
+    let accepted = result.isSuccessful
+    var replay = ["start"]
+    replay += forest?.nodes.map { node in
+        switch node.kind {
+        case .token: "consume"
+        case .symbol: "inspect"
+        case .intermediate, .packed: "applyProduction"
+        }
+    } ?? []
+    replay.append(accepted ? "accept" : "reject")
+    return EcosystemParserObservation(
+        parser: engine, status: accepted ? "accepted" : "rejected",
+        derivations: accepted ? 1 : 0,
+        forestNodes: forest?.nodes.count,
+        ambiguous: forest.map { !$0.ambiguityNodes.isEmpty },
+        productionIdentified: identified, replayEvents: replay,
+        supported: true, unsupportedReason: nil)
 }
 
-private struct WireGrammar: Encodable {
-    let id: String
-    let start: String
-    let terminals: [String]
-    let precedence: [String]
-    let productions: [WireProduction]
-}
-
-private struct WireProduction: Encodable {
-    let id: String
-    let lhs: String
-    let rhs: [String]
-}
-
-private struct WireCase: Encodable {
-    let id: String
-    let grammar: String
-    let input: String
-    let expectedTokenKinds: [String]
-    let expectedStatus: String
-    let tags: [String]
-}
-
-private struct WireObservation: Decodable {
-    let id: String
-    let engines: [EcosystemParserObservation]?
+private func deterministic(_ engine: EcosystemParserEngine,
+                           status: Parser.ParseStatus,
+                           replay: [String]) -> EcosystemParserObservation {
+    let statusName: String = switch status {
+    case .accepted: "accepted"
+    case .recovered: "acceptedWithRecovery"
+    case .rejected: "rejected"
+    }
+    return EcosystemParserObservation(
+        parser: engine,
+        status: statusName,
+        derivations: status == .rejected ? 0 : 1,
+        forestNodes: nil, ambiguous: nil, productionIdentified: false,
+        replayEvents: replay, supported: true, unsupportedReason: nil)
 }

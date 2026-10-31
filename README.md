@@ -334,15 +334,16 @@ The first implementation is a deliberately small vertical slice:
   significant parser tokens and a lossless source stream containing whitespace
   and comment trivia. The stateful `PL0IncrementalTokenizer` preserves identities
   in both streams for reusable prefixes and suffixes.
-* `PL0Frontend` selects **Reference LL**, generated **SLR(1)** or **Earley**.
-  `PL0ParserProtocol` is their common immutable input/output contract. LR emits
-  its native reduction tree. Earley retains a shared packed forest keyed by
-  grammar symbol and token span, then projects one alternative as its CST.
+* `PL0Frontend` selects the compatibility recovery parser or adapters over the
+  directly linked **LR-Parsing SLR(1)** and **Earley-Parser** engines.
+  `PL0ParserProtocol` projects their results into ModEdit's existing immutable
+  editor contract. LR emits its package-native reduction tree; Earley exports
+  its package-native SPPF through `Parser.ParseForestSnapshot`.
 * `PL0LanguageSession` retains lexer and parser caches for one versioned
   document. Successful blocks, statements, conditions, expressions, terms and
-  factors can be reused without invoking their grammar productions again. LR
-  resumes from its last stable state/node-stack checkpoint; Earley reuses closed
-  chart columns and their packed forest nodes before the first changed token.
+  factors can still be reused by the compatibility recovery path. The linked LR
+  and Earley adapters currently report stable input prefixes but re-run their
+  package engines; native incremental state belongs in those shared packages.
 * `ConcreteSyntaxTree` combines grammatical nodes with an ordered concrete
   terminal stream. Terminals are explicitly classified as source, missing
   (inserted) or skipped (deleted), so repairs remain inspectable in the tree.
@@ -367,18 +368,16 @@ The first implementation is a deliberately small vertical slice:
   schema-1 JSON-lines protocol without linking ModEdit to Workbench packages.
   It retains one document session, sends UTF-16 edits and atomically activates
   valid grammar replacements while keeping the last good revision on failure.
-* `PL0EcosystemParserSession` sends the same authoritative grammar productions
-  and current significant-token stream to Grammar-REPL's schema-5 conformance
-  executable. That boundary runs the actual LL(1), LR(0), SLR, LALR, LR(1),
-  Earley, Earley-table SL/EL, CYK and RNGLR packages without loading duplicate
-  `Grammar`, `Lexer` or `Parser` modules into the editor process.
+* `PL0EcosystemParserSession` constructs one `Grammar` value and one positioned
+  `Lexer.TokenStream`, then runs the linked LL(1), LR(0), SLR, LALR, LR(1),
+  Earley, Earley-table SL/EL, CYK and RNGLR packages directly in-process.
 * Parsing starts 120 ms after an edit on a detached task. A result is displayed
   only if its version still matches the document revision.
 
-The parser menu switches the three editor-native engines for the current
+The parser menu switches the three editor-facing engines for the current
 document. The **Compare** tab shows their acceptance and metrics side by side,
-and can run the ten actual ecosystem engines when the Grammar-REPL adapter is
-configured. It deliberately reports disagreements rather than coercing them
+and can run the ten directly linked ecosystem engines without external setup.
+It deliberately reports disagreements rather than coercing them
 into the reference result. The **Trace** tab exposes LR shift/reduce/state-stack
 events or Earley predict/scan/complete/chart events, including incremental
 reuse. The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
@@ -412,27 +411,15 @@ revisioned UTF-16 edits. **Reload Now** is available for an explicit refresh.
 
 ### Actual ecosystem parser engines
 
-Build Grammar-REPL's non-interactive adapter and launch ModEdit with its path:
-
-```sh
-cd /path/to/Grammar-REPL
-swift build --product grammar-repl-conformance
-
-cd /path/to/ModEdit
-MODEDIT_GRAMMAR_REPL_CONFORMANCE=/path/to/Grammar-REPL/.build/debug/grammar-repl-conformance \
-swift run ModEdit
-```
-
 Open the **Compare** tab and choose **Run actual engines**. Each row reports
 acceptance, derivation count, available forest-node count, ambiguity and
 production-identity evidence. The run is revision-bound: editing the document
 clears it, and a late result for an older revision is discarded.
 
-The executable is an intentional process boundary. Grammar-REPL already owns a
-coherent resolved set of the ecosystem packages; directly adding every sibling
-package to ModEdit would introduce multiple independently resolved copies of
-their shared modules. The schema-5 JSON corpus keeps that dependency graph out
-of the GUI while preserving the authoritative PL/0 grammar and token sequence.
+ModEdit uses the same compatible released dependency set as Grammar-REPL.
+SwiftPM resolves one shared identity for Grammar, Parser and Lexer, while the
+PL/0 adapter converts its authoritative artifact and UTF-16 token positions to
+the ecosystem contracts.
 See [Ecosystem Parser Integration](Docs/EcosystemParserIntegration.md).
 
 The authoritative grammar is
@@ -752,25 +739,21 @@ Examples/squares.pl0                sample controlled-language program
   ModEdit and wrapped by a small standards-facing server without coupling the
   language engine to one process model. Semantic analysis continues over a
   recovered token stream, so useful results remain available while typing.
-* **Recovery remains normalized.** On valid input LR builds a native reduction
-  tree and Earley projects its packed forest. When either engine rejects the
-  current, incomplete program, the reference recovery adapter supplies the
-  common missing/skipped-terminal model. Incremental reuse is therefore native
-  for successful LR/Earley prefixes but recovery-region reuse remains future
-  experimental work.
+* **Recovery remains normalized.** LR-Parsing supplies the reduction tree and
+  Earley-Parser supplies the packed forest. For the existing editor recovery
+  view, rejected input still falls back to the compatibility recovery parser.
+  Removing that final handwritten parser requires projecting LL-Parsing's
+  recovery tree and edits into the editor CST without losing source fidelity.
 * **Grammar Workbench is opt-in and out-of-process.** ModEdit does not build,
   locate or launch an unspecified Workbench binary automatically. Both paths
   must be supplied through environment variables. The bundled external grammar
   currently skips whitespace and `//` comments; ModEdit's native lexer also
   supports block comments.
-* **Ecosystem engine comparison is opt-in and recognition-oriented.** It needs
-  a separately built `grammar-repl-conformance` executable. The external
-  engines currently return portable acceptance, derivation, forest and replay
-  summaries; their native CSTs, recovery details and complete traces are not
-  yet projected into the editor. The real PL/0 baseline currently exposes a
-  useful disagreement: CYK and LR(0) reject the valid sample accepted by the
-  other eight engines. LR(0) is not expected to handle this grammar; CYK is a
-  tracked normalization/integration investigation.
+* **Ecosystem comparison is recognition-oriented.** All ten packages run
+  directly, but the comparison rows currently show portable acceptance,
+  derivation, forest and replay summaries rather than every engine-specific
+  internal structure. CYK currently prints normalization warnings for nullable
+  PL/0 productions; those messages originate in CYK-Parser.
 
 ## Roadmap
 
@@ -786,12 +769,12 @@ its fingerprinted identity, Workbench drift is visible, and lossless trivia is
 available to formatters and future refactorings. Grammar-Macros generation and
 adoption by sibling repositories remain cross-repository follow-up work.
 
-The third phase is complete at the comparison boundary: ModEdit can execute the
-actual ten-engine family owned by Grammar-REPL from the single-source PL/0
-artifact, validate canonical engine membership, preserve forest/replay evidence
-and surface differential outcomes in the UI. The next step is to enrich the
-portable result schema so native trees, detailed recovery and algorithm traces
-can flow back into shared experiment bundles.
+The corrected third phase now links and executes the actual package engines.
+The duplicated local SLR generator, LR runtime, Earley chart and forest builder
+have been deleted. Remaining migration work is deliberately visible: replace
+the compatibility recovery parser with LL-Parsing recovery projection, move
+the PL/0 scanner onto Lexer while retaining incremental trivia identities, and
+adapt PL/0 lowering to Compiler rather than maintaining parallel infrastructure.
 
 1. **Parser comparison laboratory.** Add stepping and forest visualization to
    the connected native traces; project the now-connected Earley-table, CYK and

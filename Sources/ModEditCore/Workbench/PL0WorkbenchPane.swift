@@ -301,7 +301,7 @@ struct PL0WorkbenchPane: View {
                 Divider()
                 Text("Selected engine: \(result.parser.displayName)")
                     .font(.caption.monospaced())
-                Text("The in-process LR and Earley engines provide editor CST, recovery, reuse and traces. The ecosystem comparison runs the actual external parser packages through Grammar-REPL's portable conformance adapter.")
+                Text("LR and Earley are adapters over the directly linked ecosystem packages. The comparison runs the complete linked engine family in-process and preserves each engine's result.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -315,24 +315,15 @@ struct PL0WorkbenchPane: View {
         HStack {
             Text("Ecosystem engines").font(.headline)
             Spacer()
-            if Self.ecosystemParserExecutable != nil {
-                Button("Run actual engines", action: runEcosystemComparison)
-                    .controlSize(.small)
-                    .disabled(isComparingEcosystem)
-            }
+            Button("Run actual engines", action: runEcosystemComparison)
+                .controlSize(.small)
+                .disabled(isComparingEcosystem)
         }
         switch ecosystemComparison {
         case .idle:
-            if Self.ecosystemParserExecutable == nil {
-                Text("Set MODEDIT_GRAMMAR_REPL_CONFORMANCE to the grammar-repl-conformance executable to compare the authoritative PL/0 grammar with LL(1), the LR family, Earley variants, CYK and RNGLR.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            } else {
-                Text("Ready to run ten actual ecosystem parser engines against this revision.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text("Ready to run the ten directly linked ecosystem parser engines against this revision.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         case .running:
             ProgressView("Running ten parser engines…")
                 .controlSize(.small)
@@ -511,12 +502,6 @@ struct PL0WorkbenchPane: View {
         return (URL(fileURLWithPath: service), grammar)
     }
 
-    private static var ecosystemParserExecutable: URL? {
-        guard let path = ProcessInfo.processInfo.environment[
-            "MODEDIT_GRAMMAR_REPL_CONFORMANCE"], !path.isEmpty else { return nil }
-        return URL(fileURLWithPath: path)
-    }
-
     private var isComparingEcosystem: Bool {
         if case .running = ecosystemComparison { true } else { false }
     }
@@ -532,16 +517,12 @@ struct PL0WorkbenchPane: View {
     }
 
     private func runEcosystemComparison() {
-        guard let executable = Self.ecosystemParserExecutable else { return }
         let requestedRevision = revision
         let snapshot = SourceSnapshot(version: requestedRevision, text: source())
         ecosystemComparison = .running
         Task {
             do {
-                let transport = GrammarREPLConformanceProcessTransport(
-                    executableURL: executable)
-                let comparison = try await PL0EcosystemParserSession(
-                    transport: transport).compare(snapshot)
+                let comparison = try await PL0EcosystemParserSession().compare(snapshot)
                 guard requestedRevision == revision else { return }
                 ecosystemComparison = .success(comparison)
             } catch {
