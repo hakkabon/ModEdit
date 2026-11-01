@@ -93,7 +93,8 @@ scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zi
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (231 tests)
+The current source is verified with `swift build` and `swift test` (141 editor tests;
+the PL/0 language package maintains its own conformance suite)
 using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
@@ -154,9 +155,9 @@ consistent with the current text.
 The parser benchmark is also opt-in and always runs with optimization:
 
 ```sh
-scripts/benchmark-pl0.sh
+../PL0-LanguageKit/scripts/benchmark-pl0.sh
 # equivalent to:
-# MODEDIT_PL0_BENCHMARK=1 swift test -c release --filter PL0ParserBenchmark
+# cd ../PL0-LanguageKit && PL0_BENCHMARK=1 swift test -c release --filter PL0ParserBenchmark
 ```
 
 It generates programs containing 100, 250 and 500 statements and reports
@@ -191,7 +192,7 @@ ones.
 ## Architecture
 
 ```
-PL0Language (platform-neutral library)
+PL0-LanguageKit package (platform-neutral library)
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ SourceSnapshot/Edit (versioned UTF-16 ranges)                            │
 │ Incremental PL0Lexer → stable PL0Token[] + lexical diagnostics/metrics  │
@@ -315,15 +316,15 @@ output is skipped before the web view is touched.
 
 ## PL/0 parsing workbench
 
-Open [`Examples/squares.pl0`](Examples/squares.pl0), choose **PL/0** in the
+Open [`PL0-LanguageKit/Examples/squares.pl0`](../PL0-LanguageKit/Examples/squares.pl0), choose **PL/0** in the
 status-bar format menu, or press the **Parsing Workbench** toolbar button from
 any document. The toolbar button selects PL/0 when necessary; once PL/0 is
 active it toggles the right-hand workbench.
 
 The first implementation is a deliberately small vertical slice:
 
-* `PL0Language` is a separate, platform-neutral Swift target. It does not import
-  AppKit or know about ModEdit.
+* `PL0Language` is supplied by the separate, platform-neutral
+  `PL0-LanguageKit` package. It does not import AppKit or know about ModEdit.
 * `SourceSnapshot` carries a document version, text and optional `SourceEdit`.
   Public ranges use UTF-16, matching TextKit and LSP.
 * `PL0LanguageKit` compiles the bundled authoritative `PL0.grammar` resource
@@ -425,17 +426,17 @@ ModEdit uses the same compatible released dependency set as Grammar-REPL.
 SwiftPM resolves one shared identity for Grammar, Parser and Lexer, while the
 PL/0 adapter converts its authoritative artifact and UTF-16 token positions to
 the ecosystem contracts.
-See [Ecosystem Parser Integration](Docs/EcosystemParserIntegration.md).
+See [Ecosystem Parser Integration](../PL0-LanguageKit/Docs/EcosystemParserIntegration.md).
 
 The authoritative grammar is
-[PL0.grammar](Sources/PL0Language/Resources/PL0.grammar), compiled as a SwiftPM
+[PL0.grammar](../PL0-LanguageKit/Sources/PL0Language/Resources/PL0.grammar), compiled as a SwiftPM
 resource and validated as 43 productions, 29 terminals and 18 typed
 nonterminals. `PL0LanguageKit.compile` can load an experimental revision; the
 generated SLR and Earley parser types accept that kit directly. Parse results
 retain the grammar artifact identity, and experiment export rejects a result
 paired with a different grammar fingerprint.
 
-See [PL/0 Single-Source Language Kit](Docs/PL0LanguageKit.md) for the artifact
+See [PL/0 Single-Source Language Kit](../PL0-LanguageKit/Docs/PL0LanguageKit.md) for the artifact
 model, validation rules, custom-kit API and lossless-token design.
 
 The source editor projects the current result directly onto the text: errors and
@@ -519,7 +520,7 @@ Schema version 1 records:
   comparison or an entire edit sequence.
 
 The PL/0 adapter is in
-`Sources/PL0Language/PL0ExperimentContract.swift`. It projects existing
+`../PL0-LanguageKit/Sources/PL0Language/PL0ExperimentContract.swift`. It projects existing
 `ParseResult` values without changing the parser API. In particular, malformed
 LR or Earley input is recorded as a request for that engine whose effective
 result came from reference LL recovery; recovery is not incorrectly attributed
@@ -539,7 +540,7 @@ let bundle = try PL0ExperimentContract.bundle(
 let json = try bundle.json()
 ```
 
-See [Language Experiment Protocol](Docs/LanguageExperimentProtocol.md) for the
+See [Language Experiment Protocol](../PL0-LanguageKit/Docs/LanguageExperimentProtocol.md) for the
 field model, invariants and ecosystem adoption path.
 
 ## Unified experimental front end
@@ -557,7 +558,7 @@ matches, ensuring that the comparison sees the same token identities shown in
 the workbench. Formatter, compiler, and LSP adapters also accept an injected
 front end so a compiled or hot-reloaded language kit can be used consistently.
 
-See [Unified experimental front ends](Docs/UnifiedExperimentalFrontends.md) for
+See [Unified experimental front ends](../PL0-LanguageKit/Docs/UnifiedExperimentalFrontends.md) for
 the data flow, invariants, and next cross-repository integration boundary.
 
 ## Shared semantics, compiler, and LSP
@@ -571,7 +572,7 @@ consume this same evidence.
 The bytecode lowerer therefore no longer performs a separate symbol-resolution
 pass. LSP documents retain their own incremental language session, and a ranged
 change preserves unchanged token and symbol identities. See
-[Semantics, Compiler, and LSP](Docs/SemanticsCompilerLSP.md) for the model,
+[Semantics, Compiler, and LSP](../PL0-LanguageKit/Docs/SemanticsCompilerLSP.md) for the model,
 Compiler package boundary, and transport roadmap.
 
 ## Fine-grained incrementality
@@ -587,7 +588,7 @@ experiment bundles as the independent `semanticNodes` dimension.
 Every incremental semantic result and compiled program in the edit campaign is
 checked against a fresh full analysis and lowering. The exact cache invariants,
 tests, and intentionally unclaimed LR/Earley/Compiler reuse are described in
-[Fine-grained incrementality](Docs/FineGrainedIncrementality.md).
+[Fine-grained incrementality](../PL0-LanguageKit/Docs/FineGrainedIncrementality.md).
 
 ## Adding a format
 
@@ -637,11 +638,7 @@ Package.swift
 scripts/make-app.sh                 build ModEdit.app
 scripts/package-release.sh          build and zip the release app
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
-scripts/benchmark-pl0.sh            run the LL/LR/Earley benchmark
 Sources/
-  LanguageExperimentProtocol/      versioned cross-tool experiment contract
-  PL0Language/                     language kit, lexer/parser, CST, formatter, VM and LSP adapter
-    Resources/PL0.grammar          authoritative PL/0 lexical and grammar source
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
     ModEditApplication.swift        AppKit application, delegate and main menu
@@ -654,9 +651,7 @@ Sources/
     Workbench/                      PL/0 parser inspector
     UI/                             root/status bar, editor/gutter, preview
 Tests/ModEditTests/                 Swift Testing suites
-Tests/PL0LanguageTests/             lexer/parser/recovery contract tests
-Tests/LanguageExperimentProtocolTests/ schema and JSON compatibility tests
-Examples/squares.pl0                sample controlled-language program
+../PL0-LanguageKit/                 language, grammar, conformance corpus and tests
 .github/workflows/ci.yml            debug + release build, tests and packaged artifact
 ```
 
