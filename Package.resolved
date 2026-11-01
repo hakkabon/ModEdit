@@ -1,5 +1,5 @@
 {
-  "originHash" : "6e651c38af437ed2f2c1fe9cf622fc5eb8d1501265ae4bdadade77b3f59e82e7",
+  "originHash" : "fb2ab3c855945ad9b299bd953e56d0e0d7add8415a73338736a567bf90104d1c",
   "pins" : [
     {
       "identity" : "compiler",
@@ -71,15 +71,6 @@
       "state" : {
         "revision" : "74b6cbd8c5ecea9f64d84c4e1c88d65604dd033f",
         "version" : "0.4.1"
-      }
-    },
-    {
-      "identity" : "lexer",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/Lexer.git",
-      "state" : {
-        "revision" : "cc3e964ac3312aa894243f4c3d32432976d93d90",
-        "version" : "0.2.0"
       }
     },
     {
