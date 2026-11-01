@@ -133,6 +133,32 @@ struct ParserReuseTests {
         #expect(beforeAssignments[2].id == afterAssignments[2].id)
     }
 
+    @Test func recoveredRegionReplaysRepairsWhenAnotherRegionChanges() async {
+        let original = "begin a := ; b := 2 end."
+        let session = PL0LanguageSession()
+        let first = await session.parse(SourceSnapshot(version: 1, text: original))
+        let range = (original as NSString).range(of: "2")
+        let changed = (original as NSString).replacingCharacters(in: range,
+                                                                  with: "20")
+        let incremental = await session.parse(SourceSnapshot(
+            version: 2, text: changed,
+            edit: SourceEdit(
+                baseVersion: 1,
+                replacedRange: SourceRange(location: range.location,
+                                           length: range.length),
+                replacementLength: 2)))
+        let fresh = PL0Frontend().parse(SourceSnapshot(version: 2, text: changed))
+
+        expectEquivalent(incremental, fresh)
+        #expect(incremental.metrics.incrementalParsing.reusedNodeCount > 0)
+        #expect(incremental.recoveryActions == fresh.recoveryActions)
+        #expect(incremental.diagnostics == fresh.diagnostics)
+        let oldAssignments = nodes(kind: "Assignment", in: first.root)
+        let newAssignments = nodes(kind: "Assignment", in: incremental.root)
+        #expect(oldAssignments[0].id == newAssignments[0].id)
+        #expect(oldAssignments[1].id != newAssignments[1].id)
+    }
+
     private func expectEquivalent(_ incremental: ParseResult, _ full: ParseResult) {
         #expect(incremental.syntaxTree == full.syntaxTree)
         #expect(incremental.root.outline() == full.root.outline())

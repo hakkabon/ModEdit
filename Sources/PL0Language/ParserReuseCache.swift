@@ -17,9 +17,14 @@ struct ReferenceParserCache: Sendable {
 
     struct Entry: Sendable {
         let tokenIDs: [String]
+        let tokenRelativeLocations: [Int]
         let nextTokenID: String
+        let nextTokenRelativeLocation: Int
         let startLocation: Int
         let node: SyntaxNode
+        let diagnostics: [ParseDiagnostic]
+        let recoveries: [RecoveryAction]
+        let expectations: [ParseExpectation]
     }
 
     var entries: [Key: Entry] = [:]

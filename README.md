@@ -23,11 +23,12 @@ the right shows it as headings, emphasis, symbols and mathematics.
 6. [The preview](#the-preview)
 7. [PL/0 parsing workbench](#pl0-parsing-workbench)
 8. [Language experiment protocol](#language-experiment-protocol)
-9. [Adding a format](#adding-a-format)
-10. [Project layout](#project-layout)
-11. [Design decisions](#design-decisions)
-12. [Known limitations](#known-limitations)
-13. [Roadmap](#roadmap)
+9. [Fine-grained incrementality](#fine-grained-incrementality)
+10. [Adding a format](#adding-a-format)
+11. [Project layout](#project-layout)
+12. [Design decisions](#design-decisions)
+13. [Known limitations](#known-limitations)
+14. [Roadmap](#roadmap)
 14. [Contributing](#contributing)
 15. [License](#license)
 
@@ -573,6 +574,21 @@ change preserves unchanged token and symbol identities. See
 [Semantics, Compiler, and LSP](Docs/SemanticsCompilerLSP.md) for the model,
 Compiler package boundary, and transport roadmap.
 
+## Fine-grained incrementality
+
+The reference LL parser now reuses both clean and recovered token-delimited
+regions. Recovered reuse replays the cached diagnostics, expected tokens, and
+repair actions at their current UTF-16 positions. Semantic analysis separately
+reuses stable declaration signatures and reference bindings, invalidating a
+binding only when the declaration chain capable of resolving that spelling
+changes. Reuse and invalidation counts appear in the Semantics view and in
+experiment bundles as the independent `semanticNodes` dimension.
+
+Every incremental semantic result and compiled program in the edit campaign is
+checked against a fresh full analysis and lowering. The exact cache invariants,
+tests, and intentionally unclaimed LR/Earley/Compiler reuse are described in
+[Fine-grained incrementality](Docs/FineGrainedIncrementality.md).
+
 ## Adding a format
 
 1. Create a type conforming to `DocumentFormat` (see `MarkdownFormat.swift`):
@@ -760,9 +776,9 @@ Examples/squares.pl0                sample controlled-language program
   accounting, but a grapheme such as a composed emoji can occupy several columns.
 * **macOS only.** Core depends on AppKit, SwiftUI and WebKit.
 * **Parser reuse is conservative and region-based.** The reference LL parser
-  memoizes successful grammar regions; it does not yet incrementally repair an
-  individual production or reuse recovered subtrees. Invalidated ancestor paths
-  and the program root are rebuilt.
+  memoizes clean and recovered grammar regions, including recovery evidence.
+  Invalidated ancestor paths and the program root are rebuilt; individual
+  production repair is not attempted.
 * **The PL/0 grammatical CST is normalized.** Its terminal view contains
   significant source, missing and skipped tokens. The lexer now separately
   retains a lossless, identity-preserving stream of whitespace, comments and
@@ -826,14 +842,23 @@ hover, references, and encoded semantic tokens. The next ecosystem step is to
 extend Compiler's IR with explicit static-link operations so nested PL/0
 procedures can move onto the shared backend without weakening their semantics.
 
+The sixth phase is complete for the state ModEdit owns: reference-parser
+regions—including recovered regions—and semantic declarations/bindings are
+genuinely reused with stable-token and dependency proofs. Exact measurements
+are exported through the shared experiment contract, and differential edit
+campaigns compare semantics and bytecode against fresh runs. Native LR stack,
+Earley chart/forest, and Compiler IR reuse remain work in their owning ecosystem
+packages; ModEdit deliberately continues to identify their current adapter
+evidence as stable-prefix reuse.
+
 1. **Parser comparison laboratory.** Add stepping and forest visualization to
    the connected native traces; project the now-connected Earley-table, CYK and
    RNGLR results into recovery-cost and full-versus-incremental differential
    experiment bundles.
-2. **Finer incremental parsing.** Add declaration-level reuse, dependency-aware
-   invalidation, recovered-region reuse experiments, mutation minimization and
-   grammar-aware mutation operators. The seeded raw-edit differential campaign
-   already checks every incremental result against a fresh full parse.
+2. **Ecosystem-native incrementality.** Add resumable LR stacks, dependency-
+   indexed Earley chart/forest invalidation, and stable Compiler IR blocks to
+   their owning packages; consume those APIs here. Add mutation minimization and
+   grammar-aware mutation operators to the existing differential campaigns.
 3. **Standards-facing LSP transport.** Wrap the implemented, version-safe
    `PL0LSPAdapter` in JSON-RPC framing, add initialize/capability negotiation,
    cancellation and the standard delta-encoded semantic-token wire format.

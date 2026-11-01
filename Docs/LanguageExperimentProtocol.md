@@ -100,8 +100,10 @@ syntax nodes, chart columns, forest nodes, and semantic nodes. Every measurement
 names its strategy and separately reports reused and rebuilt units. Invalidation
 is optional because not every existing engine can measure it truthfully.
 
-The PL/0 adapter exports token and syntax-node reuse for the compatibility
-parser. The direct LR and Earley adapters currently export stable-prefix
+The PL/0 parse adapter exports token and syntax-node reuse for the reference
+parser. Exporting a `PL0Analysis` additionally records dependency-aware symbol
+and binding reuse as `semanticNodes`, including measured invalidations. The
+direct LR and Earley adapters currently export stable-prefix
 evidence rather than native stack/chart reuse. LR's stable token boundary is exported
 as a typed operational measurement until the LR engine can report a genuine
 count of reused parser states.

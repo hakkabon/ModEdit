@@ -236,6 +236,10 @@ struct PL0WorkbenchPane: View {
                     Text("\(semantics.symbols.count) symbols · \(semantics.references.count) references · \(semantics.scopes.count) scopes")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                    Text(semanticReuseSummary(semantics.reuseMetrics))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(semantics.reuseMetrics.incremental
+                                         ? Color.green : Color.secondary)
                     ForEach(semantics.scopes) { scope in
                         VStack(alignment: .leading, spacing: 5) {
                             Text("Scope \(scope.id) · parent \(scope.parentID.map { String($0) } ?? "none") · UTF-16 \(scope.range.location)..<\(scope.range.end)")
@@ -689,7 +693,20 @@ struct PL0WorkbenchPane: View {
         let parseReuse = parse.incremental
             ? " · parse reuse \(parse.reusedNodeCount)n/\(parse.reusedTokenCount)t"
             : " · full parse"
-        return "v\(result.version) · \(result.metrics.tokenCount) tokens\(lexReuse)\(parseReuse) · \(elapsed(result))"
+        let semanticReuse = semantics.map {
+            let metrics = $0.reuseMetrics
+            return metrics.incremental
+                ? " · sem reuse \(metrics.reusedSymbolCount)s/\(metrics.reusedReferenceCount)r"
+                : " · full sem"
+        } ?? ""
+        return "v\(result.version) · \(result.metrics.tokenCount) tokens\(lexReuse)\(parseReuse)\(semanticReuse) · \(elapsed(result))"
+    }
+
+    private func semanticReuseSummary(_ metrics: PL0SemanticReuseMetrics) -> String {
+        guard metrics.incremental else {
+            return "Full semantic analysis · \(metrics.rebuiltSymbolCount) symbols · \(metrics.rebuiltReferenceCount) references"
+        }
+        return "Semantic reuse from v\(metrics.baseVersion.map(String.init) ?? "—") · \(metrics.reusedSymbolCount) symbols · \(metrics.reusedReferenceCount) references · \(metrics.dependencyInvalidationCount) invalidated"
     }
 
     private func quoted(_ text: String) -> String {

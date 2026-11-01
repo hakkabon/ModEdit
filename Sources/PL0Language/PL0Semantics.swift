@@ -1,4 +1,5 @@
 import Foundation
+import LanguageExperimentProtocol
 
 public enum PL0SymbolKind: String, Sendable, Equatable, Codable {
     case constant, variable, procedure
@@ -42,6 +43,22 @@ public struct PL0SemanticToken: Sendable, Equatable, Identifiable {
     public var id: String { "\(range.location):\(range.length):\(isDeclaration)" }
 }
 
+public struct PL0SemanticReuseMetrics: Sendable, Equatable {
+    public let incremental: Bool
+    public let baseVersion: UInt64?
+    public let reusedSymbolCount: Int
+    public let rebuiltSymbolCount: Int
+    public let reusedReferenceCount: Int
+    public let rebuiltReferenceCount: Int
+    public let dependencyInvalidationCount: Int
+
+    public static let full = PL0SemanticReuseMetrics(
+        incremental: false, baseVersion: nil,
+        reusedSymbolCount: 0, rebuiltSymbolCount: 0,
+        reusedReferenceCount: 0, rebuiltReferenceCount: 0,
+        dependencyInvalidationCount: 0)
+}
+
 /// Parser-independent semantic evidence for one exact prepared document.
 /// Symbol IDs come from stable lexer token IDs, so unchanged declarations keep
 /// their identity across incremental edits.
@@ -53,6 +70,7 @@ public struct PL0SemanticModel: Sendable {
     public let scopes: [PL0SemanticScope]
     public let semanticTokens: [PL0SemanticToken]
     public let diagnostics: [ParseDiagnostic]
+    public let reuseMetrics: PL0SemanticReuseMetrics
 
     public func symbol(id: String) -> PL0Symbol? {
         symbols.first { $0.id == id }
@@ -99,13 +117,63 @@ public struct PL0SemanticAnalyzer: Sendable {
                      "Semantic input and parse revisions differ")
         precondition(parse.grammarArtifact.fingerprint == prepared.grammarFingerprint,
                      "Semantic input and parse grammars differ")
-        return Analyzer(prepared: prepared).build()
+        return Analyzer(prepared: prepared, previous: nil).build().model
     }
+}
+
+/// Retains declaration signatures and resolved reference bindings for one
+/// document. A binding is reusable only when both its token identity and the
+/// declaration chain capable of resolving its spelling are unchanged.
+public struct PL0IncrementalSemanticAnalyzer: Sendable {
+    private var previous: SemanticCache?
+
+    public init() {}
+
+    public mutating func analyze(
+        _ prepared: PL0PreparedFrontend, parse: ParseResult
+    ) -> PL0SemanticModel {
+        precondition(parse.version == prepared.snapshot.version,
+                     "Semantic input and parse revisions differ")
+        precondition(parse.grammarArtifact.fingerprint == prepared.grammarFingerprint,
+                     "Semantic input and parse grammars differ")
+        let reusable = prepared.lexMetrics.incremental
+            && previous?.grammarFingerprint == prepared.grammarFingerprint
+            ? previous : nil
+        let result = Analyzer(prepared: prepared, previous: reusable).build()
+        previous = result.cache
+        return result.model
+    }
+
+    public mutating func reset() { previous = nil }
+}
+
+private struct DeclarationSignature: Sendable, Equatable {
+    let name: String
+    let kind: PL0SymbolKind
+    let scopeKey: String
+    let lexicalLevel: Int
+    let slot: Int?
+    let constantValue: Int?
+}
+
+private struct BindingCache: Sendable {
+    let environmentFingerprint: String
+    let context: String
+    let symbolID: String?
+    let diagnostic: String?
+}
+
+private struct SemanticCache: Sendable {
+    let version: UInt64
+    let grammarFingerprint: String
+    var declarations: [String: DeclarationSignature]
+    var bindings: [String: BindingCache]
 }
 
 private final class Analyzer {
     private struct Scope {
         let id: Int
+        let key: String
         let parentID: Int?
         let level: Int
         let start: Int
@@ -116,6 +184,7 @@ private final class Analyzer {
     }
 
     private let prepared: PL0PreparedFrontend
+    private let previous: SemanticCache?
     private let tokens: [PL0Token]
     private var index = 0
     private var symbols: [String: PL0Symbol] = [:]
@@ -124,17 +193,26 @@ private final class Analyzer {
     private var scopeStack: [Int] = []
     private var semanticTokens: [PL0SemanticToken] = []
     private var diagnostics: [ParseDiagnostic] = []
+    private var nextCache: SemanticCache
+    private var reusedSymbolCount = 0
+    private var reusedReferenceCount = 0
+    private var dependencyInvalidationCount = 0
+    private var referenceSiteCount = 0
 
-    init(prepared: PL0PreparedFrontend) {
+    init(prepared: PL0PreparedFrontend, previous: SemanticCache?) {
         self.prepared = prepared
+        self.previous = previous
         tokens = prepared.input.tokens
+        nextCache = SemanticCache(version: prepared.snapshot.version,
+                                  grammarFingerprint: prepared.grammarFingerprint,
+                                  declarations: [:], bindings: [:])
     }
 
     private var current: PL0Token { tokens[min(index, max(0, tokens.count - 1))] }
 
-    func build() -> PL0SemanticModel {
-        guard !tokens.isEmpty else { return emptyModel() }
-        parseBlock(parent: nil)
+    func build() -> (model: PL0SemanticModel, cache: SemanticCache) {
+        guard !tokens.isEmpty else { return (emptyModel(), nextCache) }
+        parseBlock(parent: nil, scopeKey: "root")
         for token in tokens {
             if let classification = classification(token.kind) {
                 semanticTokens.append(PL0SemanticToken(
@@ -143,7 +221,7 @@ private final class Analyzer {
             }
         }
         semanticTokens.sort { $0.range.location < $1.range.location }
-        return PL0SemanticModel(
+        let model = PL0SemanticModel(
             version: prepared.snapshot.version,
             grammarFingerprint: prepared.grammarFingerprint,
             symbols: symbols.values.sorted {
@@ -156,20 +234,35 @@ private final class Analyzer {
                                        length: max(0, $0.end - $0.start)),
                     symbolIDs: $0.symbolIDs)
             }, semanticTokens: semanticTokens,
-            diagnostics: diagnostics)
+            diagnostics: diagnostics,
+            reuseMetrics: PL0SemanticReuseMetrics(
+                incremental: previous != nil,
+                baseVersion: previous?.version,
+                reusedSymbolCount: reusedSymbolCount,
+                rebuiltSymbolCount: max(0, symbols.count - reusedSymbolCount),
+                reusedReferenceCount: reusedReferenceCount,
+                rebuiltReferenceCount: max(0, referenceSiteCount - reusedReferenceCount),
+                dependencyInvalidationCount: dependencyInvalidationCount))
+        return (model, nextCache)
     }
 
     private func emptyModel() -> PL0SemanticModel {
         PL0SemanticModel(version: prepared.snapshot.version,
                          grammarFingerprint: prepared.grammarFingerprint,
                          symbols: [], references: [], scopes: [],
-                         semanticTokens: [], diagnostics: [])
+                         semanticTokens: [], diagnostics: [],
+                         reuseMetrics: previous == nil ? .full : PL0SemanticReuseMetrics(
+                            incremental: true, baseVersion: previous?.version,
+                            reusedSymbolCount: 0, rebuiltSymbolCount: 0,
+                            reusedReferenceCount: 0, rebuiltReferenceCount: 0,
+                            dependencyInvalidationCount: 0))
     }
 
-    private func parseBlock(parent: Int?) {
+    private func parseBlock(parent: Int?, scopeKey: String) {
         let scopeID = scopes.count
         let level = parent.map { scopes[$0].level + 1 } ?? 0
-        scopes.append(Scope(id: scopeID, parentID: parent, level: level,
+        scopes.append(Scope(id: scopeID, key: scopeKey,
+                            parentID: parent, level: level,
                             start: current.range.location,
                             end: current.range.location))
         scopeStack.append(scopeID)
@@ -199,12 +292,14 @@ private final class Analyzer {
             skip(.semicolon)
         }
         while consume(.procedure) {
+            var procedureID = "scope:\(scopeID):\(current.range.location)"
             if current.kind == .identifier {
+                procedureID = current.id
                 declare(current, kind: .procedure)
                 advance()
             }
             skip(.semicolon)
-            parseBlock(parent: scopeID)
+            parseBlock(parent: scopeID, scopeKey: procedureID)
             skip(.semicolon)
         }
         parseStatement()
@@ -286,6 +381,17 @@ private final class Analyzer {
         } else {
             slot = nil
         }
+        let signature = DeclarationSignature(
+            name: token.lexeme.lowercased(), kind: kind,
+            scopeKey: scopes[scopeID].key,
+            lexicalLevel: scopes[scopeID].level,
+            slot: slot, constantValue: constantValue)
+        if previous?.declarations[token.id] == signature {
+            reusedSymbolCount += 1
+        } else if previous?.declarations[token.id] != nil {
+            dependencyInvalidationCount += 1
+        }
+        nextCache.declarations[token.id] = signature
         let symbol = PL0Symbol(
             id: token.id, name: token.lexeme, kind: kind,
             declarationRange: token.range, scopeID: scopeID,
@@ -302,20 +408,66 @@ private final class Analyzer {
     private func reference(_ token: PL0Token,
                            required: PL0SymbolKind? = nil,
                            valueContext: Bool = false) {
-        guard let symbol = resolve(token.lexeme) else {
-            diagnose("Unknown identifier '\(token.lexeme)'", at: token.range)
+        referenceSiteCount += 1
+        let context = required?.rawValue ?? (valueContext ? "value" : "any")
+        let environment = dependencyFingerprint(for: token.lexeme)
+        if let cached = previous?.bindings[token.id],
+           cached.environmentFingerprint == environment,
+           cached.context == context,
+           let symbol = cached.symbolID.flatMap({ symbols[$0] }) {
+            reusedReferenceCount += 1
+            references.append(PL0SymbolReference(
+                range: token.range, symbolID: symbol.id))
+            semanticTokens.append(PL0SemanticToken(
+                range: token.range, classification: .symbol(symbol.kind),
+                isDeclaration: false))
+            if let diagnostic = cached.diagnostic {
+                diagnose(diagnostic, at: token.range)
+            }
+            nextCache.bindings[token.id] = cached
             return
         }
+        if let cached = previous?.bindings[token.id],
+           cached.environmentFingerprint == environment,
+           cached.context == context,
+           cached.symbolID == nil {
+            reusedReferenceCount += 1
+            if let diagnostic = cached.diagnostic {
+                diagnose(diagnostic, at: token.range)
+            }
+            nextCache.bindings[token.id] = cached
+            return
+        }
+        if previous?.bindings[token.id] != nil {
+            dependencyInvalidationCount += 1
+        }
+        guard let symbol = resolve(token.lexeme) else {
+            let message = "Unknown identifier '\(token.lexeme)'"
+            diagnose(message, at: token.range)
+            nextCache.bindings[token.id] = BindingCache(
+                environmentFingerprint: environment, context: context,
+                symbolID: nil, diagnostic: message)
+            return
+        }
+        let diagnostic: String?
         if let required, symbol.kind != required {
-            diagnose("'\(token.lexeme)' is not a \(required.rawValue)", at: token.range)
+            diagnostic = "'\(token.lexeme)' is not a \(required.rawValue)"
         } else if valueContext, symbol.kind == .procedure {
-            diagnose("Procedure '\(token.lexeme)' is not a value", at: token.range)
+            diagnostic = "Procedure '\(token.lexeme)' is not a value"
+        } else {
+            diagnostic = nil
+        }
+        if let diagnostic {
+            diagnose(diagnostic, at: token.range)
         }
         references.append(PL0SymbolReference(
             range: token.range, symbolID: symbol.id))
         semanticTokens.append(PL0SemanticToken(
             range: token.range, classification: .symbol(symbol.kind),
             isDeclaration: false))
+        nextCache.bindings[token.id] = BindingCache(
+            environmentFingerprint: environment, context: context,
+            symbolID: symbol.id, diagnostic: diagnostic)
     }
 
     private func resolve(_ name: String) -> PL0Symbol? {
@@ -324,6 +476,30 @@ private final class Analyzer {
             if let id = scopes[scopeID].symbols[key] { return symbols[id] }
         }
         return nil
+    }
+
+    /// Only declarations capable of binding this spelling participate. An
+    /// unrelated declaration/value edit therefore leaves the cached binding
+    /// valid, while inserting a nearer shadow or changing the target's value,
+    /// kind, slot, or level invalidates it.
+    private func dependencyFingerprint(for name: String) -> String {
+        let key = name.lowercased()
+        var parts: [String] = []
+        for scopeID in scopeStack.reversed() {
+            let scope = scopes[scopeID]
+            guard let id = scope.symbols[key], let symbol = symbols[id] else {
+                parts.append("\(scope.key):-")
+                continue
+            }
+            parts.append([scope.key, symbol.id, symbol.kind.rawValue,
+                          String(symbol.lexicalLevel),
+                          symbol.slot.map { String($0) } ?? "-",
+                          symbol.constantValue.map { String($0) } ?? "-"
+                         ].joined(separator: ":"))
+            break
+        }
+        let evidence = parts.joined(separator: "|")
+        return StableFingerprint.fnv1a64(evidence)
     }
 
     private func validateInteger(_ token: PL0Token) {

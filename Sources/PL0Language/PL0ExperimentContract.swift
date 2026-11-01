@@ -36,7 +36,8 @@ public extension ParseResult {
         snapshot: SourceSnapshot,
         documentURI: String,
         grammar: GrammarArtifactIdentity? = nil,
-        runID: String? = nil
+        runID: String? = nil,
+        semanticReuse: PL0SemanticReuseMetrics? = nil
     ) throws -> ParseExperimentRun {
         guard version == snapshot.version else {
             throw ExperimentContractError.inconsistentRevision
@@ -113,7 +114,8 @@ public extension ParseResult {
             }
         }
 
-        let reuse = try reuseEvidence(snapshot: snapshot)
+        let reuse = try reuseEvidence(snapshot: snapshot,
+                                      semanticReuse: semanticReuse)
         let operationMeasurements = try measurementsForExperiment()
         let status: ExperimentParseStatus = recovery.isClean && diagnostics.isEmpty
             ? .accepted : .recovered
@@ -164,7 +166,10 @@ public extension ParseResult {
             algorithm: algorithm, implementation: "ModEdit.PL0Language")
     }
 
-    private func reuseEvidence(snapshot: SourceSnapshot) throws -> ReuseEvidence {
+    private func reuseEvidence(
+        snapshot: SourceSnapshot,
+        semanticReuse: PL0SemanticReuseMetrics?
+    ) throws -> ReuseEvidence {
         let lex = metrics.incrementalLexing
         let parsing = metrics.incrementalParsing
         var values = [try ReuseMeasurement(
@@ -176,6 +181,17 @@ public extension ParseResult {
             dimension: .syntaxNodes, reused: parsing.reusedNodeCount,
             rebuilt: parsing.parsedNodeCount,
             strategy: parsing.incremental ? "stable-token-region-cache" : "full-parse"))
+        if let semanticReuse {
+            values.append(try ReuseMeasurement(
+                dimension: .semanticNodes,
+                reused: semanticReuse.reusedSymbolCount
+                    + semanticReuse.reusedReferenceCount,
+                rebuilt: semanticReuse.rebuiltSymbolCount
+                    + semanticReuse.rebuiltReferenceCount,
+                invalidated: semanticReuse.dependencyInvalidationCount,
+                strategy: semanticReuse.incremental
+                    ? "stable-binding-dependency-cache" : "full-semantic-analysis"))
+        }
         if case .earley(let artifact) = algorithmArtifact {
             values.append(try ReuseMeasurement(
                 dimension: .chartColumns,
@@ -185,16 +201,17 @@ public extension ParseResult {
                 strategy: artifact.reusedChartColumnCount > 0
                     ? "closed-prefix-chart" : "full-chart"))
         }
-        let incremental = lex.incremental || parsing.incremental || {
+        let incremental = lex.incremental || parsing.incremental
+            || semanticReuse?.incremental == true || {
             switch algorithmArtifact {
             case .lr(let artifact): artifact.reusedTokenCount > 0
             case .earley(let artifact): artifact.reusedChartColumnCount > 0
             case nil: false
             }
         }()
-        let inferredBase = incremental
-            ? (snapshot.edit?.baseVersion ?? (snapshot.version > 0 ? snapshot.version - 1 : 0))
-            : nil
+        let inferredBase = incremental ? (semanticReuse?.baseVersion
+            ?? snapshot.edit?.baseVersion
+            ?? (snapshot.version > 0 ? snapshot.version - 1 : 0)) : nil
         return try ReuseEvidence(incremental: incremental,
                                  baseRevision: inferredBase,
                                  measurements: values)
@@ -230,5 +247,21 @@ public extension ParseResult {
             break
         }
         return values
+    }
+}
+
+public extension PL0Analysis {
+    /// Exports syntax and semantic evidence from the same prepared revision.
+    /// Calling the parse-only overload remains useful for parser experiments;
+    /// this overload additionally publishes dependency-aware semantic reuse.
+    func experimentRun(
+        documentURI: String,
+        grammar: GrammarArtifactIdentity? = nil,
+        runID: String? = nil
+    ) throws -> ParseExperimentRun {
+        try parse.experimentRun(
+            snapshot: prepared.snapshot, documentURI: documentURI,
+            grammar: grammar, runID: runID,
+            semanticReuse: semantics.reuseMetrics)
     }
 }

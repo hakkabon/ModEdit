@@ -57,6 +57,35 @@ struct PL0ExperimentContractTests {
         #expect(syntaxReuse?.reused ?? 0 > 0)
     }
 
+    @Test func analysisExportsDependencyAwareSemanticReuseSeparately() async throws {
+        let original = "const limit = 1; var x; begin x := limit + 1 end."
+        let session = PL0LanguageSession()
+        _ = await session.analyze(SourceSnapshot(version: 1, text: original))
+        let range = (original as NSString).range(of: "1", options: .backwards)
+        let changed = (original as NSString).replacingCharacters(in: range,
+                                                                  with: "2")
+        let snapshot = SourceSnapshot(
+            version: 2, text: changed,
+            edit: SourceEdit(
+                baseVersion: 1,
+                replacedRange: SourceRange(location: range.location,
+                                           length: range.length),
+                replacementLength: 1))
+        let analysis = await session.analyze(snapshot)
+        let run = try analysis.experimentRun(
+            documentURI: "file:///semantic-reuse.pl0")
+        let semanticReuse = try #require(run.reuse.measurements.first {
+            $0.dimension == .semanticNodes
+        })
+
+        #expect(run.reuse.incremental)
+        #expect(run.reuse.baseRevision == 1)
+        #expect(semanticReuse.reused == 4)
+        #expect(semanticReuse.rebuilt == 0)
+        #expect(semanticReuse.invalidated == 0)
+        #expect(semanticReuse.strategy == "stable-binding-dependency-cache")
+    }
+
     @Test func rejectsGrammarIdentityThatDidNotProduceTheParse() throws {
         let snapshot = SourceSnapshot(version: 1, text: ".")
         let result = PL0Frontend().parse(snapshot)

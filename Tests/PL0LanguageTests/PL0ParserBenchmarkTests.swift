@@ -48,7 +48,7 @@ struct PL0ParserBenchmarkTests {
 
         for engine in ParserEngine.allCases {
             let session = PL0LanguageSession(engine: engine)
-            _ = await session.parse(snapshot)
+            _ = await session.analyze(snapshot)
             let oldDigit = String((statementCount - 1) % 10)
             let range = (source as NSString).range(
                 of: "x := x + \(oldDigit)", options: .backwards)
@@ -56,22 +56,24 @@ struct PL0ParserBenchmarkTests {
             let newDigit = oldDigit == "9" ? "8" : "9"
             let changed = (source as NSString).replacingCharacters(
                 in: NSRange(location: digit, length: 1), with: newDigit)
-            var incremental: ParseResult!
+            var incremental: PL0Analysis!
             let duration = await measureAsync {
-                incremental = await session.parse(SourceSnapshot(
+                incremental = await session.analyze(SourceSnapshot(
                     version: 2, text: changed,
                     edit: SourceEdit(baseVersion: 1,
                                      replacedRange: SourceRange(location: digit, length: 1),
                                      replacementLength: 1)))
             }
-            let reuse: String = switch incremental.algorithmArtifact {
+            let parserReuse: String = switch incremental.parse.algorithmArtifact {
             case let .lr(artifact): "reused \(artifact.reusedTokenCount) tokens"
             case let .earley(artifact): "reused \(artifact.reusedChartColumnCount) columns"
-            case nil: "reused \(incremental.metrics.incrementalParsing.reusedTokenCount) tokens"
+            case nil: "reused \(incremental.parse.metrics.incrementalParsing.reusedTokenCount) tokens"
             }
+            let semantic = incremental.semantics.reuseMetrics
+            let reuse = "\(parserReuse), semantic \(semantic.reusedSymbolCount)s/\(semantic.reusedReferenceCount)r, \(semantic.dependencyInvalidationCount) invalidated"
             report(statements: statementCount,
-                   tokens: incremental.metrics.tokenCount,
-                   operation: "incremental \(engine.rawValue)",
+                   tokens: incremental.parse.metrics.tokenCount,
+                   operation: "incremental analysis \(engine.rawValue)",
                    seconds: duration, detail: reuse)
         }
     }

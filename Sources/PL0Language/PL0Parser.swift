@@ -189,6 +189,7 @@ public actor PL0LanguageSession {
     private var lastParse: ParseResult?
     private var lastParseSnapshot: SourceSnapshot?
     private var lastAnalysis: PL0Analysis?
+    private var semanticAnalyzer = PL0IncrementalSemanticAnalyzer()
 
     public init(engine: ParserEngine = .referenceLL,
                 languageKit: PL0LanguageKit = .bundled) {
@@ -211,6 +212,7 @@ public actor PL0LanguageSession {
             parserCache = nil
             lrParser.reset()
             earleyParser.reset()
+            semanticAnalyzer.reset()
         }
         let prepared = PL0PreparedFrontend(
             snapshot: snapshot, lexed: tokenized.lexed,
@@ -260,6 +262,7 @@ public actor PL0LanguageSession {
         lastParse = nil
         lastParseSnapshot = nil
         lastAnalysis = nil
+        semanticAnalyzer.reset()
     }
 
     private func prepared(for snapshot: SourceSnapshot) -> PL0PreparedFrontend {
@@ -281,7 +284,7 @@ public actor PL0LanguageSession {
             parsed = parse(snapshot)
         }
         let prepared = lastPrepared ?? frontend.prepare(snapshot)
-        let semantics = PL0SemanticAnalyzer().analyze(prepared, parse: parsed)
+        let semantics = semanticAnalyzer.analyze(prepared, parse: parsed)
         let analysis = PL0Analysis(prepared: prepared, parse: parsed,
                                    semantics: semantics)
         lastAnalysis = analysis
@@ -537,9 +540,10 @@ private final class ReferenceParser {
         }
     }
 
-    /// Reuses a successful parse region only when its start token, every
-    /// consumed token and the following lookahead token retain their stable
-    /// identities. Recovered regions are never cached.
+    /// Reuses a parse region only when its start token, every consumed token,
+    /// and the following lookahead token retain their stable identities.
+    /// Recovered regions carry their local diagnostics, expectations, and
+    /// repair actions so reuse remains observationally equal to a fresh parse.
     private func memoized(_ rule: ReferenceParserRule,
                           _ parse: () -> SyntaxNode) -> SyntaxNode {
         let startIndex = index
@@ -553,6 +557,8 @@ private final class ReferenceParser {
             index += entry.tokenIDs.count
             reusedNodeCount += node.nodeCount
             reusedTokenCount += entry.tokenIDs.count
+            replayEffects(from: entry, relocatingBy: delta,
+                          currentStartIndex: startIndex)
             carryCacheEntries(inside: entry, relocatingBy: delta)
             return node
         }
@@ -562,17 +568,22 @@ private final class ReferenceParser {
         let expectationCount = expectations.count
         let node = parse()
         let consumedCount = index - startIndex
-        if consumedCount > 0,
-           diagnostics.count == diagnosticCount,
-           recoveries.count == recoveryCount,
-           expectations.count == expectationCount,
-           node.origin == .source {
+        if consumedCount > 0 {
             let tokenIDs = tokens[startIndex..<index].map(\.id)
+            let relativeLocations = tokens[startIndex..<index].map {
+                $0.range.location - startToken.range.location
+            }
             nextCache.entries[key] = ReferenceParserCache.Entry(
                 tokenIDs: tokenIDs,
+                tokenRelativeLocations: relativeLocations,
                 nextTokenID: current.id,
+                nextTokenRelativeLocation: current.range.location
+                    - startToken.range.location,
                 startLocation: startToken.range.location,
-                node: node)
+                node: node,
+                diagnostics: Array(diagnostics[diagnosticCount...]),
+                recoveries: Array(recoveries[recoveryCount...]),
+                expectations: Array(expectations[expectationCount...]))
         }
         return node
     }
@@ -581,11 +592,17 @@ private final class ReferenceParser {
                                    at startIndex: Int) -> Bool {
         let endIndex = startIndex + entry.tokenIDs.count
         guard endIndex < tokens.count else { return false }
-        for (offset, tokenID) in entry.tokenIDs.enumerated()
-        where tokens[startIndex + offset].id != tokenID {
-            return false
+        for (offset, tokenID) in entry.tokenIDs.enumerated() {
+            let token = tokens[startIndex + offset]
+            guard token.id == tokenID,
+                  token.range.location - tokens[startIndex].range.location
+                    == entry.tokenRelativeLocations[offset] else {
+                return false
+            }
         }
         return tokens[endIndex].id == entry.nextTokenID
+            && tokens[endIndex].range.location - tokens[startIndex].range.location
+                == entry.nextTokenRelativeLocation
     }
 
     /// An outer hit bypasses all recursive parser calls below it. Preserve the
@@ -603,10 +620,66 @@ private final class ReferenceParser {
             guard tokensAreInside, lookaheadIsInside else { continue }
             nextCache.entries[key] = ReferenceParserCache.Entry(
                 tokenIDs: entry.tokenIDs,
+                tokenRelativeLocations: entry.tokenRelativeLocations,
                 nextTokenID: entry.nextTokenID,
+                nextTokenRelativeLocation: entry.nextTokenRelativeLocation,
                 startLocation: entry.startLocation + delta,
-                node: entry.node.relocated(by: delta))
+                node: entry.node.relocated(by: delta),
+                diagnostics: entry.diagnostics.map { relocated($0, by: delta) },
+                recoveries: entry.recoveries.map {
+                    relocated($0, by: delta, currentTokens: [:])
+                },
+                expectations: entry.expectations.map {
+                    ParseExpectation(offset: $0.offset + delta, kinds: $0.kinds)
+                })
         }
+    }
+
+    private func replayEffects(from entry: ReferenceParserCache.Entry,
+                               relocatingBy delta: Int,
+                               currentStartIndex: Int) {
+        let currentSlice = tokens[currentStartIndex..<(currentStartIndex
+            + entry.tokenIDs.count)]
+        let currentTokens = Dictionary(uniqueKeysWithValues:
+            currentSlice.map { ($0.id, $0) })
+        diagnostics.append(contentsOf: entry.diagnostics.map {
+            relocated($0, by: delta)
+        })
+        recoveries.append(contentsOf: entry.recoveries.map {
+            relocated($0, by: delta, currentTokens: currentTokens)
+        })
+        expectations.append(contentsOf: entry.expectations.map {
+            ParseExpectation(offset: $0.offset + delta, kinds: $0.kinds)
+        })
+    }
+
+    private func relocated(_ diagnostic: ParseDiagnostic,
+                           by delta: Int) -> ParseDiagnostic {
+        ParseDiagnostic(
+            severity: diagnostic.severity, message: diagnostic.message,
+            range: SourceRange(location: diagnostic.range.location + delta,
+                               length: diagnostic.range.length),
+            expected: diagnostic.expected)
+    }
+
+    private func relocated(_ recovery: RecoveryAction, by delta: Int,
+                           currentTokens: [String: PL0Token]) -> RecoveryAction {
+        switch recovery {
+        case let .insert(kind, offset):
+            .insert(kind: kind, at: offset + delta)
+        case let .delete(token):
+            .delete(token: currentTokens[token.id] ?? relocated(token, by: delta))
+        }
+    }
+
+    private func relocated(_ token: PL0Token, by delta: Int) -> PL0Token {
+        PL0Token(
+            id: token.id, kind: token.kind, lexeme: token.lexeme,
+            range: SourceRange(location: token.range.location + delta,
+                               length: token.range.length),
+            location: SourceLocation(offset: token.location.offset + delta,
+                                     line: token.location.line,
+                                     column: token.location.column))
     }
 
     @discardableResult

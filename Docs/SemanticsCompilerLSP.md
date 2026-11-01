@@ -33,6 +33,14 @@ assignment/call targets, procedure-as-value errors, and integer literals that
 cannot be represented by the PL/0 VM. The model is public and independent of
 AppKit and LSP wire types.
 
+For an open document, `PL0IncrementalSemanticAnalyzer` reuses unchanged
+declaration signatures and resolved bindings. Each binding is guarded by a
+fingerprint of only the declaration chain capable of resolving its spelling,
+so unrelated edits do not invalidate it. The model publishes exact reused,
+rebuilt, and dependency-invalidated counts. See
+[Fine-grained incrementality](FineGrainedIncrementality.md) for the cache proof,
+correctness oracle, and package boundary.
+
 ## Compiler integration
 
 `PL0Compiler` accepts a `PL0Analysis`, rejects the same semantic diagnostics
