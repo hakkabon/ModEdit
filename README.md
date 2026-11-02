@@ -272,6 +272,16 @@ and projects recognition summaries for SwiftUI. Lexing, parsing, recovery,
 semantic analysis, compilation, execution and engine comparison remain owned
 by the language kit and parser packages; ModEdit owns no parser state machine.
 
+### Cross-front-end experiment conformance
+
+`scripts/verify-cross-frontend-experiments.sh` runs the same accepted and
+recovery PL/0 corpus through three separate executables: ModEdit's headless
+adapter, Grammar-REPL, and Grammar-Workbench. Each emits the shared
+`PL0FrontendExperimentReport` schema. The final comparison ignores timing and
+front-end labels but requires identical grammar fingerprints, engine paths,
+token evidence, diagnostics, recovery edits, parse status, and syntax
+fingerprints. A mismatch exits nonzero and names the first divergent case.
+
 ## Formats
 
 | Format     | Types                         | Colouring                                      | Preview |

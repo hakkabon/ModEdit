@@ -13,6 +13,7 @@ let package = Package(
         .executable(
             name: "ModEdit",
             targets: ["ModEditApp"]),
+        .executable(name: "modedit-experiment", targets: ["ModEditExperimentCLI"]),
     ],
     dependencies: [
         .package(path: "../PL0-LanguageKit"),
@@ -22,6 +23,7 @@ let package = Package(
             name: "ModEditCore",
             dependencies: [
                 .product(name: "PL0Language", package: "PL0-LanguageKit"),
+                .product(name: "PL0FrontendConformance", package: "PL0-LanguageKit"),
             ]),
         .executableTarget(
             name: "ModEditApp",
@@ -29,6 +31,12 @@ let package = Package(
             // Info.plist is consumed by scripts/make-app.sh when assembling the
             // .app bundle; SwiftPM must not treat it as a target resource.
             exclude: ["Resources/Info.plist"]),
+        .executableTarget(
+            name: "ModEditExperimentCLI",
+            dependencies: [
+                "ModEditCore",
+                .product(name: "PL0FrontendConformance", package: "PL0-LanguageKit"),
+            ]),
         .testTarget(
             name: "ModEditTests",
             dependencies: ["ModEditCore"]),

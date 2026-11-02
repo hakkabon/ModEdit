@@ -1,5 +1,5 @@
 {
-  "originHash" : "fb2ab3c855945ad9b299bd953e56d0e0d7add8415a73338736a567bf90104d1c",
+  "originHash" : "861bfb70b40aee71455bd41411a0b9b8da6af9f41872ff24effb196ba14f2b98",
   "pins" : [
     {
       "identity" : "compiler",
@@ -83,30 +83,12 @@
       }
     },
     {
-      "identity" : "ll-parsing",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/LL-Parsing.git",
-      "state" : {
-        "revision" : "721da732235410e2153ca9bbc2d048de3ba38195",
-        "version" : "0.1.1"
-      }
-    },
-    {
       "identity" : "lr-parsing",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hakkabon/LR-Parsing.git",
       "state" : {
         "revision" : "76f84447bc23db97abfdf5c57413ed13bc4fed30",
         "version" : "0.2.4"
-      }
-    },
-    {
-      "identity" : "parser",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/Parser.git",
-      "state" : {
-        "revision" : "38667267dc0b3c5f3313739217d7cedfb054ad69",
-        "version" : "0.3.1"
       }
     },
     {
