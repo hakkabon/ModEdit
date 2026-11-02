@@ -14,9 +14,10 @@ struct PL0WorkbenchPane: View {
 
     @State private var result: ParseResult?
     @State private var semantics: PL0SemanticModel?
+    @State private var recognizers: [PL0RecognitionSummary] = []
     @State private var selectedView = WorkbenchView.diagnostics
     @State private var selectedEngine = ParserEngine.referenceLL
-    @State private var session = PL0LanguageSession()
+    @State private var adapter = PL0WorkbenchAdapter()
     @State private var runtime = RuntimeState.idle
     @State private var grammarWorkbenchSession: GrammarWorkbenchHotReloadSession?
     @State private var grammarWorkbenchStatus = GrammarWorkbenchHotReloadStatus.disconnected
@@ -110,7 +111,8 @@ struct PL0WorkbenchPane: View {
             semantics = nil
             runtime = .idle
             ecosystemComparison = .idle
-            session = PL0LanguageSession(engine: engine)
+            recognizers = []
+            adapter = PL0WorkbenchAdapter(engine: engine)
         }
         .onChange(of: revision) { _ in
             runtime = .idle
@@ -328,19 +330,13 @@ struct PL0WorkbenchPane: View {
 
     @ViewBuilder
     private func comparisonContent(_ result: ParseResult) -> some View {
-        let input = ParserInput(tokens: result.tokens, lexicalDiagnostics: [])
-        let lr = LRPL0Parser().recognize(input)
-        let earley = EarleyPL0Parser().recognize(input)
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Grammar recognition").font(.headline)
-                comparisonRow(name: "Reference LL",
-                              accepted: result.diagnostics.isEmpty,
-                              detail: "normalized CST and recovery oracle")
-                comparisonRow(name: "Generated SLR(1)", accepted: lr.accepted,
-                              detail: "\(lr.configurationCount) actions · stack \(lr.maximumFrontierSize) · consumed \(lr.consumedTokenCount)")
-                comparisonRow(name: "Earley Chart", accepted: earley.accepted,
-                              detail: "\(earley.configurationCount) items · chart max \(earley.maximumFrontierSize) · consumed \(earley.consumedTokenCount)")
+                ForEach(recognizers) { recognizer in
+                    comparisonRow(name: recognizer.name, accepted: recognizer.accepted,
+                                  detail: recognizer.detail)
+                }
                 Divider()
                 ecosystemComparisonContent
                 Divider()
@@ -523,11 +519,12 @@ struct PL0WorkbenchPane: View {
         do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
         guard !Task.isCancelled else { return }
         let snapshot = SourceSnapshot(version: revision, text: source(), edit: edit)
-        let analysis = await session.analyze(snapshot)
+        let analysis = await adapter.analyze(snapshot)
         let parsed = analysis.parse
         guard !Task.isCancelled, parsed.version == revision else { return }
         result = parsed
         semantics = analysis.semantics
+        recognizers = analysis.recognizers
         publish(parsed)
         if let grammarWorkbenchSession {
             do {
@@ -569,7 +566,7 @@ struct PL0WorkbenchPane: View {
         ecosystemComparison = .running
         Task {
             do {
-                let comparison = try await session.compare(snapshot)
+                let comparison = try await adapter.compare(snapshot)
                 guard requestedRevision == revision else { return }
                 ecosystemComparison = .success(comparison)
             } catch {
@@ -640,7 +637,7 @@ struct PL0WorkbenchPane: View {
         Task {
             let outcome: FormatOutcome
             do {
-                outcome = .success(try await session.format(snapshot))
+                outcome = .success(try await adapter.format(snapshot))
             } catch {
                 outcome = .failure(String(describing: error))
             }
@@ -662,15 +659,8 @@ struct PL0WorkbenchPane: View {
         Task {
             let completed: RuntimeState
             do {
-                let program = try await session.compile(snapshot)
-                completed = await Task.detached { () -> RuntimeState in
-                    do {
-                        let execution = try PL0VirtualMachine().run(program)
-                        return .success(program, execution)
-                    } catch {
-                        return .failure(String(describing: error))
-                    }
-                }.value
+                let execution = try await adapter.compileAndRun(snapshot)
+                completed = .success(execution.program, execution.result)
             } catch {
                 completed = .failure(String(describing: error))
             }

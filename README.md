@@ -214,6 +214,7 @@ ModEditCore (library)
 │               ModEditWindowController (window, toolbar, SwiftUI hosting) │
 │ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
 │                       └ PL0WorkbenchPane (Problems/CST/Compare/Trace/Run) │
+│                         └ PL0WorkbenchAdapter (snapshot/result boundary)  │
 │                 status bar       └ LineNumberRulerView       (WKWebView) │
 │                    │                  │  ▲ edits           (WKWebView)    │
 │ Model         EditorModel (@MainActor, @Published revision/format)       │
@@ -264,6 +265,12 @@ updated incrementally on every edit: only the edited line window is rescanned,
 later starts are shifted by the edit delta, and line/column lookup is binary
 search rather than a scan from the beginning. The gutter still asks the layout
 manager only for visible line fragments.
+
+The PL/0 workbench is a visualization client. `PL0WorkbenchAdapter` is its only
+language-service boundary: it sends versioned snapshots to `PL0-LanguageKit`
+and projects recognition summaries for SwiftUI. Lexing, parsing, recovery,
+semantic analysis, compilation, execution and engine comparison remain owned
+by the language kit and parser packages; ModEdit owns no parser state machine.
 
 ## Formats
 
