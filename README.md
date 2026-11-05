@@ -272,6 +272,17 @@ and projects recognition summaries for SwiftUI. Lexing, parsing, recovery,
 semantic analysis, compilation, execution and engine comparison remain owned
 by the language kit and parser packages; ModEdit owns no parser state machine.
 
+### Unified language providers
+
+`FormatRegistry.standard` is provider-first. PL/0 enters as the external
+`PL0Provider` exported by its language kit, while HTML, Markdown, LaTeX, and
+plain text remain permanent bundled providers backed by ModEdit's scanners and
+preview renderers. The status-bar picker enumerates the same provider interface
+for both categories; Uniform Type Identifier and theme mapping remain host
+presentation concerns. The neutral session contract lives in
+`IncrementalParsing`, so neither parser packages nor language kits depend on
+ModEdit.
+
 ### Cross-front-end experiment conformance
 
 `scripts/verify-cross-frontend-experiments.sh` runs the same accepted and

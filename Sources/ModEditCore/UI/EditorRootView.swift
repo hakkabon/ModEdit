@@ -35,8 +35,8 @@ struct EditorRootView: View {
         Binding(
             get: { model.format.id },
             set: { id in
-                if let format = model.registry.format(withID: id) {
-                    model.setFormat(format)
+                if let provider = model.registry.provider(withID: id) {
+                    model.setFormat(provider.documentFormat)
                 }
             })
     }
@@ -55,8 +55,8 @@ private struct EditorStatusBar: View {
                 .accessibilityLabel("Cursor line \(model.cursorLine), column \(model.cursorColumn)")
 
             Picker("Text type", selection: formatID) {
-                ForEach(model.registry.allFormats, id: \.id) { format in
-                    Text(format.displayName).tag(format.id)
+                ForEach(model.registry.allProviders, id: \.descriptor.id) { provider in
+                    Text(provider.descriptor.displayName).tag(provider.descriptor.id)
                 }
             }
             .labelsHidden()

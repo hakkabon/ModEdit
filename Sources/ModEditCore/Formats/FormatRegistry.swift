@@ -7,17 +7,53 @@ import UniformTypeIdentifiers
 /// registration step that can be forgotten or raced, and tests can build their
 /// own registry.
 struct FormatRegistry: Sendable {
-    /// Specific formats, in matching priority order.
-    let formats: [any DocumentFormat]
+    /// Specific providers, in matching priority order.
+    let providers: [any EditorLanguageProvider]
     /// Used when nothing more specific matches.
-    let fallback: any DocumentFormat
+    let fallbackProvider: any EditorLanguageProvider
 
     static let standard = FormatRegistry(
-        formats: [PL0Format(), MarkdownFormat(), LaTeXFormat(), HTMLFormat()],
-        fallback: PlainTextFormat())
+        providers: [
+            PL0EditorLanguageProvider(),
+            BundledFormatLanguageProvider(format: MarkdownFormat()),
+            BundledFormatLanguageProvider(format: LaTeXFormat()),
+            BundledFormatLanguageProvider(format: HTMLFormat()),
+        ],
+        fallbackProvider: BundledFormatLanguageProvider(
+            format: PlainTextFormat()))
+
+    init(providers: [any EditorLanguageProvider],
+         fallbackProvider: any EditorLanguageProvider) {
+        precondition(Set((providers + [fallbackProvider]).map {
+            $0.descriptor.id
+        }).count == providers.count + 1,
+        "language provider IDs must be unique")
+        self.providers = providers
+        self.fallbackProvider = fallbackProvider
+    }
+
+    /// Compatibility initializer for host-defined presentation-only formats.
+    init(formats: [any DocumentFormat], fallback: any DocumentFormat) {
+        self.init(
+            providers: formats.map {
+                BundledFormatLanguageProvider(
+                    format: $0, distribution: .hostDefined)
+            },
+            fallbackProvider: BundledFormatLanguageProvider(
+                format: fallback, distribution: .hostDefined))
+    }
+
+    var formats: [any DocumentFormat] { providers.map(\.documentFormat) }
+    var fallback: any DocumentFormat { fallbackProvider.documentFormat }
+
+    var allProviders: [any EditorLanguageProvider] {
+        providers + [fallbackProvider]
+    }
 
     /// Every format, fallback last. Used to populate pickers.
-    var allFormats: [any DocumentFormat] { formats + [fallback] }
+    var allFormats: [any DocumentFormat] {
+        allProviders.map(\.documentFormat)
+    }
 
     /// Content types the app can open. Source types without a dedicated format
     /// (XML, JSON, YAML) are opened as plain text.
@@ -33,16 +69,28 @@ struct FormatRegistry: Sendable {
     /// format. We therefore try an exact match, then conformance to the
     /// *specific* formats, and only then the fallback.
     func format(for type: UTType) -> any DocumentFormat {
-        if let exact = allFormats.first(where: { $0.contentTypes.contains(type) }) {
-            return exact
-        }
-        return formats.first { format in
-            format.contentTypes.contains { type.conforms(to: $0) }
-        } ?? fallback
+        provider(for: type).documentFormat
     }
 
     /// Looks a format up by `DocumentFormat.id`.
     func format(withID id: String) -> (any DocumentFormat)? {
-        allFormats.first { $0.id == id }
+        provider(withID: id)?.documentFormat
+    }
+
+    func provider(for type: UTType) -> any EditorLanguageProvider {
+        if let exact = allProviders.first(where: {
+            $0.documentFormat.contentTypes.contains(type)
+        }) {
+            return exact
+        }
+        return providers.first { provider in
+            provider.documentFormat.contentTypes.contains {
+                type.conforms(to: $0)
+            }
+        } ?? fallbackProvider
+    }
+
+    func provider(withID id: String) -> (any EditorLanguageProvider)? {
+        allProviders.first { $0.descriptor.id == id }
     }
 }

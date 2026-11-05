@@ -42,6 +42,9 @@ let package = Package(
             ]),
         .testTarget(
             name: "ModEditTests",
-            dependencies: ["ModEditCore"]),
+            dependencies: [
+                "ModEditCore",
+                .product(name: "IncrementalParsing", package: "Incremental-Parsing"),
+            ]),
     ]
 )

@@ -1,5 +1,6 @@
 import Testing
 import AppKit
+import IncrementalParsing
 import UniformTypeIdentifiers
 @testable import ModEditCore
 
@@ -27,6 +28,37 @@ struct FormatRegistryTests {
     @Test func lookupByID() {
         #expect(registry.format(withID: "latex")?.displayName == "LaTeX")
         #expect(registry.format(withID: "nope") == nil)
+    }
+
+    @Test func bundledAndExternalProvidersShareOneRegistry() {
+        #expect(registry.provider(withID: "pl0")?.descriptor.distribution
+                == .externalLanguageKit)
+        for id in ["html", "markdown", "latex"] {
+            #expect(registry.provider(withID: id)?.descriptor.distribution
+                    == .bundledPermanent)
+        }
+        #expect(registry.allProviders.map(\.descriptor.id)
+                == registry.allFormats.map(\.id))
+    }
+
+    @Test func bundledAndLanguageKitSessionsShareOneAnalysisAPI() async throws {
+        let markdown = try #require(registry.provider(withID: "markdown"))
+        let markdownResult = try await markdown.makeSession().analyze(
+            IncrementalParsing.SourceSnapshot(
+                text: "# Title\n`code`", revision: .init(1)))
+        #expect(markdownResult.languageID == "markdown")
+        #expect(markdownResult.evidence(for: "highlighting")?.strategy == .full)
+        #expect(markdownResult.tokens.contains { $0.classification == "heading" })
+
+        let pl0 = try #require(registry.provider(withID: "pl0"))
+        let pl0Result = try await pl0.makeSession().analyze(
+            IncrementalParsing.SourceSnapshot(
+                text: "var x; begin x := 1 end.", revision: .init(1)))
+        #expect(pl0Result.languageID == "pl0")
+        #expect(pl0Result.artifact != nil)
+        #expect(pl0Result.evidence(for: "lexing") != nil)
+        #expect(pl0Result.evidence(for: "parsing") != nil)
+        #expect(pl0Result.evidence(for: "semantics") != nil)
     }
 }
 
