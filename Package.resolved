@@ -1,51 +1,6 @@
 {
-  "originHash" : "861bfb70b40aee71455bd41411a0b9b8da6af9f41872ff24effb196ba14f2b98",
+  "originHash" : "3d97122abd0808d8d4b7ef564eb052d095554b8b5f39f56aa1e7198dbb754ca8",
   "pins" : [
-    {
-      "identity" : "compiler",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/Compiler.git",
-      "state" : {
-        "revision" : "fb7aa2afd9078d153074bf06f88c012329498bd8",
-        "version" : "0.3.0"
-      }
-    },
-    {
-      "identity" : "cyk-parser",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/CYK-Parser.git",
-      "state" : {
-        "revision" : "2bcff3d012d53f6c6061d0d1d3a2c87b5b80263f",
-        "version" : "0.2.0"
-      }
-    },
-    {
-      "identity" : "earley-parser",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/Earley-Parser.git",
-      "state" : {
-        "revision" : "063ece84236bb2b735bf9647852da64f988ec2ef",
-        "version" : "0.2.0"
-      }
-    },
-    {
-      "identity" : "earley-tableparser",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/Earley-TableParser.git",
-      "state" : {
-        "revision" : "ce68c008369811275c03d5926cae9abea97d42d9",
-        "version" : "0.1.0"
-      }
-    },
-    {
-      "identity" : "grammar",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/Grammar.git",
-      "state" : {
-        "revision" : "2dedc076be2e0a2bdb4bad843c717d4fd3d8bfdc",
-        "version" : "0.3.4"
-      }
-    },
     {
       "identity" : "grammardiagram",
       "kind" : "remoteSourceControl",
@@ -56,48 +11,12 @@
       }
     },
     {
-      "identity" : "grammartokenizer",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/GrammarTokenizer.git",
-      "state" : {
-        "revision" : "71a0bf3fa9f2bfe3399ba10ffd2b33eb4826c989",
-        "version" : "0.1.0"
-      }
-    },
-    {
       "identity" : "graphviz",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/SwiftDocOrg/GraphViz",
       "state" : {
         "revision" : "74b6cbd8c5ecea9f64d84c4e1c88d65604dd033f",
         "version" : "0.4.1"
-      }
-    },
-    {
-      "identity" : "lexer-fsa",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/Lexer-FSA.git",
-      "state" : {
-        "revision" : "777ea30c2f1d5f929e94971c2176b45c2ce8fae5",
-        "version" : "0.2.0"
-      }
-    },
-    {
-      "identity" : "lr-parsing",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/LR-Parsing.git",
-      "state" : {
-        "revision" : "76f84447bc23db97abfdf5c57413ed13bc4fed30",
-        "version" : "0.2.4"
-      }
-    },
-    {
-      "identity" : "rnglr-parser",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/hakkabon/RNGLR-Parser.git",
-      "state" : {
-        "revision" : "cf03998254a99947556d3ddfd47687b7d3fb66d7",
-        "version" : "0.2.2"
       }
     },
     {

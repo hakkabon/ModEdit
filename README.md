@@ -282,6 +282,14 @@ front-end labels but requires identical grammar fingerprints, engine paths,
 token evidence, diagnostics, recovery edits, parse status, and syntax
 fingerprints. A mismatch exits nonzero and names the first divergent case.
 
+The same script now also runs the Phase-16 product campaign through all three
+executables and compares their host-independent evidence fingerprints. Run a
+single ModEdit report with:
+
+```sh
+swift run modedit-experiment product-campaign modedit-product.json
+```
+
 ## Formats
 
 | Format     | Types                         | Colouring                                      | Preview |
