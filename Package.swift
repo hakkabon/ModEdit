@@ -18,6 +18,7 @@ let package = Package(
     dependencies: [
         .package(path: "../PL0-LanguageKit"),
         .package(path: "../Incremental-Parsing"),
+        .package(path: "../Language-Tooling"),
     ],
     targets: [
         .target(
@@ -26,6 +27,7 @@ let package = Package(
                 .product(name: "PL0Language", package: "PL0-LanguageKit"),
                 .product(name: "PL0FrontendConformance", package: "PL0-LanguageKit"),
                 .product(name: "IncrementalParsing", package: "Incremental-Parsing"),
+                .product(name: "LanguageTooling", package: "Language-Tooling"),
             ]),
         .executableTarget(
             name: "ModEditApp",
@@ -45,6 +47,7 @@ let package = Package(
             dependencies: [
                 "ModEditCore",
                 .product(name: "IncrementalParsing", package: "Incremental-Parsing"),
+                .product(name: "LanguageTooling", package: "Language-Tooling"),
             ]),
     ]
 )

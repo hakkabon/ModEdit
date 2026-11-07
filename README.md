@@ -279,9 +279,11 @@ by the language kit and parser packages; ModEdit owns no parser state machine.
 plain text remain permanent bundled providers backed by ModEdit's scanners and
 preview renderers. The status-bar picker enumerates the same provider interface
 for both categories; Uniform Type Identifier and theme mapping remain host
-presentation concerns. The neutral session contract lives in
-`IncrementalParsing`, so neither parser packages nor language kits depend on
-ModEdit.
+presentation concerns. Every provider also conforms to Language-Tooling's
+consumer-facing provider/session API. Bundled scanners project their native
+spans as disjoint semantic tokens, while PL/0 delegates to its language-kit
+session. The neutral lifecycle lives in `LanguageToolingDocument`, so neither
+parser packages nor language kits depend on ModEdit.
 
 ### Cross-front-end experiment conformance
 

@@ -1,6 +1,7 @@
 import Testing
 import AppKit
 import IncrementalParsing
+import LanguageTooling
 import UniformTypeIdentifiers
 @testable import ModEditCore
 
@@ -59,6 +60,30 @@ struct FormatRegistryTests {
         #expect(pl0Result.evidence(for: "lexing") != nil)
         #expect(pl0Result.evidence(for: "parsing") != nil)
         #expect(pl0Result.evidence(for: "semantics") != nil)
+    }
+
+    @Test func bundledAndExternalProvidersShareToolingDocumentLifecycle() async throws {
+        for id in ["markdown", "html", "latex", "pl0"] {
+            let provider = try #require(registry.provider(withID: id))
+            let document = LanguageToolingDocument(provider: provider)
+            let source = switch id {
+            case "pl0": "var x; begin x := 1 end."
+            case "html": "<p title=\"x\">text</p>"
+            case "latex": "\\section{Title}"
+            default: "# Title\n`code`"
+            }
+            _ = try await document.open(.init(
+                text: source, revision: .init(1)))
+            let tokens = try await document.semanticTokens()
+            #expect(tokens.data.count.isMultiple(of: 5))
+            #expect(!tokens.data.isEmpty)
+        }
+
+        let html = try #require(registry.provider(withID: "html"))
+        let multiline = LanguageToolingDocument(provider: html)
+        _ = try await multiline.open(.init(
+            text: "<!-- one\n two -->", revision: .init(1)))
+        #expect(try await multiline.semanticTokens().data.count == 10)
     }
 }
 

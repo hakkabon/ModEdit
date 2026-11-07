@@ -1,10 +1,11 @@
 import Foundation
 import IncrementalParsing
+import LanguageTooling
 import PL0Language
 
 /// ModEdit adds presentation policy to the shared provider contract. External
 /// language kits and permanent bundled formats occupy the same registry.
-protocol EditorLanguageProvider: LanguageProvider {
+protocol EditorLanguageProvider: LanguageToolingProvider {
     var documentFormat: any DocumentFormat { get }
 }
 
@@ -13,7 +14,9 @@ struct PL0EditorLanguageProvider: EditorLanguageProvider {
     let documentFormat: any DocumentFormat = PL0Format()
 
     var descriptor: LanguageProviderDescriptor { provider.descriptor }
-    func makeSession() -> any LanguageProviderSession { provider.makeSession() }
+    func makeToolingSession() -> any LanguageToolingSession {
+        provider.makeToolingSession()
+    }
 }
 
 struct BundledFormatLanguageProvider: EditorLanguageProvider {
@@ -33,7 +36,7 @@ struct BundledFormatLanguageProvider: EditorLanguageProvider {
             capabilities: capabilities)
     }
 
-    func makeSession() -> any LanguageProviderSession {
+    func makeToolingSession() -> any LanguageToolingSession {
         do { return try BundledFormatLanguageSession(format: documentFormat) }
         catch {
             preconditionFailure(
@@ -42,9 +45,12 @@ struct BundledFormatLanguageProvider: EditorLanguageProvider {
     }
 }
 
-actor BundledFormatLanguageSession: LanguageProviderSession {
+actor BundledFormatLanguageSession: LanguageToolingSession {
     private let format: any DocumentFormat
     private let tokenizer: Tokenizer
+    private var currentText: String?
+    private var currentRevision: SourceRevision?
+    private var currentSpans: [Token] = []
 
     init(format: any DocumentFormat) throws {
         self.format = format
@@ -62,6 +68,9 @@ actor BundledFormatLanguageSession: LanguageProviderSession {
         let ns = snapshot.text as NSString
         let spans = tokenizer.tokens(
             in: ns, range: NSRange(location: 0, length: ns.length))
+        currentText = snapshot.text
+        currentRevision = snapshot.revision
+        currentSpans = spans
         return LanguageProviderAnalysis(
             languageID: format.id,
             revision: snapshot.revision,
@@ -88,5 +97,95 @@ actor BundledFormatLanguageSession: LanguageProviderSession {
             throw LanguageProviderError.unsupportedCapability(.preview)
         }
         return try await renderer.renderHTML(from: snapshot.text)
+    }
+
+    func semanticTokens() async throws -> ToolingSemanticTokensResult {
+        guard let currentText, let currentRevision else {
+            throw LanguageToolingError.documentNotAnalyzed
+        }
+        let tokens = semanticTokens(
+            from: effectiveSpans(currentSpans), in: currentText)
+        return SemanticTokenEncoder.encode(
+            tokens,
+            resultID: "\(format.id):\(currentRevision.rawValue)")
+    }
+
+    private func semanticTokens(
+        from spans: [Token],
+        in text: String
+    ) -> [ToolingSemanticToken] {
+        let source = text as NSString
+        let lineMap = SourceLineMap(text)
+        return spans.flatMap { span in
+            var result: [ToolingSemanticToken] = []
+            var lower = span.range.location
+            let upper = NSMaxRange(span.range)
+            while lower < upper {
+                var lineEnd = lower
+                while lineEnd < upper {
+                    let unit = source.character(at: lineEnd)
+                    if unit == 10 || unit == 13 { break }
+                    lineEnd += 1
+                }
+                if lineEnd > lower {
+                    result.append(.init(
+                        range: lineMap.toolingRange(.init(
+                            location: lower, length: lineEnd - lower)),
+                        type: semanticType(span.kind)))
+                }
+                guard lineEnd < upper else { break }
+                lower = lineEnd + 1
+                if source.character(at: lineEnd) == 13,
+                   lower < upper,
+                   source.character(at: lower) == 10 {
+                    lower += 1
+                }
+            }
+            return result
+        }
+    }
+
+    private func semanticType(_ kind: TokenKind) -> ToolingSemanticTokenType {
+        switch kind {
+        case .comment: .comment
+        case .string, .code: .string
+        case .keyword: .keyword
+        case .number: .number
+        case .operator, .listMarker: .operatorToken
+        case .attributeName: .field
+        case .argument, .optionalArgument: .parameter
+        case .tag, .command, .heading: .type
+        case .math, .strong, .link, .quote: .variable
+        }
+    }
+
+    /// Highlight rules are priority ordered and may overlap. Semantic-token
+    /// protocols require a disjoint stream, so split at every boundary and
+    /// retain the last (highest-priority) covering span.
+    private func effectiveSpans(_ spans: [Token]) -> [Token] {
+        let boundaries = Set(spans.flatMap {
+            [$0.range.location, NSMaxRange($0.range)]
+        }).sorted()
+        var result: [Token] = []
+        for (lower, upper) in zip(boundaries, boundaries.dropFirst())
+            where lower < upper {
+            guard let winner = spans.last(where: {
+                $0.range.location <= lower && NSMaxRange($0.range) >= upper
+            }) else { continue }
+            if let previous = result.last,
+               previous.kind == winner.kind,
+               NSMaxRange(previous.range) == lower {
+                result[result.count - 1] = Token(
+                    range: NSRange(
+                        location: previous.range.location,
+                        length: upper - previous.range.location),
+                    kind: winner.kind)
+            } else {
+                result.append(Token(
+                    range: NSRange(location: lower, length: upper - lower),
+                    kind: winner.kind))
+            }
+        }
+        return result
     }
 }
