@@ -29,6 +29,16 @@ struct ModEditExperimentCLI {
             }
             return
         }
+        if arguments.first == "grammar-campaign" {
+            let data = try await PL0ProductCampaign.runGrammarHotReload().json()
+            if arguments.count > 1 {
+                try data.write(
+                    to: URL(fileURLWithPath: arguments[1]), options: .atomic)
+            } else {
+                print(String(decoding: data, as: UTF8.self))
+            }
+            return
+        }
         if arguments.first == "product-budgets" {
             let data = try PL0ProductCampaign.releaseBudgetJSON()
             if arguments.count > 1 {
