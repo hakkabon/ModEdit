@@ -1,5 +1,7 @@
 import Foundation
+import GrammarLanguage
 import IncrementalParsing
+import JSONLanguage
 import LanguageTooling
 import PL0Language
 
@@ -12,6 +14,26 @@ protocol EditorLanguageProvider: LanguageToolingProvider {
 struct PL0EditorLanguageProvider: EditorLanguageProvider {
     private let provider = PL0Provider()
     let documentFormat: any DocumentFormat = PL0Format()
+
+    var descriptor: LanguageProviderDescriptor { provider.descriptor }
+    func makeToolingSession() -> any LanguageToolingSession {
+        provider.makeToolingSession()
+    }
+}
+
+struct JSONEditorLanguageProvider: EditorLanguageProvider {
+    private let provider = JSONProvider()
+    let documentFormat: any DocumentFormat = JSONFormat()
+
+    var descriptor: LanguageProviderDescriptor { provider.descriptor }
+    func makeToolingSession() -> any LanguageToolingSession {
+        provider.makeToolingSession()
+    }
+}
+
+struct GrammarEditorLanguageProvider: EditorLanguageProvider {
+    private let provider = GrammarProvider()
+    let documentFormat: any DocumentFormat = GrammarFormat()
 
     var descriptor: LanguageProviderDescriptor { provider.descriptor }
     func makeToolingSession() -> any LanguageToolingSession {

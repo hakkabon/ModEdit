@@ -20,6 +20,8 @@ let package = Package(
         .package(path: "../Incremental-Parsing"),
         .package(path: "../Language-Tooling"),
         .package(path: "../ModEdit-Bundled-Languages"),
+        .package(path: "../JSON-LanguageKit"),
+        .package(path: "../Grammar-LanguageKit"),
     ],
     targets: [
         .target(
@@ -32,6 +34,10 @@ let package = Package(
                 .product(
                     name: "ModEditBundledLanguages",
                     package: "ModEdit-Bundled-Languages"),
+                .product(name: "JSONLanguage", package: "JSON-LanguageKit"),
+                .product(
+                    name: "GrammarLanguage",
+                    package: "Grammar-LanguageKit"),
             ]),
         .executableTarget(
             name: "ModEditApp",

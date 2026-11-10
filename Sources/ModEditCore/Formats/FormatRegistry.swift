@@ -17,6 +17,8 @@ struct FormatRegistry: Sendable {
         let registry = FormatRegistry(
             providers: [
                 PL0EditorLanguageProvider(),
+                JSONEditorLanguageProvider(),
+                GrammarEditorLanguageProvider(),
                 BundledFormatLanguageProvider(format: MarkdownFormat()),
                 BundledFormatLanguageProvider(format: LaTeXFormat()),
                 BundledFormatLanguageProvider(format: HTMLFormat()),
@@ -67,9 +69,9 @@ struct FormatRegistry: Sendable {
     }
 
     /// Content types the app can open. Source types without a dedicated format
-    /// (XML, JSON, YAML) are opened as plain text.
+    /// (XML and YAML) are opened as plain text.
     var readableContentTypes: [UTType] {
-        allFormats.flatMap { $0.contentTypes } + [.xml, .json, .yaml]
+        allFormats.flatMap { $0.contentTypes } + [.xml, .yaml]
     }
 
     /// Picks the format for `type`.

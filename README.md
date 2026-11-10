@@ -287,9 +287,9 @@ parser packages nor language kits depend on ModEdit.
 
 Permanent distribution policy lives in the parser-free
 `ModEdit-Bundled-Languages` package. ModEdit validates its standard registry
-against that catalog. JSON, Grammar notation, Graphviz DOT, and CSS have
-reserved catalog entries but remain planned, independently owned language kits;
-the catalog does not substitute placeholder implementations for them.
+against that catalog. JSON and Grammar notation are active, independently
+owned language kits consumed through the same document lifecycle. Graphviz DOT
+and CSS retain reserved catalog entries and remain planned independent kits.
 
 ### Cross-front-end experiment conformance
 
@@ -323,7 +323,7 @@ The format is chosen from the file's type on open and can be changed from the
 status-bar picker (which also lets you pick a format for a new, untitled
 document). An explicit choice is remembered for that file's URL and wins over
 the extension when it is reopened; unknown or removed formats are ignored.
-XML, JSON and YAML open as plain text.
+XML and YAML open as plain text. JSON uses the bundled JSON LanguageKit.
 
 > `UTType.markdown` only exists in the macOS 27 SDK, so Markdown is imported by
 > identifier (`UTType(importedAs:)`) and declared in `Info.plist`.

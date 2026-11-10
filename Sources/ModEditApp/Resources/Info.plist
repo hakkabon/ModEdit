@@ -48,6 +48,8 @@
                 <string>public.html</string>
                 <string>org.tug.tex</string>
                 <string>io.github.hakkabon.pl0-source</string>
+                <string>public.json</string>
+                <string>io.github.hakkabon.grammar-source</string>
             </array>
         </dict>
     </array>
@@ -55,6 +57,30 @@
          earlier systems the app must declare it itself. -->
     <key>UTImportedTypeDeclarations</key>
     <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>io.github.hakkabon.grammar-source</string>
+            <key>UTTypeDescription</key>
+            <string>Grammar Source</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.plain-text</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>bnf</string>
+                    <string>ebnf</string>
+                    <string>wsn</string>
+                    <string>grammar</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>text/x-grammar</string>
+                </array>
+            </dict>
+        </dict>
         <dict>
             <key>UTTypeIdentifier</key>
             <string>io.github.hakkabon.pl0-source</string>

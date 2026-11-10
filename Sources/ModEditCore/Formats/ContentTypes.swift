@@ -13,4 +13,8 @@ extension UTType {
 
     /// PL/0 source used by the experimental language workbench.
     static let pl0Source = UTType(importedAs: "io.github.hakkabon.pl0-source")
+
+    /// BNF, EBNF, WSN, and the Grammar package's combined notation.
+    static let grammarSource = UTType(
+        importedAs: "io.github.hakkabon.grammar-source")
 }

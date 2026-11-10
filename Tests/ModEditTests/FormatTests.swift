@@ -13,12 +13,13 @@ struct FormatRegistryTests {
         #expect(registry.format(for: .markdownText).id == "markdown")
         #expect(registry.format(for: .latex).id == "latex")
         #expect(registry.format(for: .html).id == "html")
+        #expect(registry.format(for: .json).id == "json")
         #expect(registry.format(for: .pl0Source).id == "pl0")
         #expect(registry.format(for: .plainText).id == "plaintext")
     }
 
     @Test func unknownTypesFallBackToPlainText() {
-        #expect(registry.format(for: .json).id == "plaintext")
+        #expect(registry.format(for: .yaml).id == "plaintext")
     }
 
     @Test func idsAreUnique() {
@@ -34,7 +35,7 @@ struct FormatRegistryTests {
     @Test func bundledAndExternalProvidersShareOneRegistry() {
         #expect(registry.provider(withID: "pl0")?.descriptor.distribution
                 == .externalLanguageKit)
-        for id in ["html", "markdown", "latex"] {
+        for id in ["html", "markdown", "latex", "json", "grammar"] {
             #expect(registry.provider(withID: id)?.descriptor.distribution
                     == .bundledPermanent)
         }
@@ -63,13 +64,15 @@ struct FormatRegistryTests {
     }
 
     @Test func bundledAndExternalProvidersShareToolingDocumentLifecycle() async throws {
-        for id in ["markdown", "html", "latex", "pl0"] {
+        for id in ["markdown", "html", "latex", "json", "grammar", "pl0"] {
             let provider = try #require(registry.provider(withID: id))
             let document = LanguageToolingDocument(provider: provider)
             let source = switch id {
             case "pl0": "var x; begin x := 1 end."
             case "html": "<p title=\"x\">text</p>"
             case "latex": "\\section{Title}"
+            case "json": #"{"name": true}"#
+            case "grammar": #"<value> ::= "true" ;"#
             default: "# Title\n`code`"
             }
             _ = try await document.open(.init(
