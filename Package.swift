@@ -19,6 +19,7 @@ let package = Package(
         .package(path: "../PL0-LanguageKit"),
         .package(path: "../Incremental-Parsing"),
         .package(path: "../Language-Tooling"),
+        .package(path: "../ModEdit-Bundled-Languages"),
     ],
     targets: [
         .target(
@@ -28,6 +29,9 @@ let package = Package(
                 .product(name: "PL0FrontendConformance", package: "PL0-LanguageKit"),
                 .product(name: "IncrementalParsing", package: "Incremental-Parsing"),
                 .product(name: "LanguageTooling", package: "Language-Tooling"),
+                .product(
+                    name: "ModEditBundledLanguages",
+                    package: "ModEdit-Bundled-Languages"),
             ]),
         .executableTarget(
             name: "ModEditApp",

@@ -1,4 +1,5 @@
 import Foundation
+import ModEditBundledLanguages
 import UniformTypeIdentifiers
 
 /// The set of known formats.
@@ -12,15 +13,25 @@ struct FormatRegistry: Sendable {
     /// Used when nothing more specific matches.
     let fallbackProvider: any EditorLanguageProvider
 
-    static let standard = FormatRegistry(
-        providers: [
-            PL0EditorLanguageProvider(),
-            BundledFormatLanguageProvider(format: MarkdownFormat()),
-            BundledFormatLanguageProvider(format: LaTeXFormat()),
-            BundledFormatLanguageProvider(format: HTMLFormat()),
-        ],
-        fallbackProvider: BundledFormatLanguageProvider(
-            format: PlainTextFormat()))
+    static let standard: FormatRegistry = {
+        let registry = FormatRegistry(
+            providers: [
+                PL0EditorLanguageProvider(),
+                BundledFormatLanguageProvider(format: MarkdownFormat()),
+                BundledFormatLanguageProvider(format: LaTeXFormat()),
+                BundledFormatLanguageProvider(format: HTMLFormat()),
+            ],
+            fallbackProvider: BundledFormatLanguageProvider(
+                format: PlainTextFormat()))
+        let permanentIDs = Set(registry.providers.compactMap {
+            $0.descriptor.distribution == .bundledPermanent
+                ? $0.descriptor.id : nil
+        })
+        precondition(
+            permanentIDs == ModEditBundledLanguageCatalog.activeProviderIDs,
+            "ModEdit's permanent providers must match its distribution catalog")
+        return registry
+    }()
 
     init(providers: [any EditorLanguageProvider],
          fallbackProvider: any EditorLanguageProvider) {

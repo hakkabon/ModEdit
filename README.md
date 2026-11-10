@@ -285,6 +285,12 @@ spans as disjoint semantic tokens, while PL/0 delegates to its language-kit
 session. The neutral lifecycle lives in `LanguageToolingDocument`, so neither
 parser packages nor language kits depend on ModEdit.
 
+Permanent distribution policy lives in the parser-free
+`ModEdit-Bundled-Languages` package. ModEdit validates its standard registry
+against that catalog. JSON, Grammar notation, Graphviz DOT, and CSS have
+reserved catalog entries but remain planned, independently owned language kits;
+the catalog does not substitute placeholder implementations for them.
+
 ### Cross-front-end experiment conformance
 
 `scripts/verify-cross-frontend-experiments.sh` runs the same accepted and
