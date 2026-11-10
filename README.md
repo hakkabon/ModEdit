@@ -287,9 +287,8 @@ parser packages nor language kits depend on ModEdit.
 
 Permanent distribution policy lives in the parser-free
 `ModEdit-Bundled-Languages` package. ModEdit validates its standard registry
-against that catalog. JSON and Grammar notation are active, independently
-owned language kits consumed through the same document lifecycle. Graphviz DOT
-and CSS retain reserved catalog entries and remain planned independent kits.
+against that catalog. JSON, Grammar notation, Graphviz DOT, and CSS are active,
+independently owned language kits consumed through the same document lifecycle.
 
 ### Cross-front-end experiment conformance
 

@@ -14,6 +14,8 @@ struct FormatRegistryTests {
         #expect(registry.format(for: .latex).id == "latex")
         #expect(registry.format(for: .html).id == "html")
         #expect(registry.format(for: .json).id == "json")
+        #expect(registry.format(for: .cssText).id == "css")
+        #expect(registry.format(for: .dotSource).id == "dot")
         #expect(registry.format(for: .pl0Source).id == "pl0")
         #expect(registry.format(for: .plainText).id == "plaintext")
     }
@@ -35,7 +37,9 @@ struct FormatRegistryTests {
     @Test func bundledAndExternalProvidersShareOneRegistry() {
         #expect(registry.provider(withID: "pl0")?.descriptor.distribution
                 == .externalLanguageKit)
-        for id in ["html", "markdown", "latex", "json", "grammar"] {
+        for id in [
+            "html", "markdown", "latex", "json", "grammar", "dot", "css",
+        ] {
             #expect(registry.provider(withID: id)?.descriptor.distribution
                     == .bundledPermanent)
         }
@@ -64,7 +68,9 @@ struct FormatRegistryTests {
     }
 
     @Test func bundledAndExternalProvidersShareToolingDocumentLifecycle() async throws {
-        for id in ["markdown", "html", "latex", "json", "grammar", "pl0"] {
+        for id in [
+            "markdown", "html", "latex", "json", "grammar", "dot", "css", "pl0",
+        ] {
             let provider = try #require(registry.provider(withID: id))
             let document = LanguageToolingDocument(provider: provider)
             let source = switch id {
@@ -73,6 +79,8 @@ struct FormatRegistryTests {
             case "latex": "\\section{Title}"
             case "json": #"{"name": true}"#
             case "grammar": #"<value> ::= "true" ;"#
+            case "dot": "digraph G { a -> b; }"
+            case "css": "body { color: red; }"
             default: "# Title\n`code`"
             }
             _ = try await document.open(.init(

@@ -22,6 +22,8 @@ let package = Package(
         .package(path: "../ModEdit-Bundled-Languages"),
         .package(path: "../JSON-LanguageKit"),
         .package(path: "../Grammar-LanguageKit"),
+        .package(path: "../DOT-LanguageKit"),
+        .package(path: "../CSS-LanguageKit"),
     ],
     targets: [
         .target(
@@ -38,6 +40,8 @@ let package = Package(
                 .product(
                     name: "GrammarLanguage",
                     package: "Grammar-LanguageKit"),
+                .product(name: "DOTLanguage", package: "DOT-LanguageKit"),
+                .product(name: "CSSLanguage", package: "CSS-LanguageKit"),
             ]),
         .executableTarget(
             name: "ModEditApp",

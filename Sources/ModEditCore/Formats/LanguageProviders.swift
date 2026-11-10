@@ -1,3 +1,5 @@
+import CSSLanguage
+import DOTLanguage
 import Foundation
 import GrammarLanguage
 import IncrementalParsing
@@ -34,6 +36,26 @@ struct JSONEditorLanguageProvider: EditorLanguageProvider {
 struct GrammarEditorLanguageProvider: EditorLanguageProvider {
     private let provider = GrammarProvider()
     let documentFormat: any DocumentFormat = GrammarFormat()
+
+    var descriptor: LanguageProviderDescriptor { provider.descriptor }
+    func makeToolingSession() -> any LanguageToolingSession {
+        provider.makeToolingSession()
+    }
+}
+
+struct DOTEditorLanguageProvider: EditorLanguageProvider {
+    private let provider = DOTProvider()
+    let documentFormat: any DocumentFormat = DOTFormat()
+
+    var descriptor: LanguageProviderDescriptor { provider.descriptor }
+    func makeToolingSession() -> any LanguageToolingSession {
+        provider.makeToolingSession()
+    }
+}
+
+struct CSSEditorLanguageProvider: EditorLanguageProvider {
+    private let provider = CSSProvider()
+    let documentFormat: any DocumentFormat = CSSFormat()
 
     var descriptor: LanguageProviderDescriptor { provider.descriptor }
     func makeToolingSession() -> any LanguageToolingSession {

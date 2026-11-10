@@ -19,6 +19,8 @@ struct FormatRegistry: Sendable {
                 PL0EditorLanguageProvider(),
                 JSONEditorLanguageProvider(),
                 GrammarEditorLanguageProvider(),
+                DOTEditorLanguageProvider(),
+                CSSEditorLanguageProvider(),
                 BundledFormatLanguageProvider(format: MarkdownFormat()),
                 BundledFormatLanguageProvider(format: LaTeXFormat()),
                 BundledFormatLanguageProvider(format: HTMLFormat()),

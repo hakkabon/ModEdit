@@ -50,6 +50,8 @@
                 <string>io.github.hakkabon.pl0-source</string>
                 <string>public.json</string>
                 <string>io.github.hakkabon.grammar-source</string>
+                <string>io.github.hakkabon.dot-source</string>
+                <string>public.css</string>
             </array>
         </dict>
     </array>
@@ -57,6 +59,28 @@
          earlier systems the app must declare it itself. -->
     <key>UTImportedTypeDeclarations</key>
     <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>io.github.hakkabon.dot-source</string>
+            <key>UTTypeDescription</key>
+            <string>Graphviz DOT Source</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.plain-text</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>dot</string>
+                    <string>gv</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>text/vnd.graphviz</string>
+                </array>
+            </dict>
+        </dict>
         <dict>
             <key>UTTypeIdentifier</key>
             <string>io.github.hakkabon.grammar-source</string>

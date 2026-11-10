@@ -17,4 +17,10 @@ extension UTType {
     /// BNF, EBNF, WSN, and the Grammar package's combined notation.
     static let grammarSource = UTType(
         importedAs: "io.github.hakkabon.grammar-source")
+
+    /// Graphviz DOT source.
+    static let dotSource = UTType(importedAs: "io.github.hakkabon.dot-source")
+
+    /// CSS. `UTType.css` requires a newer deployment target.
+    static let cssText = UTType(importedAs: "public.css")
 }
