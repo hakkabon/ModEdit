@@ -21,6 +21,9 @@ struct PL0EditorLanguageProvider: EditorLanguageProvider {
     func makeToolingSession() -> any LanguageToolingSession {
         provider.makeToolingSession()
     }
+    func makeToolingSession(documentURI: String) -> any LanguageToolingSession {
+        provider.makeToolingSession(documentURI: documentURI)
+    }
 }
 
 struct JSONEditorLanguageProvider: EditorLanguageProvider {

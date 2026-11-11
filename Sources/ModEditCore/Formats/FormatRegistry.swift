@@ -80,6 +80,15 @@ struct FormatRegistry: Sendable {
         providers + [fallbackProvider]
     }
 
+    /// Creates the shared multi-document host used by project windows and
+    /// future language-server transports. Language-specific cross-file policy
+    /// can be supplied independently of ModEdit's format registry.
+    func makeToolingProject(
+        resolver: (any LanguageToolingProjectResolver)? = nil
+    ) -> LanguageToolingProject {
+        LanguageToolingProject(providers: allProviders, resolver: resolver)
+    }
+
     /// Every format, fallback last. Used to populate pickers.
     var allFormats: [any DocumentFormat] {
         allProviders.map(\.documentFormat)
