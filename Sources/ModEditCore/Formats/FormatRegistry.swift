@@ -1,4 +1,5 @@
 import Foundation
+import LanguageTooling
 import ModEditBundledLanguages
 import UniformTypeIdentifiers
 
@@ -14,16 +15,30 @@ struct FormatRegistry: Sendable {
     let fallbackProvider: any EditorLanguageProvider
 
     static let standard: FormatRegistry = {
+        let json = JSONEditorLanguageProvider()
+        let grammar = GrammarEditorLanguageProvider()
+        let dot = DOTEditorLanguageProvider()
+        let css = CSSEditorLanguageProvider()
+        let embedded: [any LanguageToolingProvider] = [
+            json, grammar, dot, css,
+        ]
         let registry = FormatRegistry(
             providers: [
                 PL0EditorLanguageProvider(),
-                JSONEditorLanguageProvider(),
-                GrammarEditorLanguageProvider(),
-                DOTEditorLanguageProvider(),
-                CSSEditorLanguageProvider(),
-                BundledFormatLanguageProvider(format: MarkdownFormat()),
+                json,
+                grammar,
+                dot,
+                css,
+                EmbeddedEditorLanguageProvider(
+                    host: BundledFormatLanguageProvider(
+                        format: MarkdownFormat()),
+                    embedded: embedded,
+                    resolver: MarkdownEmbeddedRegionResolver()),
                 BundledFormatLanguageProvider(format: LaTeXFormat()),
-                BundledFormatLanguageProvider(format: HTMLFormat()),
+                EmbeddedEditorLanguageProvider(
+                    host: BundledFormatLanguageProvider(format: HTMLFormat()),
+                    embedded: [css, json],
+                    resolver: HTMLEmbeddedRegionResolver()),
             ],
             fallbackProvider: BundledFormatLanguageProvider(
                 format: PlainTextFormat()))

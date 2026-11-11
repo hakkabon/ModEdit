@@ -289,6 +289,10 @@ Permanent distribution policy lives in the parser-free
 `ModEdit-Bundled-Languages` package. ModEdit validates its standard registry
 against that catalog. JSON, Grammar notation, Graphviz DOT, and CSS are active,
 independently owned language kits consumed through the same document lifecycle.
+HTML `<style>` and JSON script bodies, plus supported Markdown fenced blocks,
+are now routed to those same providers through Language-Tooling's embedded-
+region compositor. ModEdit owns region discovery and presentation, not another
+embedded parser.
 
 ### Cross-front-end experiment conformance
 

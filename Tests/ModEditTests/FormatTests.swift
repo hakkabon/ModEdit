@@ -96,6 +96,47 @@ struct FormatRegistryTests {
             text: "<!-- one\n two -->", revision: .init(1)))
         #expect(try await multiline.semanticTokens().data.count == 10)
     }
+
+    @Test func htmlRoutesCSSAndJSONThroughEmbeddedProviders() async throws {
+        let html = try #require(registry.provider(withID: "html"))
+        let source = """
+        <style>body { color red; }</style>
+        <script type="application/json">{"name": true,}</script>
+        """
+        let result = try await html.makeSession().analyze(.init(
+            text: source, revision: .init(1)))
+
+        #expect(result.embeddedRegions.map(\.languageID) == ["css", "json"])
+        #expect(result.diagnostics.contains {
+            $0.message.contains("[css]") && $0.expected.contains(":")
+        })
+        #expect(result.diagnostics.contains {
+            $0.message.contains("[json]") && $0.message.contains("Trailing comma")
+        })
+        #expect(result.tokens.contains {
+            $0.modifiers.contains("embedded.css")
+        })
+    }
+
+    @Test func markdownFenceRetainsIncrementalChildSession() async throws {
+        let markdown = try #require(registry.provider(withID: "markdown"))
+        let session = markdown.makeSession()
+        let first = IncrementalParsing.SourceSnapshot(
+            text: "before\n```json\n{\"value\": 1}\n```\nafter",
+            revision: .init(1))
+        let initial = try await session.analyze(first)
+        #expect(initial.embeddedRegions.map(\.languageID) == ["json"])
+
+        let location = (first.text as NSString).range(of: "1").location
+        let change = try SourceEdit(
+            baseRevision: first.revision,
+            range: .init(location: location, length: 1), replacement: "2")
+            .applying(to: first)
+        let updated = try await session.analyze(change.after, change: change)
+        #expect(updated.evidence(for: "embedding")?.strategy == .incremental)
+        #expect(updated.evidence(
+            for: "embedded.markdown.json.0.lexing")?.strategy == .incremental)
+    }
 }
 
 @Suite("Highlighting")

@@ -89,6 +89,24 @@ struct BundledFormatLanguageProvider: EditorLanguageProvider {
     }
 }
 
+struct EmbeddedEditorLanguageProvider: EditorLanguageProvider {
+    let documentFormat: any DocumentFormat
+    private let provider: EmbeddedLanguageProvider
+
+    init(host: BundledFormatLanguageProvider,
+         embedded: [any LanguageToolingProvider],
+         resolver: any EmbeddedLanguageRegionResolver) {
+        documentFormat = host.documentFormat
+        provider = EmbeddedLanguageProvider(
+            host: host, embedded: embedded, resolver: resolver)
+    }
+
+    var descriptor: LanguageProviderDescriptor { provider.descriptor }
+    func makeToolingSession() -> any LanguageToolingSession {
+        provider.makeToolingSession()
+    }
+}
+
 actor BundledFormatLanguageSession: LanguageToolingSession {
     private let format: any DocumentFormat
     private let tokenizer: Tokenizer
