@@ -116,6 +116,15 @@ struct FormatRegistryTests {
         #expect(result.tokens.contains {
             $0.modifiers.contains("embedded.css")
         })
+        #expect(result.recoveryEdits.contains { edit in
+            if case .insert(let terminal, let offset) = edit.action {
+                return terminal == ":" && offset == (source as NSString).range(of: "red").location + 3
+            }
+            return false
+        })
+        #expect(result.recoveryEdits.allSatisfy {
+            $0.diagnosticID?.hasPrefix("embedded.") ?? true
+        })
     }
 
     @Test func markdownFenceRetainsIncrementalChildSession() async throws {
