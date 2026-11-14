@@ -9,6 +9,27 @@ import UniformTypeIdentifiers
 struct FormatRegistryTests {
     let registry = FormatRegistry.standard
 
+    @Test func toolingProjectUsesRealFileURIsAndRetainsUnchangedDocuments() async throws {
+        let workspace = registry.makeToolingWorkspace()
+        let program = ToolingDocumentURI("file:///program.pl0")
+        let notes = ToolingDocumentURI("file:///notes.md")
+        let source = SourceSnapshot(text: "var x; begin x := 1 end.", revision: .init(1))
+        try await workspace.submit(revision: 1, documents: [
+            .init(uri: program, languageID: "pl0", snapshot: source),
+            .init(uri: notes, languageID: "markdown",
+                  snapshot: .init(text: "# Notes", revision: .init(1))),
+        ])
+        let definition = try await workspace.definition(
+            in: program, at: .init(line: 0, character: 13))
+        #expect(definition.value?.uri == program.rawValue)
+        try await workspace.submit(revision: 2, documents: [
+            .init(uri: program, languageID: "pl0", snapshot: source),
+        ])
+        let updated = try await workspace.diagnostics()
+        #expect(updated.analysis?.reusedDocuments == [program])
+        #expect(updated.analysis?.removedDocuments == [notes])
+    }
+
     @Test func exactMatchesPickTheirOwnFormat() {
         #expect(registry.format(for: .markdownText).id == "markdown")
         #expect(registry.format(for: .latex).id == "latex")

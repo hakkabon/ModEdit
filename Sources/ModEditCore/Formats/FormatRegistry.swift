@@ -80,6 +80,12 @@ struct FormatRegistry: Sendable {
         providers + [fallbackProvider]
     }
 
+    func makeToolingWorkspace(
+        resolver: (any LanguageToolingProjectResolver)? = nil
+    ) -> LanguageToolingWorkspace {
+        LanguageToolingWorkspace(providers: allProviders, resolver: resolver)
+    }
+
     /// Creates the shared multi-document host used by project windows and
     /// future language-server transports. Language-specific cross-file policy
     /// can be supplied independently of ModEdit's format registry.
