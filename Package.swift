@@ -22,6 +22,8 @@ let package = Package(
         .package(path: "../ModEdit-Bundled-Languages"),
         .package(path: "../JSON-LanguageKit"),
         .package(path: "../Grammar-LanguageKit"),
+        .package(path: "../Grammar"),
+        .package(path: "../Railroad"),
         .package(path: "../DOT-LanguageKit"),
         .package(path: "../CSS-LanguageKit"),
     ],
@@ -37,6 +39,8 @@ let package = Package(
                     name: "ModEditBundledLanguages",
                     package: "ModEdit-Bundled-Languages"),
                 .product(name: "JSONLanguage", package: "JSON-LanguageKit"),
+                .product(name: "Grammar", package: "Grammar"),
+                .product(name: "Railroad", package: "Railroad"),
                 .product(
                     name: "GrammarLanguage",
                     package: "Grammar-LanguageKit"),

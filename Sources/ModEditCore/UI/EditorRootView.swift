@@ -22,12 +22,16 @@ struct EditorRootView: View {
                     PL0WorkbenchPane(revision: model.textRevision,
                                      edit: model.lastSourceEdit,
                                      source: { model.textSnapshot() },
-                                     publish: model.publishPL0Visualization,
                                      reveal: model.revealSourceRange,
                                      replaceSource: model.requestSourceReplacement)
                 }
             }
             EditorStatusBar(model: model, formatID: formatID)
+        }
+        .task(id: "\(model.format.id):\(model.textRevision)") {
+            guard model.format.id == "pl0" else { return }
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            await model.refreshPL0Diagnostics()
         }
     }
 
@@ -71,9 +75,6 @@ private struct EditorStatusBar: View {
                 Text("\(visualization.problemCount) problems")
                     .foregroundStyle(visualization.problemCount == 0
                                      ? Color.secondary : Color.red)
-                Text("\(visualization.recoveryCount) repairs")
-                    .foregroundStyle(visualization.recoveryCount == 0
-                                     ? Color.secondary : Color.orange)
             }
 
             Spacer(minLength: 20)

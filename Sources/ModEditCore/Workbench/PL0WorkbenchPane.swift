@@ -8,7 +8,6 @@ struct PL0WorkbenchPane: View {
     let revision: UInt64
     let edit: SourceEdit?
     let source: () -> String
-    let publish: (ParseResult) -> Void
     let reveal: (SourceRange) -> Void
     let replaceSource: (String) -> Void
 
@@ -59,7 +58,7 @@ struct PL0WorkbenchPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("PL/0")
+                Text("PL/0 Parser Inspector")
                     .font(.headline)
                 Picker("Parser", selection: $selectedEngine) {
                     ForEach(ParserEngine.allCases, id: \.self) { engine in
@@ -525,7 +524,6 @@ struct PL0WorkbenchPane: View {
         result = parsed
         semantics = analysis.semantics
         recognizers = analysis.recognizers
-        publish(parsed)
         if let grammarWorkbenchSession {
             do {
                 grammarWorkbenchStatus = try await grammarWorkbenchSession.updateDocument(

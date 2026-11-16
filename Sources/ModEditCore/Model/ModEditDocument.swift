@@ -324,11 +324,11 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate {
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         if itemIdentifier == Self.workbenchItem {
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Parsing Workbench"
-            item.paletteLabel = "Parsing Workbench"
-            item.toolTip = "Show or hide the parsing workbench"
+            item.label = "Parser Inspector"
+            item.paletteLabel = "Parser Inspector"
+            item.toolTip = "Show or hide PL/0 parser details"
             item.image = NSImage(systemSymbolName: "waveform.path.ecg.rectangle",
-                                 accessibilityDescription: "Parsing Workbench")
+                                 accessibilityDescription: "Parser Inspector")
             item.target = self
             item.action = #selector(toggleWorkbench(_:))
             item.isBordered = true

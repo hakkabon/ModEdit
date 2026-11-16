@@ -7,5 +7,5 @@ struct GrammarFormat: DocumentFormat {
     let contentTypes: [UTType] = [.grammarSource]
     let fileExtensions = ["bnf", "ebnf", "wsn", "grammar"]
     var highlightRules: [HighlightRule] { [] }
-    func makePreviewRenderer() -> (any PreviewRenderer)? { nil }
+    func makePreviewRenderer() -> (any PreviewRenderer)? { GrammarPreviewRenderer() }
 }

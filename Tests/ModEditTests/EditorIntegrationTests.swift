@@ -69,6 +69,19 @@ struct EditorIntegrationTests {
         #expect(harness.model.showWorkbench)
     }
 
+    @Test func pl0DiagnosticsUpdateWithInspectorClosed() async {
+        let harness = makeHarness(text: "var x; begin x := 1 end")
+        harness.model.setFormat(PL0Format())
+        #expect(!harness.model.showWorkbench)
+        await harness.model.refreshPL0Diagnostics()
+        #expect(harness.model.pl0Visualization?.problemCount == 1)
+
+        harness.textView.insertText(".", replacementRange: NSRange(
+            location: (harness.textView.string as NSString).length, length: 0))
+        await harness.model.refreshPL0Diagnostics()
+        #expect(harness.model.pl0Visualization?.problemCount == 0)
+    }
+
     @Test func undoFlowsBackIntoPersistedDocument() throws {
         let harness = makeHarness(text: "abc")
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),

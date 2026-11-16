@@ -24,7 +24,8 @@ final class EditorModel: ObservableObject {
     /// view so the window's toolbar can toggle it.
     @Published var showPreview = true
     /// Whether the experimental parser inspector is visible for PL/0.
-    @Published var showWorkbench = true
+    @Published var showWorkbench = false
+    private let pl0DiagnosticsSession = PL0LanguageSession()
     /// The last replacement, used by incremental language services. It is not
     /// published separately because every edit also publishes `textRevision`.
     private(set) var lastSourceEdit: SourceEdit?
@@ -150,6 +151,15 @@ final class EditorModel: ObservableObject {
     func publishPL0Visualization(_ result: ParseResult) {
         guard format.id == "pl0", result.version == textRevision else { return }
         pl0Visualization = PL0EditorVisualization(result: result)
+    }
+
+    func refreshPL0Diagnostics() async {
+        guard format.id == "pl0", !Task.isCancelled else { return }
+        let snapshot = SourceSnapshot(
+            version: textRevision, text: textSnapshot(), edit: lastSourceEdit)
+        let result = await pl0DiagnosticsSession.parse(snapshot)
+        guard !Task.isCancelled else { return }
+        publishPL0Visualization(result)
     }
 
     func revealSourceRange(_ range: SourceRange) {
