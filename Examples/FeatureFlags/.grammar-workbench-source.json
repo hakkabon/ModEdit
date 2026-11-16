@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "kind": "grammar-workbench-source-project",
+  "apiVersion": 1,
+  "name": "Feature flags",
+  "grammar": {
+    "path": "FeatureFlags.bnf",
+    "notation": "EBNF",
+    "algorithm": "LALR(1)",
+    "languageID": "feature-flags"
+  },
+  "associations": [
+    { "pattern": "Inputs/*.flags", "languageID": "feature-flags" }
+  ]
+}

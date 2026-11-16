@@ -1,0 +1,4 @@
+<file> ::= <command> | <command> <file>
+<command> ::= <action> <feature>
+<action>
+<feature> ::= "cache" | "logging"
