@@ -29,9 +29,8 @@ struct EditorRootView: View {
             EditorStatusBar(model: model, formatID: formatID)
         }
         .task(id: "\(model.format.id):\(model.textRevision)") {
-            guard model.format.id == "pl0" else { return }
             do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
-            await model.refreshPL0Diagnostics()
+            await model.refreshLanguageDiagnostics()
         }
     }
 
@@ -50,6 +49,9 @@ struct EditorRootView: View {
 private struct EditorStatusBar: View {
     @ObservedObject var model: EditorModel
     let formatID: Binding<String>
+    @State private var completions: [EditorCompletionSuggestion] = []
+    @State private var showsCompletions = false
+    @State private var showsMissingDefinition = false
 
     var body: some View {
         HStack(spacing: 14) {
@@ -72,9 +74,61 @@ private struct EditorStatusBar: View {
 
             if let visualization = model.pl0Visualization,
                visualization.version == model.textRevision {
-                Text("\(visualization.problemCount) problems")
-                    .foregroundStyle(visualization.problemCount == 0
-                                     ? Color.secondary : Color.red)
+                Menu("\(visualization.problemCount) problems") {
+                    ForEach(visualization.annotations) { annotation in
+                        let position = model.lineAndColumn(at: annotation.range.location)
+                        Button("\(position.line):\(position.column) \(annotation.message)") {
+                            model.revealSourceRange(annotation.range)
+                        }
+                    }
+                    if let analysis = model.languageAnalysis {
+                        ForEach(Array(analysis.recoveryEdits.enumerated()), id: \.offset) { _, fix in
+                            if fix.diagnosticID != nil,
+                               let replacement = model.suggestedReplacement(for: fix.action) {
+                                let position = model.lineAndColumn(at: fix.action.range.location)
+                                Button(replacement.isEmpty
+                                       ? "Delete text at \(position.line):\(position.column)"
+                                       : "Use ‘\(replacement)’ at \(position.line):\(position.column)") {
+                                    model.applySuggestedFix(fix, revision: analysis.revision.rawValue)
+                                }
+                            }
+                        }
+                    }
+                }
+                .fixedSize()
+                .disabled(visualization.problemCount == 0)
+            }
+
+            if model.supportsLanguageQueries {
+                Button("Complete") {
+                    Task {
+                        completions = await model.completionSuggestions()
+                        showsCompletions = true
+                    }
+                }
+                .keyboardShortcut(" ", modifiers: [.control])
+                .popover(isPresented: $showsCompletions) {
+                    ScrollView {
+                        VStack(alignment: .leading) {
+                            if completions.isEmpty { Text("No completions") }
+                            ForEach(completions) { suggestion in
+                                Button(suggestion.item.label) {
+                                    model.acceptCompletion(suggestion)
+                                    showsCompletions = false
+                                }
+                                .help(suggestion.item.detail)
+                            }
+                        }
+                        .padding()
+                    }
+                    .frame(maxHeight: 240)
+                }
+                Button("Go to Definition") {
+                    Task { showsMissingDefinition = !(await model.goToDefinition()) }
+                }
+                .popover(isPresented: $showsMissingDefinition) {
+                    Text("No definition at the cursor").padding()
+                }
             }
 
             Spacer(minLength: 20)

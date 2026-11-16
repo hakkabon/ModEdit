@@ -1,6 +1,8 @@
 import Combine
 import Foundation
 import PL0Language
+import IncrementalParsing
+import LanguageTooling
 
 /// Main-actor view model for one editor window.
 ///
@@ -25,10 +27,13 @@ final class EditorModel: ObservableObject {
     @Published var showPreview = true
     /// Whether the experimental parser inspector is visible for PL/0.
     @Published var showWorkbench = false
-    private let pl0DiagnosticsSession = PL0LanguageSession()
+    @Published private(set) var languageAnalysis: LanguageProviderAnalysis?
+    private var toolingDocument: LanguageToolingDocument?
+    private let toolingURI = "modedit://current-document"
+    private(set) var selection = NSRange(location: 0, length: 0)
     /// The last replacement, used by incremental language services. It is not
     /// published separately because every edit also publishes `textRevision`.
-    private(set) var lastSourceEdit: SourceEdit?
+    private(set) var lastSourceEdit: PL0Language.SourceEdit?
     private var nextRevealID: UInt64 = 0
     private var nextReplacementID: UInt64 = 0
 
@@ -91,11 +96,12 @@ final class EditorModel: ObservableObject {
         let oldRange = NSRange(location: editedRange.location, length: oldLength)
         let baseVersion = document.textGeneration
         let generation = document.replaceText(in: oldRange, with: replacement)
-        lastSourceEdit = SourceEdit(
+        lastSourceEdit = PL0Language.SourceEdit(
             baseVersion: baseVersion,
             replacedRange: SourceRange(location: oldRange.location, length: oldRange.length),
             replacementLength: (replacement as NSString).length)
         pl0Visualization = nil
+        languageAnalysis = nil
         textRevision = generation
         lineCount = document.numberOfLines
         isDocumentDirty = document.isDirty
@@ -103,7 +109,8 @@ final class EditorModel: ObservableObject {
         return generation
     }
 
-    func updateCursor(line: Int, column: Int) {
+    func updateCursor(line: Int, column: Int, selection: NSRange) {
+        self.selection = selection
         cursorLine = max(1, line)
         cursorColumn = max(1, column)
     }
@@ -118,6 +125,8 @@ final class EditorModel: ObservableObject {
     func refreshAfterExternalChange() {
         lastSourceEdit = nil
         pl0Visualization = nil
+        languageAnalysis = nil
+        toolingDocument = nil
         format = document.currentFormat
         textRevision = document.textGeneration
         lineCount = document.numberOfLines
@@ -131,7 +140,9 @@ final class EditorModel: ObservableObject {
     /// Switches the document's format (highlighting and preview).
     func setFormat(_ newFormat: any DocumentFormat) {
         format = newFormat
-        if newFormat.id != "pl0" { pl0Visualization = nil }
+        pl0Visualization = nil
+        languageAnalysis = nil
+        toolingDocument = nil
         document.setFormat(newFormat)
         onFormatChange?(newFormat)
     }
@@ -153,13 +164,136 @@ final class EditorModel: ObservableObject {
         pl0Visualization = PL0EditorVisualization(result: result)
     }
 
-    func refreshPL0Diagnostics() async {
-        guard format.id == "pl0", !Task.isCancelled else { return }
-        let snapshot = SourceSnapshot(
-            version: textRevision, text: textSnapshot(), edit: lastSourceEdit)
-        let result = await pl0DiagnosticsSession.parse(snapshot)
-        guard !Task.isCancelled else { return }
-        publishPL0Visualization(result)
+    var supportsLanguageQueries: Bool {
+        registry.provider(withID: format.id)?.descriptor.capabilities.contains(.semantics) == true
+    }
+
+    func refreshLanguageDiagnostics() async {
+        guard let provider = registry.provider(withID: format.id),
+              provider.descriptor.capabilities.contains(.diagnostics) else { return }
+        let snapshot = IncrementalParsing.SourceSnapshot(
+            text: textSnapshot(), revision: .init(textRevision))
+        let session = toolingDocument ?? LanguageToolingDocument(
+            provider: provider, documentURI: toolingURI)
+        toolingDocument = session
+        while isCurrent(session, revision: snapshot.revision.rawValue), !Task.isCancelled {
+            do {
+                let result: LanguageProviderAnalysis
+                let previous = await session.snapshot
+                if previous == snapshot, let cached = await session.analysis {
+                    result = cached
+                } else {
+                    result = try await session.update(
+                        snapshot, change: exactChange(from: previous, to: snapshot))
+                }
+                guard isCurrent(session, revision: result.revision.rawValue),
+                      !Task.isCancelled else { return }
+                languageAnalysis = result
+                pl0Visualization = PL0EditorVisualization(analysis: result)
+                return
+            } catch LanguageToolingError.documentUpdateInProgress {
+                do { try await Task.sleep(for: .milliseconds(15)) } catch { return }
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func exactChange(
+        from previous: IncrementalParsing.SourceSnapshot?,
+        to snapshot: IncrementalParsing.SourceSnapshot
+    ) -> SourceChange? {
+        guard let previous, let edit = lastSourceEdit,
+              edit.baseVersion == previous.revision.rawValue,
+              snapshot.revision.rawValue == previous.revision.rawValue + 1 else { return nil }
+        let newRange = NSRange(location: edit.replacedRange.location, length: edit.replacementLength)
+        guard let range = Range(newRange, in: snapshot.text) else { return nil }
+        let change = try? IncrementalParsing.SourceEdit(
+            baseRevision: previous.revision, range: edit.replacedRange,
+            replacement: String(snapshot.text[range])).applying(to: previous)
+        return change?.after == snapshot ? change : nil
+    }
+
+    private func isCurrent(_ session: LanguageToolingDocument, revision: UInt64) -> Bool {
+        toolingDocument === session && textRevision == revision && documentTextGeneration == revision
+    }
+
+    func goToDefinition() async -> Bool {
+        let revision = textRevision
+        let selected = selection
+        await refreshLanguageDiagnostics()
+        guard let session = toolingDocument, isCurrent(session, revision: revision),
+              selection == selected else { return false }
+        let map = SourceLineMap(textSnapshot())
+        guard let location = try? await session.definition(at: map.position(of: selected.location)),
+              location.uri == toolingURI, let range = map.sourceRange(location.range),
+              isCurrent(session, revision: revision), selection == selected else { return false }
+        revealSourceRange(range)
+        return true
+    }
+
+    func completionSuggestions() async -> [EditorCompletionSuggestion] {
+        let revision = textRevision
+        let selected = selection
+        let source = textSnapshot() as NSString
+        guard selected.location <= source.length else { return [] }
+        let prefixRange = selected.length == 0
+            ? (source.substring(to: selected.location) as NSString).range(
+                of: "[a-zA-Z_][a-zA-Z_0-9]*$", options: .regularExpression)
+            : selected
+        let replacementRange = prefixRange.location == NSNotFound ? selected : prefixRange
+        let prefix = selected.length == 0 ? source.substring(with: replacementRange) : ""
+        await refreshLanguageDiagnostics()
+        guard let session = toolingDocument, isCurrent(session, revision: revision),
+              selection == selected else { return [] }
+        let position = SourceLineMap(source as String).position(of: selected.location)
+        guard let items = try? await session.completions(at: position),
+              isCurrent(session, revision: revision), selection == selected else { return [] }
+        return items.filter { $0.label.lowercased().hasPrefix(prefix.lowercased()) }
+            .map { .init(item: $0, revision: revision, selection: selected,
+                         range: replacementRange) }
+    }
+
+    func acceptCompletion(_ suggestion: EditorCompletionSuggestion) {
+        guard selection == suggestion.selection else { return }
+        requestLanguageEdit(suggestion.item.insertText, range: suggestion.range,
+                            revision: suggestion.revision)
+    }
+
+    func suggestedReplacement(for action: LanguageProviderRecoveryAction) -> String? {
+        switch action {
+        case .insert(let terminal, _):
+            if format.id == "pl0", let spelling = [
+                "'period'": ".", "'semicolon'": ";", "'comma'": ",",
+                "'rightParen'": ")", "'assign'": ":=",
+            ][terminal] { return spelling }
+            let literal = terminal.hasPrefix("'") && terminal.hasSuffix("'")
+                ? String(terminal.dropFirst().dropLast()) : terminal
+            // Provider terminal names can describe categories, such as identifier.
+            return [".", ";", ",", ":", ")", "]", "}", ":="].contains(literal) ? literal : nil
+        case .delete: return ""
+        case .replace(_, _, let replacement): return replacement
+        case .skip: return nil
+        }
+    }
+
+    func applySuggestedFix(_ fix: LanguageProviderRecoveryEdit, revision: UInt64) {
+        guard let analysis = languageAnalysis, analysis.revision.rawValue == revision,
+              analysis.recoveryEdits.contains(fix),
+              fix.diagnosticID != nil,
+              let replacement = suggestedReplacement(for: fix.action) else { return }
+        let range = fix.action.range
+        requestLanguageEdit(replacement, range: NSRange(location: range.location, length: range.length),
+                            revision: revision)
+    }
+
+    private func requestLanguageEdit(_ text: String, range: NSRange, revision: UInt64) {
+        guard revision == textRevision, revision == documentTextGeneration,
+              Range(range, in: textSnapshot()) != nil else { return }
+        nextReplacementID &+= 1
+        sourceReplacementRequest = EditorSourceReplacementRequest(
+            id: nextReplacementID, text: text,
+            range: .init(location: range.location, length: range.length), revision: revision)
     }
 
     func revealSourceRange(_ range: SourceRange) {
@@ -175,12 +309,20 @@ final class EditorModel: ObservableObject {
         guard text != textSnapshot() else { return }
         nextReplacementID &+= 1
         sourceReplacementRequest = EditorSourceReplacementRequest(
-            id: nextReplacementID, text: text)
+            id: nextReplacementID, text: text, range: nil, revision: textRevision)
     }
 
     func acknowledgeSourceReplacement(id: UInt64) {
         if sourceReplacementRequest?.id == id { sourceReplacementRequest = nil }
     }
+}
+
+struct EditorCompletionSuggestion: Identifiable {
+    let item: ToolingCompletionItem
+    let revision: UInt64
+    let selection: NSRange
+    let range: NSRange
+    var id: String { item.id }
 }
 
 extension EditorModel: LineNumberSource {

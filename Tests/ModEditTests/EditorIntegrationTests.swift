@@ -69,17 +69,48 @@ struct EditorIntegrationTests {
         #expect(harness.model.showWorkbench)
     }
 
-    @Test func pl0DiagnosticsUpdateWithInspectorClosed() async {
+    @Test func pl0DiagnosticsUpdateWithInspectorClosed() async throws {
         let harness = makeHarness(text: "var x; begin x := 1 end")
         harness.model.setFormat(PL0Format())
         #expect(!harness.model.showWorkbench)
-        await harness.model.refreshPL0Diagnostics()
+        await harness.model.refreshLanguageDiagnostics()
         #expect(harness.model.pl0Visualization?.problemCount == 1)
 
-        harness.textView.insertText(".", replacementRange: NSRange(
-            location: (harness.textView.string as NSString).length, length: 0))
-        await harness.model.refreshPL0Diagnostics()
+        let result = try #require(harness.model.languageAnalysis)
+        let fix = try #require(result.recoveryEdits.first)
+        harness.model.applySuggestedFix(fix, revision: result.revision.rawValue)
+        harness.coordinator.fulfillSourceReplacementRequest()
+        #expect(harness.textView.string.hasSuffix("end."))
+        await harness.model.refreshLanguageDiagnostics()
         #expect(harness.model.pl0Visualization?.problemCount == 0)
+    }
+
+    @Test func jsonProblemsAndFixUseSharedEditorSession() async throws {
+        let harness = makeHarness(text: "[1,]")
+        harness.model.setFormat(JSONFormat())
+        await harness.model.refreshLanguageDiagnostics()
+        let result = try #require(harness.model.languageAnalysis)
+        #expect(!result.diagnostics.isEmpty)
+        let fix = try #require(result.recoveryEdits.first)
+        harness.model.applySuggestedFix(fix, revision: result.revision.rawValue)
+        harness.coordinator.fulfillSourceReplacementRequest()
+        #expect(harness.textView.string == "[1]")
+        await harness.model.refreshLanguageDiagnostics()
+        #expect(harness.model.languageAnalysis?.diagnostics.isEmpty == true)
+    }
+
+    @Test func pl0CompletesAndRevealsDeclaration() async throws {
+        let harness = makeHarness(text: "var answer; begin ans := 1 end.")
+        harness.model.setFormat(PL0Format())
+        harness.textView.setSelectedRange(NSRange(location: 21, length: 0))
+        let suggestions = await harness.model.completionSuggestions()
+        let answer = try #require(suggestions.first { $0.item.label == "answer" })
+        harness.model.acceptCompletion(answer)
+        harness.coordinator.fulfillSourceReplacementRequest()
+        #expect(harness.textView.string == "var answer; begin answer := 1 end.")
+        harness.textView.setSelectedRange(NSRange(location: 20, length: 0))
+        #expect(await harness.model.goToDefinition())
+        #expect(harness.model.revealRequest?.range.location == 4)
     }
 
     @Test func undoFlowsBackIntoPersistedDocument() throws {

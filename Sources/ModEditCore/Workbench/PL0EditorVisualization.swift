@@ -1,5 +1,6 @@
 import Foundation
 import PL0Language
+import IncrementalParsing
 
 /// Editor-facing projection of a parse result. Keeping this smaller than
 /// `ParseResult` avoids publishing the full CST and token stream through the
@@ -24,6 +25,21 @@ struct PL0EditorVisualization: Sendable, Equatable {
     let annotations: [Annotation]
     let problemCount: Int
     let recoveryCount: Int
+
+    init(analysis: LanguageProviderAnalysis) {
+        version = analysis.revision.rawValue
+        problemCount = analysis.diagnostics.count
+        recoveryCount = analysis.recoveryEdits.count
+        annotations = analysis.diagnostics.enumerated().map { index, diagnostic in
+            let kind: AnnotationKind = switch diagnostic.severity {
+            case .error: .error
+            case .warning: .warning
+            case .information: .information
+            }
+            return Annotation(id: "diagnostic:\(index):\(diagnostic.id)",
+                              kind: kind, range: diagnostic.range, message: diagnostic.message)
+        }
+    }
 
     init(result: ParseResult) {
         version = result.version
@@ -62,4 +78,6 @@ struct EditorRevealRequest: Equatable {
 struct EditorSourceReplacementRequest: Equatable {
     let id: UInt64
     let text: String
+    let range: SourceRange?
+    let revision: UInt64
 }

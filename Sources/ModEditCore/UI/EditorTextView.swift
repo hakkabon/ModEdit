@@ -174,7 +174,8 @@ extension EditorTextView {
             let length = textView.textStorage?.length ?? 0
             let location = min(textView.selectedRange().location, length)
             let position = model.lineAndColumn(at: location)
-            model.updateCursor(line: position.line, column: position.column)
+            model.updateCursor(line: position.line, column: position.column,
+                               selection: textView.selectedRange())
             (textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?
                 .updateCurrentLine(position.line)
         }
@@ -288,7 +289,17 @@ extension EditorTextView {
                   request.id != handledReplacementID,
                   let textView else { return }
             handledReplacementID = request.id
-            let range = NSRange(location: 0, length: textView.textStorage?.length ?? 0)
+            guard request.revision == model.documentTextGeneration else {
+                model.acknowledgeSourceReplacement(id: request.id)
+                return
+            }
+            let length = textView.textStorage?.length ?? 0
+            let range = request.range.map { NSRange(location: $0.location, length: $0.length) }
+                ?? NSRange(location: 0, length: length)
+            guard NSMaxRange(range) <= length else {
+                model.acknowledgeSourceReplacement(id: request.id)
+                return
+            }
             textView.window?.makeFirstResponder(textView)
             textView.insertText(request.text, replacementRange: range)
             model.acknowledgeSourceReplacement(id: request.id)
