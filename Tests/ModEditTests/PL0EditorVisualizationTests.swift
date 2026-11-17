@@ -72,6 +72,7 @@ struct PL0EditorVisualizationTests {
 
         harness.textView.textStorage?.replaceCharacters(
             in: NSRange(location: 0, length: 0), with: " ")
+        harness.coordinator.refreshParserVisualization()
         #expect(harness.textView.layoutManager?.temporaryAttribute(
             .strikethroughStyle,
             atCharacterIndex: skipped.action.range.location + 1,
@@ -93,6 +94,30 @@ struct PL0EditorVisualizationTests {
         #expect(harness.textView.selectedRange().location
                 == (harness.textView.string as NSString).length)
         #expect(harness.textView.selectedRange().length == 0)
+    }
+
+    @Test func backspaceWithVisibleDiagnosticSurvivesTextKitRedraw() async throws {
+        let source = "var x; begin x := 1 end"
+        let harness = makeHarness(text: source)
+        harness.textView.frame = NSRect(x: 0, y: 0, width: 400, height: 160)
+        await harness.model.refreshLanguageDiagnostics()
+        harness.coordinator.refreshParserVisualization()
+        let end = (source as NSString).length
+        #expect(harness.textView.layoutManager?.temporaryAttribute(
+            .underlineStyle, atCharacterIndex: end - 1, effectiveRange: nil) != nil)
+
+        harness.textView.setSelectedRange(NSRange(location: end, length: 0))
+        harness.textView.deleteBackward(nil)
+        #expect(harness.textView.string == String(source.dropLast()))
+        #expect(harness.document.content.text == harness.textView.string)
+
+        let bounds = harness.textView.bounds
+        let bitmap = try #require(harness.textView.bitmapImageRepForCachingDisplay(in: bounds))
+        harness.textView.cacheDisplay(in: bounds, to: bitmap)
+        await harness.model.refreshLanguageDiagnostics()
+        harness.coordinator.refreshParserVisualization()
+        harness.textView.cacheDisplay(in: bounds, to: bitmap)
+        #expect(harness.model.pl0Visualization?.version == harness.model.textRevision)
     }
 
     @Test func formatterReplacementFlowsThroughTheLiveTextViewOnce() throws {

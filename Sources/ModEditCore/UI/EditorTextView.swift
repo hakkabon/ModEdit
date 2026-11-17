@@ -102,6 +102,7 @@ extension EditorTextView {
         private var fullPassTask: Task<Void, Never>?
         private var synchronizedGeneration: UInt64 = 0
         private var isSynchronizing = false
+        private var isProcessingCharacterEdit = false
         private var displayedVisualization: PL0EditorVisualization?
         private var handledRevealID: UInt64 = 0
         private var handledReplacementID: UInt64 = 0
@@ -131,11 +132,11 @@ extension EditorTextView {
             guard let textView else { return }
             let generation = model.documentTextGeneration
             guard generation != synchronizedGeneration else { return }
+            clearParserVisualization()
             isSynchronizing = true
             textView.string = model.textSnapshot()
             synchronizedGeneration = generation
             isSynchronizing = false
-            clearParserVisualization()
             dirty = DirtyRange()
             // The whole text was replaced; every cached scanner state refers to
             // text that no longer exists.
@@ -161,6 +162,14 @@ extension EditorTextView {
         }
 
         // MARK: NSTextViewDelegate
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
+                      replacementString: String?) -> Bool {
+            if replacementString != nil {
+                clearParserVisualization()
+            }
+            return true
+        }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             // The external-sync path refreshes the cursor after its view update.
@@ -188,6 +197,8 @@ extension EditorTextView {
             // Highlighting only changes attributes; ignoring those edits
             // prevents a feedback loop.
             guard editedMask.contains(.editedCharacters) else { return }
+            isProcessingCharacterEdit = true
+            defer { isProcessingCharacterEdit = false }
             if !isSynchronizing {
                 // Read only the replacement; do not materialize the whole file.
                 let replacement = (textStorage.mutableString as NSString)
@@ -195,7 +206,11 @@ extension EditorTextView {
                 synchronizedGeneration = model.applyTextEdit(
                     editedRange: editedRange, delta: delta, replacement: replacement)
             }
-            clearParserVisualization()
+            // Direct storage edits bypass shouldChangeTextIn. Wait until
+            // TextKit has processed the edit before touching layout attributes.
+            if displayedVisualization != nil {
+                Task { @MainActor [weak self] in self?.refreshParserVisualization() }
+            }
             dirty.record(edited: editedRange, delta: delta)
             // A character change can invalidate the Markdown/HTML scanner state
             // for the edit point and everything after it.
@@ -249,6 +264,7 @@ extension EditorTextView {
         /// text storage, so syntax highlighting, undo and file output remain
         /// unchanged.
         func refreshParserVisualization() {
+            guard !isProcessingCharacterEdit else { return }
             let visualization = model.pl0Visualization
             guard visualization != displayedVisualization else { return }
             clearParserVisualization()
@@ -306,6 +322,7 @@ extension EditorTextView {
         }
 
         private func clearParserVisualization() {
+            guard displayedVisualization != nil else { return }
             guard let textView, let layoutManager = textView.layoutManager else {
                 displayedVisualization = nil
                 return
@@ -320,8 +337,9 @@ extension EditorTextView {
                 let next = max(cursor + 1, NSMaxRange(effectiveRange))
                 if marker != nil {
                     for key in Self.parserAttributeKeys {
-                        layoutManager.removeTemporaryAttribute(
-                            key, forCharacterRange: effectiveRange)
+                        let validRange = NSIntersectionRange(
+                            effectiveRange, NSRange(location: 0, length: length))
+                        layoutManager.removeTemporaryAttribute(key, forCharacterRange: validRange)
                     }
                 }
                 cursor = next
