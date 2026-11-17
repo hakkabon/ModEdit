@@ -164,6 +164,8 @@ private final class ModEditApplicationDelegate: NSObject, NSApplicationDelegate 
         menu.addItem(menuItem("Delete", action: #selector(NSText.delete(_:))))
         menu.addItem(menuItem("Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
         menu.addItem(.separator())
+        menu.addItem(menuItem("Format Document", action: #selector(ModEditWindowController.formatDocument(_:))))
+        menu.addItem(.separator())
 
         let findItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
         let findMenu = NSMenu(title: "Find")

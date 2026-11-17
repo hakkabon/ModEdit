@@ -31,6 +31,7 @@ final class EditorModel: ObservableObject {
     @Published private(set) var buildResult: EditorBuildResult?
     @Published private(set) var isBuilding = false
     private var buildID: UUID?
+    private var isFormattingDocument = false
     @Published private(set) var languageAnalysis: LanguageProviderAnalysis?
     private var toolingDocument: LanguageToolingDocument?
     private let toolingURI = "modedit://current-document"
@@ -177,6 +178,29 @@ final class EditorModel: ObservableObject {
 
     var supportsProblems: Bool {
         registry.provider(withID: format.id)?.descriptor.capabilities.contains(.diagnostics) == true
+    }
+
+    var canFormatDocument: Bool {
+        !isFormattingDocument
+            && registry.provider(withID: format.id)?.descriptor.capabilities.contains(.formatting) == true
+    }
+
+    func formatDocument() async throws {
+        guard canFormatDocument, let provider = registry.provider(withID: format.id) else { return }
+        let snapshot = IncrementalParsing.SourceSnapshot(
+            text: textSnapshot(), revision: .init(documentTextGeneration))
+        isFormattingDocument = true
+        defer { isFormattingDocument = false }
+        let result: Result<String, any Error>
+        do {
+            result = .success(try await provider.makeToolingSession().format(snapshot))
+        } catch {
+            result = .failure(error)
+        }
+        guard format.id == provider.descriptor.id,
+              snapshot.revision.rawValue == textRevision,
+              snapshot.revision.rawValue == documentTextGeneration else { return }
+        requestSourceReplacement(try result.get())
     }
 
     var problemCount: Int {

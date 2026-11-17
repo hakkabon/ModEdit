@@ -8,7 +8,6 @@ struct PL0WorkbenchPane: View {
     let edit: SourceEdit?
     let source: () -> String
     let reveal: (SourceRange) -> Void
-    let replaceSource: (String) -> Void
 
     @State private var result: ParseResult?
     @State private var semantics: PL0SemanticModel?
@@ -29,7 +28,7 @@ struct PL0WorkbenchPane: View {
         case comparison = "Compare"
         case trace = "Trace"
         case grammarWorkbench = "Grammar WB"
-        case runtime = "Run"
+        case runtime = "Output"
         var id: Self { self }
     }
 
@@ -37,11 +36,6 @@ struct PL0WorkbenchPane: View {
         case idle
         case running
         case success(PL0Program, PL0ExecutionResult)
-        case failure(String)
-    }
-
-    private enum FormatOutcome: Sendable {
-        case success(String)
         case failure(String)
     }
 
@@ -66,8 +60,6 @@ struct PL0WorkbenchPane: View {
                 .pickerStyle(.menu)
                 .fixedSize()
                 Spacer()
-                Button("Format", action: formatDocument)
-                    .controlSize(.small)
                 Button("Run", action: runProgram)
                     .controlSize(.small)
                     .disabled(isRunning)
@@ -287,7 +279,7 @@ struct PL0WorkbenchPane: View {
         HStack {
             Text("Ecosystem engines").font(.headline)
             Spacer()
-            Button("Run actual engines", action: runEcosystemComparison)
+            Button("Compare Engines", action: runEcosystemComparison)
                 .controlSize(.small)
                 .disabled(isComparingEcosystem)
         }
@@ -559,26 +551,6 @@ struct PL0WorkbenchPane: View {
 
     private var isRunning: Bool {
         if case .running = runtime { true } else { false }
-    }
-
-    private func formatDocument() {
-        let requestedRevision = revision
-        let snapshot = SourceSnapshot(version: requestedRevision, text: source())
-        Task {
-            let outcome: FormatOutcome
-            do {
-                outcome = .success(try await adapter.format(snapshot))
-            } catch {
-                outcome = .failure(String(describing: error))
-            }
-            guard requestedRevision == revision else { return }
-            switch outcome {
-            case let .success(formatted): replaceSource(formatted)
-            case let .failure(message):
-                runtime = .failure("Format failed: \(message)")
-                selectedView = .runtime
-            }
-        }
     }
 
     private func runProgram() {

@@ -269,7 +269,7 @@ private final class PendingWrite: @unchecked Sendable {
 /// SwiftUI still draws the contents, but the window, toolbar and document are
 /// AppKit's so that `NSDocument` can manage the edited state and saving.
 @MainActor
-final class ModEditWindowController: NSWindowController, NSToolbarDelegate {
+final class ModEditWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation {
     private static let previewItem = NSToolbarItem.Identifier("ModEdit.TogglePreview")
     private static let workbenchItem = NSToolbarItem.Identifier("ModEdit.ToggleWorkbench")
 
@@ -298,6 +298,20 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    @objc func formatDocument(_ sender: Any?) {
+        Task {
+            do {
+                try await model.formatDocument()
+            } catch {
+                presentError(error)
+            }
+        }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action != #selector(formatDocument(_:)) || model.canFormatDocument
+    }
 
     @objc private func togglePreview(_ sender: Any?) {
         model.showPreview.toggle()

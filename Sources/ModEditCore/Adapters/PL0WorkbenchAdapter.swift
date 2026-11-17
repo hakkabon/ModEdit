@@ -60,10 +60,6 @@ actor PL0WorkbenchAdapter {
         try await session.compare(snapshot)
     }
 
-    func format(_ snapshot: SourceSnapshot) async throws -> String {
-        try await session.format(snapshot)
-    }
-
     func compileAndRun(_ snapshot: SourceSnapshot) async throws -> PL0WorkbenchExecution {
         let program = try await session.compile(snapshot)
         let result = try PL0VirtualMachine().run(program)

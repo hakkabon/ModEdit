@@ -29,8 +29,7 @@ struct EditorRootView: View {
                     PL0WorkbenchPane(revision: model.textRevision,
                                      edit: model.lastSourceEdit,
                                      source: { model.textSnapshot() },
-                                     reveal: model.revealSourceRange,
-                                     replaceSource: model.requestSourceReplacement)
+                                     reveal: model.revealSourceRange)
                 }
             }
             EditorStatusBar(model: model, formatID: formatID)

@@ -463,7 +463,7 @@ revisioned UTF-16 edits. **Reload Now** is available for an explicit refresh.
 
 ### Actual ecosystem parser engines
 
-Open the **Compare** tab and choose **Run actual engines**. Each row reports
+Open the **Compare** tab and choose **Compare Engines**. Each row reports
 acceptance, derivation count, available forest-node count, ambiguity and
 production-identity evidence. The run is revision-bound: editing the document
 clears it, and a late result for an older revision is discarded.
@@ -495,9 +495,10 @@ or an inspector token reveals and selects its UTF-16 range in the editor.
 Every visualization is tagged with its document version; edits remove the old
 markers immediately and late parser results are rejected.
 
-**Format** rewrites the document through the live text view, so the operation is
-an ordinary dirty, undoable editor change. **Run** compiles and executes on a
-detached task. The Run tab reports global values, instruction count, maximum
+**Edit → Format Document** is available when the current language provider
+supports formatting. It replaces the source through the live text view, so
+the edit is undoable. **Run** compiles and executes on a detached task.
+The **Output** tab reports global values, instruction count, maximum
 operand-stack depth and a source-linked bytecode listing. Syntax/semantic
 failures, division by zero, integer overflow and the instruction safety limit
 are displayed as controlled failures rather than crashing or blocking the UI.
@@ -600,7 +601,7 @@ the directly linked Grammar/Parser ecosystem consume that prepared value
 without independently reconstructing the input.
 
 `PL0LanguageSession` retains the prepared value produced by incremental editor
-analysis. The **Run actual engines** action reuses it when the source revision
+analysis. The **Compare Engines** action reuses it when the source revision
 matches, ensuring that the comparison sees the same token identities shown in
 the workbench. Formatter, compiler, and LSP adapters also accept an injected
 front end so a compiled or hot-reloaded language kit can be used consistently.

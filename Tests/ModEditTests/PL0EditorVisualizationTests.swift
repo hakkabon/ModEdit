@@ -120,7 +120,7 @@ struct PL0EditorVisualizationTests {
         #expect(harness.model.pl0Visualization?.version == harness.model.textRevision)
     }
 
-    @Test func formatterReplacementFlowsThroughTheLiveTextViewOnce() throws {
+    @Test func formatterReplacementFlowsThroughTheLiveTextViewOnce() async throws {
         let source = "var x;begin x:=1 end."
         let harness = makeHarness(text: source)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
@@ -129,7 +129,8 @@ struct PL0EditorVisualizationTests {
         window.makeFirstResponder(harness.textView)
         let formatted = try PL0Formatter().format(source)
 
-        harness.model.requestSourceReplacement(formatted)
+        #expect(harness.model.canFormatDocument)
+        try await harness.model.formatDocument()
         harness.coordinator.modelDidChange()
         let generation = harness.model.textRevision
 
@@ -146,6 +147,10 @@ struct PL0EditorVisualizationTests {
         undoManager.undo()
         #expect(harness.textView.string == source)
         #expect(harness.document.content.text == source)
+        harness.model.setFormat(PlainTextFormat())
+        #expect(!harness.model.canFormatDocument)
+        try await harness.model.formatDocument()
+        #expect(harness.model.sourceReplacementRequest == nil)
     }
 
     private func makeHarness(text: String) -> Harness {
