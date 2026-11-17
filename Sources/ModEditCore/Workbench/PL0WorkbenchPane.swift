@@ -1,8 +1,7 @@
 import PL0Language
 import SwiftUI
 
-/// Exposes the reference parser rather than hiding it behind highlighting:
-/// diagnostics, recovery choices, token stream, CST and timing are all visible.
+/// Inspects parser tokens, tree structure, engine behavior and timing.
 @MainActor
 struct PL0WorkbenchPane: View {
     let revision: UInt64
@@ -14,7 +13,7 @@ struct PL0WorkbenchPane: View {
     @State private var result: ParseResult?
     @State private var semantics: PL0SemanticModel?
     @State private var recognizers: [PL0RecognitionSummary] = []
-    @State private var selectedView = WorkbenchView.diagnostics
+    @State private var selectedView = WorkbenchView.tokens
     @State private var selectedEngine = ParserEngine.referenceLL
     @State private var adapter = PL0WorkbenchAdapter()
     @State private var runtime = RuntimeState.idle
@@ -24,8 +23,6 @@ struct PL0WorkbenchPane: View {
     @State private var ecosystemComparison = EcosystemComparisonState.idle
 
     private enum WorkbenchView: String, CaseIterable, Identifiable {
-        case diagnostics = "Problems"
-        case recovery = "Recovery"
         case tokens = "Tokens"
         case syntaxTree = "CST"
         case semantics = "Semantics"
@@ -128,38 +125,6 @@ struct PL0WorkbenchPane: View {
     @ViewBuilder
     private func content(for result: ParseResult) -> some View {
         switch selectedView {
-        case .diagnostics:
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    let problems = result.diagnostics + (semantics?.diagnostics ?? [])
-                    if problems.isEmpty {
-                        Label("No syntax or semantic problems",
-                              systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    }
-                    ForEach(problems) { diagnostic in
-                        Button { reveal(diagnostic.range) } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Label(diagnostic.message,
-                                      systemImage: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.red)
-                                Text("UTF-16 range \(diagnostic.range.location)..<\(diagnostic.range.end)")
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                if !diagnostic.expected.isEmpty {
-                                    Text("expected: \(diagnostic.expected.map(\.displayName).joined(separator: ", "))")
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
         case .tokens:
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
@@ -170,39 +135,6 @@ struct PL0WorkbenchPane: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        case .recovery:
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    if result.recovery.isClean {
-                        Label("No parser recovery", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    } else {
-                        Text("Cost \(result.recovery.totalCost) · \(result.recovery.insertionCount) inserted · \(result.recovery.deletionCount) skipped")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        ForEach(result.recovery.events) { event in
-                            Button { reveal(event.action.range) } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("\(event.sequence + 1). \(event.action.summary)")
-                                        .font(.caption.monospaced())
-                                    if !event.expected.isEmpty {
-                                        Text("expected: \(event.expected.map(\.displayName).joined(separator: ", "))")
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Text("cost \(event.cost) · \(event.diagnosticIDs.count) linked problem(s)")
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .buttonStyle(.plain)
-                        }
                     }
                 }
                 .padding(10)

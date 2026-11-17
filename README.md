@@ -71,7 +71,7 @@ the right shows it as headings, emphasis, symbols and mathematics.
 * Experimental **PL/0 language workbench**: native `.pl0` documents, incremental
   UTF-16 tokenization and reference LL parsing with identity reuse, robust error
   recovery, a parser-neutral CST with source/missing/skipped terminals,
-  Problems/Recovery/Tokens/CST views, reuse metrics and source-editor
+  Tokens and CST views, reuse metrics and source-editor
   visualization of diagnostics and repairs. A deterministic formatter and
   bounded bytecode VM turn the workbench into a small executable PL/0 IDE.
 
@@ -213,7 +213,7 @@ ModEditCore (library)
 │               ModEditDocument (NSDocument: read/write/save completion)    │
 │               ModEditWindowController (window, toolbar, SwiftUI hosting) │
 │ UI            EditorRootView ─ EditorTextView (NSTextView) ─ PreviewPane │
-│                       └ PL0WorkbenchPane (Problems/CST/Compare/Trace/Run) │
+│                       └ PL0WorkbenchPane (Tokens/CST/Compare/Trace/Run)   │
 │                         └ PL0WorkbenchAdapter (snapshot/result boundary)  │
 │                 status bar       └ LineNumberRulerView       (WKWebView) │
 │                    │                  │  ▲ edits           (WKWebView)    │
@@ -432,8 +432,7 @@ and can run the ten directly linked ecosystem engines without external setup.
 It deliberately reports disagreements rather than coercing them
 into the reference result. The **Trace** tab exposes LR shift/reduce/state-stack
 events or Earley predict/scan/complete/chart events, including incremental
-reuse. The Problems tab shows diagnostics; Recovery shows the ordered repair trace and
-cost; Tokens shows lexer locations and classifications; CST shows grammatical
+reuse. Tokens shows lexer locations and classifications. CST shows grammatical
 nesting followed by the recovered terminal stream; Semantics shows lexical
 scopes, declarations, levels and slots. The header reports snapshot
 version, token count, scanned UTF-16 length, lexer reuse, parser node/token reuse
@@ -490,8 +489,9 @@ The source editor projects the current result directly onto the text: errors and
 warnings are underlined, missing tokens receive an orange insertion marker, and
 skipped tokens are tinted and struck through. These are TextKit temporary
 attributes, not document attributes, so they never affect undo, syntax colours
-or saved bytes. Clicking a Problem, Recovery event or Token reveals and selects
-its UTF-16 range in the editor. The status bar reports problem and repair counts.
+or saved bytes. Click the problem count in the status bar to open the Problems
+pane below the editor for diagnostics and suggested fixes. Clicking a problem
+or an inspector token reveals and selects its UTF-16 range in the editor.
 Every visualization is tagged with its document version; edits remove the old
 markers immediately and late parser results are rejected.
 
