@@ -1,5 +1,5 @@
 {
-  "originHash" : "3d97122abd0808d8d4b7ef564eb052d095554b8b5f39f56aa1e7198dbb754ca8",
+  "originHash" : "bce561226ab20bf54f85e7eeb1086dd9aefe6e14f004d80f63844e0823bc0cdf",
   "pins" : [
     {
       "identity" : "grammardiagram",
@@ -44,6 +44,15 @@
       "state" : {
         "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
         "version" : "1.8.2"
+      }
+    },
+    {
+      "identity" : "swift-layout",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Swift-Layout.git",
+      "state" : {
+        "revision" : "1c282a3aafb03cb019a9966a42cfa568365f90a1",
+        "version" : "0.0.3"
       }
     },
     {

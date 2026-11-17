@@ -294,6 +294,20 @@ are now routed to those same providers through Language-Tooling's embedded-
 region compositor. ModEdit owns region discovery and presentation, not another
 embedded parser.
 
+### Live DOT preview
+
+Open a `.dot` or `.gv` file and use the Preview toolbar button to show or hide
+the graph. Click a node to reveal its declaration or first reference in the
+source. While an edit leaves the graph incomplete, the last drawable graph
+stays visible and Problems shows diagnostics for the current text.
+
+The preview uses Swift-Layout for flat directed and undirected graphs with
+standalone nodes, chained edges, loops, and plain-text node and edge labels.
+It recognizes `rankdir=LR` and uses a top-to-bottom layout by default. Other
+styling attributes do not affect the preview. Clusters, subgraphs, ports,
+HTML-like IDs and labels, and concatenated strings are outside the preview
+subset. The preview accepts up to 65,536 UTF-16 units, 200 nodes, and 400 edges.
+
 ### Cross-front-end experiment conformance
 
 `scripts/verify-cross-frontend-experiments.sh` runs the same accepted and
