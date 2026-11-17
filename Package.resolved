@@ -1,6 +1,78 @@
 {
-  "originHash" : "3d97122abd0808d8d4b7ef564eb052d095554b8b5f39f56aa1e7198dbb754ca8",
+  "originHash" : "77c85a0628656caec6e46b77b53aa0e70c89b38832146b66fba64ebcca6b5387",
   "pins" : [
+    {
+      "identity" : "compiler",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Compiler.git",
+      "state" : {
+        "revision" : "e53cbd13d68861bf241eaf1e78fba520e1c543d8",
+        "version" : "0.10.1"
+      }
+    },
+    {
+      "identity" : "css-languagekit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/CSS-LanguageKit.git",
+      "state" : {
+        "revision" : "5abc0e101c42ef02ea82f06985e61bbe7a5c56ff",
+        "version" : "0.2.1"
+      }
+    },
+    {
+      "identity" : "cyk-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/CYK-Parser.git",
+      "state" : {
+        "revision" : "2b7280642e2019d943a3ccad72eae76e817da3ec",
+        "version" : "0.3.1"
+      }
+    },
+    {
+      "identity" : "dot-languagekit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/DOT-LanguageKit.git",
+      "state" : {
+        "revision" : "ab09ea805b8f89a8008ae7a6ddefe425c4be16b0",
+        "version" : "0.2.1"
+      }
+    },
+    {
+      "identity" : "earley-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Earley-Parser.git",
+      "state" : {
+        "revision" : "08ae2adf013a89f7e042973819e53a00c79cc3e0",
+        "version" : "0.10.1"
+      }
+    },
+    {
+      "identity" : "earley-tableparser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Earley-TableParser.git",
+      "state" : {
+        "revision" : "9df0cc6e80e908c39826db2b871be40c654cb9fb",
+        "version" : "0.3.1"
+      }
+    },
+    {
+      "identity" : "grammar",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Grammar.git",
+      "state" : {
+        "revision" : "f1a463faaa9d7ab23524a1168d20de460a36714d",
+        "version" : "0.9.1"
+      }
+    },
+    {
+      "identity" : "grammar-languagekit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Grammar-LanguageKit.git",
+      "state" : {
+        "revision" : "8b1e3da2c3f9d1fdf7b897cc5b76c5d734baa72f",
+        "version" : "0.2.1"
+      }
+    },
     {
       "identity" : "grammardiagram",
       "kind" : "remoteSourceControl",
@@ -11,12 +83,129 @@
       }
     },
     {
+      "identity" : "grammartokenizer",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/GrammarTokenizer.git",
+      "state" : {
+        "revision" : "71a0bf3fa9f2bfe3399ba10ffd2b33eb4826c989",
+        "version" : "0.1.0"
+      }
+    },
+    {
       "identity" : "graphviz",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/SwiftDocOrg/GraphViz",
       "state" : {
         "revision" : "74b6cbd8c5ecea9f64d84c4e1c88d65604dd033f",
         "version" : "0.4.1"
+      }
+    },
+    {
+      "identity" : "incremental-parsing",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Incremental-Parsing.git",
+      "state" : {
+        "revision" : "d4995a0efaa386b7e678118d4ab747aaf089b2d0",
+        "version" : "0.33.0"
+      }
+    },
+    {
+      "identity" : "json-languagekit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/JSON-LanguageKit.git",
+      "state" : {
+        "revision" : "5cd2ea76673d3b0aa1f29a1dbcd3b1bf6a5a35f3",
+        "version" : "0.2.1"
+      }
+    },
+    {
+      "identity" : "language-tooling",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Language-Tooling.git",
+      "state" : {
+        "revision" : "cbe4da54173bb937831c47cbcc85442c509aee9a",
+        "version" : "0.10.1"
+      }
+    },
+    {
+      "identity" : "lexer",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Lexer.git",
+      "state" : {
+        "revision" : "81ecdee11a9ad5d62653d6e03c4817fa3c3bb38f",
+        "version" : "0.9.1"
+      }
+    },
+    {
+      "identity" : "lexer-fsa",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Lexer-FSA.git",
+      "state" : {
+        "revision" : "777ea30c2f1d5f929e94971c2176b45c2ce8fae5",
+        "version" : "0.2.0"
+      }
+    },
+    {
+      "identity" : "ll-parsing",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/LL-Parsing.git",
+      "state" : {
+        "revision" : "ccd4128b95e943f3abe8497114616ebacaad8f5f",
+        "version" : "0.5.1"
+      }
+    },
+    {
+      "identity" : "lr-parsing",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/LR-Parsing.git",
+      "state" : {
+        "revision" : "0dfc464931e11edf36b2e5c3840d0f7bd7dea779",
+        "version" : "0.8.1"
+      }
+    },
+    {
+      "identity" : "modedit-bundled-languages",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/ModEdit-Bundled-Languages.git",
+      "state" : {
+        "revision" : "18458ebc53fc0f7bc5fcc38a3495732b1ca1cd57",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Parser.git",
+      "state" : {
+        "revision" : "852eeed7218b8547374da02f1edc29070508bf4d",
+        "version" : "0.12.1"
+      }
+    },
+    {
+      "identity" : "pl0-languagekit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/PL0-LanguageKit.git",
+      "state" : {
+        "revision" : "9aaccb7e17b213d523d05ab7ba62430b02d0ed22",
+        "version" : "0.16.2"
+      }
+    },
+    {
+      "identity" : "railroad",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Railroad.git",
+      "state" : {
+        "revision" : "6e0ce6837df5a0389e558f23b81713722de58999",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "rnglr-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/RNGLR-Parser.git",
+      "state" : {
+        "revision" : "99ca565448a9b3b36a4f047f32d5f09392aa3280",
+        "version" : "0.10.1"
       }
     },
     {
