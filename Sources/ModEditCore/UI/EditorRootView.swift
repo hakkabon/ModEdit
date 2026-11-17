@@ -28,7 +28,9 @@ struct EditorRootView: View {
                 if model.showWorkbench, model.format.id == "pl0" {
                     PL0WorkbenchPane(revision: model.textRevision,
                                      edit: model.lastSourceEdit,
+                                     sourceSelection: model.selection,
                                      source: { model.textSnapshot() },
+                                     lineAndColumn: model.lineAndColumn(at:),
                                      reveal: model.revealSourceRange)
                 }
             }

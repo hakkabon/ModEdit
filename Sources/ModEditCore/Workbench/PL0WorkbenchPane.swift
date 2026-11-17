@@ -6,10 +6,14 @@ import SwiftUI
 struct PL0WorkbenchPane: View {
     let revision: UInt64
     let edit: SourceEdit?
+    let sourceSelection: NSRange
     let source: () -> String
+    let lineAndColumn: (Int) -> (line: Int, column: Int)
     let reveal: (SourceRange) -> Void
 
     @State private var result: ParseResult?
+    @State private var sourceLinks: PL0InspectorSourceLinks?
+    @State private var selectedLink: PL0InspectorSourceLinks.Row?
     @State private var semantics: PL0SemanticModel?
     @State private var recognizers: [PL0RecognitionSummary] = []
     @State private var selectedView = WorkbenchView.tokens
@@ -84,7 +88,7 @@ struct PL0WorkbenchPane: View {
             .padding(.bottom, 8)
 
             Divider()
-            if let result { content(for: result) }
+            if let result, result.version == revision { content(for: result) }
             else {
                 ProgressView("Parsing…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -96,6 +100,7 @@ struct PL0WorkbenchPane: View {
         }
         .onChange(of: selectedEngine) { engine in
             result = nil
+            selectedLink = nil
             semantics = nil
             runtime = .idle
             ecosystemComparison = .idle
@@ -106,6 +111,13 @@ struct PL0WorkbenchPane: View {
             runtime = .idle
             ecosystemComparison = .idle
             semantics = nil
+            selectedLink = nil
+        }
+        .onChange(of: sourceSelection) { selection in
+            if let link = selectedLink,
+               selection != NSRange(location: link.range.location, length: link.range.length) {
+                selectedLink = nil
+            }
         }
         .task { await watchGrammarWorkbench() }
         .onDisappear {
@@ -118,28 +130,9 @@ struct PL0WorkbenchPane: View {
     private func content(for result: ParseResult) -> some View {
         switch selectedView {
         case .tokens:
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(result.tokens) { token in
-                        Button { reveal(token.range) } label: {
-                            Text("\(token.location.line):\(token.location.column)  \(token.kind.rawValue)  \(quoted(token.lexeme))")
-                                .font(.caption.monospaced())
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            sourceLinkList(showsTree: false)
         case .syntaxTree:
-            ScrollView([.horizontal, .vertical]) {
-                Text(result.syntaxTree.outline())
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            sourceLinkList(showsTree: true)
         case .semantics:
             semanticContent
         case .comparison:
@@ -151,6 +144,65 @@ struct PL0WorkbenchPane: View {
         case .runtime:
             runtimeContent
         }
+    }
+
+    @ViewBuilder
+    private func sourceLinkList(showsTree: Bool) -> some View {
+        if let links = sourceLinks {
+            let highlight = links.highlight(selection: sourceSelection, explicit: selectedLink)
+            let anchor = showsTree ? highlight.syntaxAnchor : highlight.tokenAnchor
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 3) {
+                        if showsTree {
+                            ForEach(links.nodes) { link in
+                                sourceLinkRow(link, highlighted: highlight.syntaxIDs.contains(link.id))
+                            }
+                            Text("Terminals").font(.caption.bold()).padding(.top, 8)
+                            ForEach(links.terminals) { link in
+                                sourceLinkRow(link, highlighted: highlight.syntaxIDs.contains(link.id))
+                            }
+                        } else {
+                            ForEach(links.tokens) { link in
+                                sourceLinkRow(link, highlighted: highlight.tokenIDs.contains(link.id))
+                            }
+                        }
+                    }
+                    .padding(10)
+                }
+                .task(id: anchor) {
+                    if let anchor { proxy.scrollTo(anchor) }
+                }
+            }
+            .id(showsTree)
+        }
+    }
+
+    private func sourceLinkRow(_ link: PL0InspectorSourceLinks.Row, highlighted: Bool) -> some View {
+        let position = lineAndColumn(link.range.location)
+        return Button {
+            selectedLink = link
+            reveal(link.range)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(position.line):\(position.column)")
+                    .underline()
+                    .foregroundStyle(Color.accentColor)
+                Text(link.label)
+                    .padding(.leading, CGFloat(min(link.depth, 16)) * 8)
+                Spacer(minLength: 0)
+            }
+            .font(.caption.monospaced())
+            .padding(.vertical, 3)
+            .padding(.horizontal, 5)
+            .contentShape(Rectangle())
+            .background(highlighted ? Color.accentColor.opacity(0.16) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .help("Reveal source at line \(position.line), column \(position.column)")
+        .accessibilityAddTraits(highlighted ? .isSelected : [])
+        .id(link.id)
     }
 
     @ViewBuilder
@@ -445,6 +497,8 @@ struct PL0WorkbenchPane: View {
         let analysis = await adapter.analyze(snapshot)
         let parsed = analysis.parse
         guard !Task.isCancelled, parsed.version == revision else { return }
+        sourceLinks = PL0InspectorSourceLinks(parsed)
+        selectedLink = nil
         result = parsed
         semantics = analysis.semantics
         recognizers = analysis.recognizers
@@ -601,7 +655,4 @@ struct PL0WorkbenchPane: View {
         return "Semantic reuse from v\(metrics.baseVersion.map(String.init) ?? "—") · \(metrics.reusedSymbolCount) symbols · \(metrics.reusedReferenceCount) references · \(metrics.dependencyInvalidationCount) invalidated"
     }
 
-    private func quoted(_ text: String) -> String {
-        text.isEmpty ? "<eof>" : "\"\(text.replacingOccurrences(of: "\n", with: "\\n"))\""
-    }
 }

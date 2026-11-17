@@ -35,7 +35,7 @@ final class EditorModel: ObservableObject {
     @Published private(set) var languageAnalysis: LanguageProviderAnalysis?
     private var toolingDocument: LanguageToolingDocument?
     private let toolingURI = "modedit://current-document"
-    private(set) var selection = NSRange(location: 0, length: 0)
+    @Published private(set) var selection = NSRange(location: 0, length: 0)
     /// The last replacement, used by incremental language services. It is not
     /// published separately because every edit also publishes `textRevision`.
     private(set) var lastSourceEdit: PL0Language.SourceEdit?
@@ -116,7 +116,7 @@ final class EditorModel: ObservableObject {
     }
 
     func updateCursor(line: Int, column: Int, selection: NSRange) {
-        self.selection = selection
+        if self.selection != selection { self.selection = selection }
         cursorLine = max(1, line)
         cursorColumn = max(1, column)
     }
