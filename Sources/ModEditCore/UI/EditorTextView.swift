@@ -155,7 +155,11 @@ extension EditorTextView {
         func modelDidChange() {
             fulfillSourceReplacementRequest()
             refreshParserVisualization()
-            fulfillRevealRequest()
+            if let request = model.revealRequest, request.id != handledRevealID {
+                // Selecting text fires the AppKit delegate. Publish the new
+                // selection after SwiftUI finishes updating the representable.
+                Task { @MainActor [weak self] in self?.fulfillRevealRequest() }
+            }
             guard textView != nil, fullPassFormatID != model.format.id else { return }
             fullPassFormatID = model.format.id
             highlightWholeDocument()
@@ -294,9 +298,10 @@ extension EditorTextView {
             let location = min(max(request.range.location, 0), length)
             let end = min(max(request.range.end, location), length)
             let selection = NSRange(location: location, length: end - location)
+            textView.window?.makeFirstResponder(textView)
             textView.setSelectedRange(selection)
             textView.scrollRangeToVisible(selection)
-            textView.window?.makeFirstResponder(textView)
+            updateCursorLocation()
             model.acknowledgeRevealRequest(id: request.id)
         }
 

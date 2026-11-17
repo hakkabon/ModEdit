@@ -86,8 +86,11 @@ struct PL0InspectorSourceLinks: Sendable {
                 result.syntaxIDs.insert(node.id)
                 result.syntaxAnchor = node.id
             }
-            result.syntaxAnchor = explicit?.id.hasPrefix("terminal:") == true
-                ? explicit?.id : matchingTerminals.first?.id ?? result.syntaxAnchor
+            if explicit?.id.hasPrefix("terminal:") == true {
+                result.syntaxAnchor = explicit?.id
+            } else if explicit != nil || result.syntaxAnchor == nil {
+                result.syntaxAnchor = matchingTerminals.first?.id ?? result.syntaxAnchor
+            }
         }
         return result
     }

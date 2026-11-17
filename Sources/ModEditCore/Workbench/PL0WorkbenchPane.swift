@@ -6,7 +6,7 @@ import SwiftUI
 struct PL0WorkbenchPane: View {
     let revision: UInt64
     let edit: SourceEdit?
-    let sourceSelection: NSRange
+    @ObservedObject var model: EditorModel
     let source: () -> String
     let lineAndColumn: (Int) -> (line: Int, column: Int)
     let reveal: (SourceRange) -> Void
@@ -113,7 +113,7 @@ struct PL0WorkbenchPane: View {
             semantics = nil
             selectedLink = nil
         }
-        .onChange(of: sourceSelection) { selection in
+        .onChange(of: model.selection) { selection in
             if let link = selectedLink,
                selection != NSRange(location: link.range.location, length: link.range.length) {
                 selectedLink = nil
@@ -130,9 +130,9 @@ struct PL0WorkbenchPane: View {
     private func content(for result: ParseResult) -> some View {
         switch selectedView {
         case .tokens:
-            sourceLinkList(showsTree: false)
+            sourceLinkContent(showsTree: false)
         case .syntaxTree:
-            sourceLinkList(showsTree: true)
+            sourceLinkContent(showsTree: true)
         case .semantics:
             semanticContent
         case .comparison:
@@ -147,34 +147,52 @@ struct PL0WorkbenchPane: View {
     }
 
     @ViewBuilder
-    private func sourceLinkList(showsTree: Bool) -> some View {
+    private func sourceLinkContent(showsTree: Bool) -> some View {
         if let links = sourceLinks {
-            let highlight = links.highlight(selection: sourceSelection, explicit: selectedLink)
-            let anchor = showsTree ? highlight.syntaxAnchor : highlight.tokenAnchor
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 3) {
-                        if showsTree {
-                            ForEach(links.nodes) { link in
-                                sourceLinkRow(link, highlighted: highlight.syntaxIDs.contains(link.id))
-                            }
-                            Text("Terminals").font(.caption.bold()).padding(.top, 8)
-                            ForEach(links.terminals) { link in
-                                sourceLinkRow(link, highlighted: highlight.syntaxIDs.contains(link.id))
-                            }
-                        } else {
-                            ForEach(links.tokens) { link in
-                                sourceLinkRow(link, highlighted: highlight.tokenIDs.contains(link.id))
-                            }
+            let highlight = links.highlight(selection: model.selection, explicit: selectedLink)
+            if showsTree {
+                VSplitView {
+                    sourceLinkList(links.nodes, terminals: links.terminals,
+                                   highlighted: highlight.syntaxIDs, anchor: highlight.syntaxAnchor)
+                        .frame(minHeight: 100)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Tokens")
+                            .font(.caption.bold())
+                            .padding(.horizontal, 10)
+                            .padding(.top, 8)
+                        sourceLinkList(links.tokens, highlighted: highlight.tokenIDs,
+                                       anchor: highlight.tokenAnchor)
+                    }
+                    .frame(minHeight: 75, idealHeight: 150)
+                }
+            } else {
+                sourceLinkList(links.tokens, highlighted: highlight.tokenIDs,
+                               anchor: highlight.tokenAnchor)
+            }
+        }
+    }
+
+    private func sourceLinkList(_ rows: [PL0InspectorSourceLinks.Row],
+                                terminals: [PL0InspectorSourceLinks.Row] = [],
+                                highlighted: Set<String>, anchor: String?) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(rows) { link in
+                        sourceLinkRow(link, highlighted: highlighted.contains(link.id))
+                    }
+                    if !terminals.isEmpty {
+                        Text("Terminals").font(.caption.bold()).padding(.top, 8)
+                        ForEach(terminals) { link in
+                            sourceLinkRow(link, highlighted: highlighted.contains(link.id))
                         }
                     }
-                    .padding(10)
                 }
-                .task(id: anchor) {
-                    if let anchor { proxy.scrollTo(anchor) }
-                }
+                .padding(10)
             }
-            .id(showsTree)
+            .task(id: anchor) {
+                if let anchor { proxy.scrollTo(anchor) }
+            }
         }
     }
 
@@ -196,7 +214,7 @@ struct PL0WorkbenchPane: View {
             .padding(.vertical, 3)
             .padding(.horizontal, 5)
             .contentShape(Rectangle())
-            .background(highlighted ? Color.accentColor.opacity(0.16) : Color.clear,
+            .background(highlighted ? Color.accentColor.opacity(0.26) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)

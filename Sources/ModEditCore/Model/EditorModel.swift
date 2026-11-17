@@ -117,8 +117,10 @@ final class EditorModel: ObservableObject {
 
     func updateCursor(line: Int, column: Int, selection: NSRange) {
         if self.selection != selection { self.selection = selection }
-        cursorLine = max(1, line)
-        cursorColumn = max(1, column)
+        let line = max(1, line)
+        let column = max(1, column)
+        if cursorLine != line { cursorLine = line }
+        if cursorColumn != column { cursorColumn = column }
     }
 
     /// Shared line lookup used by the status bar and the gutter.
