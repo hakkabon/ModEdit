@@ -27,6 +27,10 @@ final class EditorModel: ObservableObject {
     @Published var showPreview = true
     /// Whether the experimental parser inspector is visible for PL/0.
     @Published var showWorkbench = false
+    @Published var showProblems = false
+    @Published private(set) var buildResult: EditorBuildResult?
+    @Published private(set) var isBuilding = false
+    private var buildID: UUID?
     @Published private(set) var languageAnalysis: LanguageProviderAnalysis?
     private var toolingDocument: LanguageToolingDocument?
     private let toolingURI = "modedit://current-document"
@@ -102,6 +106,7 @@ final class EditorModel: ObservableObject {
             replacementLength: (replacement as NSString).length)
         pl0Visualization = nil
         languageAnalysis = nil
+        clearBuild()
         textRevision = generation
         lineCount = document.numberOfLines
         isDocumentDirty = document.isDirty
@@ -126,6 +131,7 @@ final class EditorModel: ObservableObject {
         lastSourceEdit = nil
         pl0Visualization = nil
         languageAnalysis = nil
+        clearBuild()
         toolingDocument = nil
         format = document.currentFormat
         textRevision = document.textGeneration
@@ -142,6 +148,7 @@ final class EditorModel: ObservableObject {
         format = newFormat
         pl0Visualization = nil
         languageAnalysis = nil
+        clearBuild()
         toolingDocument = nil
         document.setFormat(newFormat)
         onFormatChange?(newFormat)
@@ -166,6 +173,37 @@ final class EditorModel: ObservableObject {
 
     var supportsLanguageQueries: Bool {
         registry.provider(withID: format.id)?.descriptor.capabilities.contains(.semantics) == true
+    }
+
+    var supportsProblems: Bool {
+        registry.provider(withID: format.id)?.descriptor.capabilities.contains(.diagnostics) == true
+    }
+
+    var problemCount: Int {
+        (languageAnalysis?.diagnostics.count ?? 0) + (buildResult?.diagnostics.count ?? 0)
+    }
+
+    func buildPL0() async {
+        guard format.id == "pl0", !isBuilding else { return }
+        let id = UUID()
+        let snapshot = PL0Language.SourceSnapshot(version: textRevision, text: textSnapshot())
+        buildID = id
+        buildResult = nil
+        isBuilding = true
+        let result = await Task.detached(priority: .userInitiated) {
+            EditorBuildResult.compile(snapshot)
+        }.value
+        guard buildID == id else { return }
+        isBuilding = false
+        buildID = nil
+        guard snapshot.version == documentTextGeneration else { return }
+        buildResult = result
+    }
+
+    private func clearBuild() {
+        buildID = nil
+        buildResult = nil
+        isBuilding = false
     }
 
     func refreshLanguageDiagnostics() async {

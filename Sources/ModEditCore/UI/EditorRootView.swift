@@ -11,7 +11,14 @@ struct EditorRootView: View {
         let renderer = model.format.makePreviewRenderer()
         VStack(spacing: 0) {
             HSplitView {
-                EditorTextView(model: model).frame(minWidth: 300)
+                VSplitView {
+                    EditorTextView(model: model).frame(minHeight: 120)
+                    if model.showProblems, model.supportsProblems {
+                        EditorProblemsPane(model: model)
+                            .frame(minHeight: 85, idealHeight: 170)
+                    }
+                }
+                .frame(minWidth: 300)
                 if model.showPreview, let renderer {
                     PreviewPane(renderer: renderer,
                                 revision: model.textRevision,
@@ -72,31 +79,15 @@ private struct EditorStatusBar: View {
             Text("Tab Size: \(model.tabSize)")
                 .foregroundStyle(.secondary)
 
-            if let visualization = model.pl0Visualization,
-               visualization.version == model.textRevision {
-                Menu("\(visualization.problemCount) problems") {
-                    ForEach(visualization.annotations) { annotation in
-                        let position = model.lineAndColumn(at: annotation.range.location)
-                        Button("\(position.line):\(position.column) \(annotation.message)") {
-                            model.revealSourceRange(annotation.range)
-                        }
-                    }
-                    if let analysis = model.languageAnalysis {
-                        ForEach(Array(analysis.recoveryEdits.enumerated()), id: \.offset) { _, fix in
-                            if fix.diagnosticID != nil,
-                               let replacement = model.suggestedReplacement(for: fix.action) {
-                                let position = model.lineAndColumn(at: fix.action.range.location)
-                                Button(replacement.isEmpty
-                                       ? "Delete text at \(position.line):\(position.column)"
-                                       : "Use ‘\(replacement)’ at \(position.line):\(position.column)") {
-                                    model.applySuggestedFix(fix, revision: analysis.revision.rawValue)
-                                }
-                            }
-                        }
-                    }
+            if model.supportsProblems {
+                Button {
+                    model.showProblems.toggle()
+                } label: {
+                    Label("\(model.problemCount) problems",
+                          systemImage: model.showProblems ? "chevron.down" : "chevron.up")
                 }
                 .fixedSize()
-                .disabled(visualization.problemCount == 0)
+                .help(model.showProblems ? "Hide Problems" : "Show Problems")
             }
 
             if model.supportsLanguageQueries {

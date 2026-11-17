@@ -99,6 +99,23 @@ struct EditorIntegrationTests {
         #expect(harness.model.languageAnalysis?.diagnostics.isEmpty == true)
     }
 
+    @Test func pl0BuildProblemsClearOnEditAndRebuild() async {
+        let harness = makeHarness(text: "begin missing := 1 end.")
+        harness.model.setFormat(PL0Format())
+        harness.model.showProblems = true
+        await harness.model.buildPL0()
+        #expect(!harness.model.showWorkbench)
+        #expect(harness.model.buildResult?.succeeded == false)
+        #expect(harness.model.buildResult?.diagnostics.first?.message.contains("missing") == true)
+
+        let range = NSRange(location: 0, length: (harness.textView.string as NSString).length)
+        harness.textView.insertText("var x; begin x := 1 end.", replacementRange: range)
+        #expect(harness.model.buildResult == nil)
+        await harness.model.buildPL0()
+        #expect(harness.model.buildResult?.succeeded == true)
+        #expect(harness.model.problemCount == 0)
+    }
+
     @Test func pl0CompletesAndRevealsDeclaration() async throws {
         let harness = makeHarness(text: "var answer; begin ans := 1 end.")
         harness.model.setFormat(PL0Format())
