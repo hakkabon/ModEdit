@@ -7,5 +7,6 @@ struct DOTFormat: DocumentFormat {
     let contentTypes: [UTType] = [.dotSource]
     let fileExtensions = ["dot", "gv"]
     var highlightRules: [HighlightRule] { [] }
+    let supportsPreview = true
     func makePreviewRenderer() -> (any PreviewRenderer)? { nil }
 }

@@ -26,6 +26,7 @@ let package = Package(
         .package(url: "https://github.com/hakkabon/Railroad.git", .upToNextMinor(from: "0.1.0")),
         .package(url: "https://github.com/hakkabon/DOT-LanguageKit.git", .upToNextMinor(from: "0.2.1")),
         .package(url: "https://github.com/hakkabon/CSS-LanguageKit.git", .upToNextMinor(from: "0.2.1")),
+        .package(url: "https://github.com/hakkabon/Swift-Layout.git", .upToNextMinor(from: "0.0.3")),
     ],
     targets: [
         .target(
@@ -45,6 +46,7 @@ let package = Package(
                     name: "GrammarLanguage",
                     package: "Grammar-LanguageKit"),
                 .product(name: "DOTLanguage", package: "DOT-LanguageKit"),
+                .product(name: "SwiftLayout", package: "Swift-Layout"),
                 .product(name: "CSSLanguage", package: "CSS-LanguageKit"),
             ]),
         .executableTarget(

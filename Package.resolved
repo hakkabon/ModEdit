@@ -1,5 +1,5 @@
 {
-  "originHash" : "77c85a0628656caec6e46b77b53aa0e70c89b38832146b66fba64ebcca6b5387",
+  "originHash" : "765500a6f347868152e022c0a636de1207d0319f68924c66f39efb592a2ce061",
   "pins" : [
     {
       "identity" : "compiler",
@@ -78,8 +78,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hakkabon/GrammarDiagram.git",
       "state" : {
-        "revision" : "dc17ab061a1614ba0692be06aa69043b45bbbcd4",
-        "version" : "0.1.0"
+        "revision" : "3da929c9ee5317f04833d325a9d55850a1f42499",
+        "version" : "0.1.1"
       }
     },
     {
@@ -233,6 +233,15 @@
       "state" : {
         "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
         "version" : "1.8.2"
+      }
+    },
+    {
+      "identity" : "swift-layout",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hakkabon/Swift-Layout.git",
+      "state" : {
+        "revision" : "1c282a3aafb03cb019a9966a42cfa568365f90a1",
+        "version" : "0.0.3"
       }
     },
     {

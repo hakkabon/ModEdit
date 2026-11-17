@@ -32,11 +32,14 @@ protocol DocumentFormat: Sendable {
     /// `nil` when the regex rules are enough.
     var scanner: (any StatefulScanner)? { get }
 
-    /// A renderer for the live preview, or `nil` if the format has none.
+    var supportsPreview: Bool { get }
+
+    /// An HTML renderer for formats displayed in the web preview.
     func makePreviewRenderer() -> (any PreviewRenderer)?
 }
 
 extension DocumentFormat {
+    var supportsPreview: Bool { makePreviewRenderer() != nil }
     var scanner: (any StatefulScanner)? { nil }
 }
 

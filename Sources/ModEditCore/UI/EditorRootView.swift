@@ -19,7 +19,10 @@ struct EditorRootView: View {
                     }
                 }
                 .frame(minWidth: 300)
-                if model.showPreview, let renderer {
+                if model.showPreview, model.format is DOTFormat {
+                    DOTPreviewPane(model: model)
+                        .frame(minWidth: 300)
+                } else if model.showPreview, let renderer {
                     PreviewPane(renderer: renderer,
                                 revision: model.textRevision,
                                 source: { model.previewSnapshot(upTo: PreviewPane.maximumSourceLength) })

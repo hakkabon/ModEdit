@@ -74,7 +74,7 @@ struct BundledFormatLanguageProvider: EditorLanguageProvider {
          distribution: LanguageProviderDistribution = .bundledPermanent) {
         self.documentFormat = format
         var capabilities: Set<LanguageProviderCapability> = [.syntaxHighlighting]
-        if format.makePreviewRenderer() != nil { capabilities.insert(.preview) }
+        if format.supportsPreview { capabilities.insert(.preview) }
         descriptor = .init(
             id: format.id,
             displayName: format.displayName,

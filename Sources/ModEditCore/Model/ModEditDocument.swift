@@ -364,7 +364,7 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate, NSMe
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         switch item.itemIdentifier {
         case Self.previewItem:
-            return model.format.makePreviewRenderer() != nil
+            return model.format.supportsPreview
         case Self.workbenchItem:
             return model.registry.format(withID: "pl0") != nil
         default:
