@@ -75,6 +75,12 @@ the right shows it as headings, emphasis, symbols and mathematics.
   visualization of diagnostics and repairs. A deterministic formatter and
   bounded bytecode VM turn the workbench into a small executable PL/0 IDE.
 
+## iPad prototype
+
+A native DOT editor for iPadOS 17 is available in [iPad](iPad/README.md).
+It uses the existing language services and Swift-Layout graph preview with
+a SwiftUI document browser and UIKit source editor.
+
 ## Requirements
 
 * macOS 13 or newer

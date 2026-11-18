@@ -1,4 +1,8 @@
+#if canImport(UIKit)
+import UIKit
+#else
 import AppKit
+#endif
 import DOTLanguage
 import SwiftLayout
 
@@ -88,7 +92,12 @@ actor DOTPreviewLayout {
     }
 
     private static func textWidth(_ text: String, size: CGFloat) -> CGFloat {
-        let measured = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size)])
+        #if canImport(UIKit)
+        let font = UIFont.systemFont(ofSize: size)
+        #else
+        let font = NSFont.systemFont(ofSize: size)
+        #endif
+        let measured = (text as NSString).size(withAttributes: [.font: font])
         return min(220, measured.width.rounded(.up))
     }
 }
