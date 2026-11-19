@@ -23,10 +23,17 @@ struct EditorRootView: View {
                     DOTPreviewPane(model: model)
                         .frame(minWidth: 300)
                 } else if model.showPreview, let renderer {
-                    PreviewPane(renderer: renderer,
-                                revision: model.textRevision,
-                                source: { model.previewSnapshot(upTo: PreviewPane.maximumSourceLength) })
-                        .frame(minWidth: 300)
+                    VSplitView {
+                        PreviewPane(renderer: renderer,
+                                    revision: model.textRevision,
+                                    source: { model.previewSnapshot(upTo: PreviewPane.maximumSourceLength) })
+                            .frame(minHeight: 120)
+                        if model.format is GrammarFormat {
+                            ScrollView { GrammarExamplesPane(model: model) }
+                                .frame(minHeight: 180, idealHeight: 340)
+                        }
+                    }
+                    .frame(minWidth: 300)
                 }
                 if model.showWorkbench, model.format.id == "pl0" {
                     PL0WorkbenchPane(revision: model.textRevision,

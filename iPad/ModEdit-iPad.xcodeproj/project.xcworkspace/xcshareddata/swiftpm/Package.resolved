@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hakkabon/DOT-LanguageKit.git",
       "state" : {
-        "revision" : "794f90a8996c059345c07c9829e94f77ea195c3d",
-        "version" : "0.2.2"
+        "revision" : "35e8d75632314b6d74cb8cf86f55b213bf41fb95",
+        "version" : "0.2.3"
       }
     },
     {
@@ -60,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hakkabon/Language-Tooling.git",
       "state" : {
-        "revision" : "cbe4da54173bb937831c47cbcc85442c509aee9a",
-        "version" : "0.10.1"
+        "revision" : "3a5081c803fcda16b5823f2bd7687b1b32e1bbcd",
+        "version" : "0.10.2"
       }
     },
     {

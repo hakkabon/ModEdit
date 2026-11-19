@@ -5,13 +5,18 @@ final class PadEditingTests: XCTestCase {
     func testCreateEditRepairAndReopenDocument() throws {
         let app = XCUIApplication()
         app.launch()
-        let sidebar = app.buttons["ToggleSidebar"]
-        if sidebar.waitForExistence(timeout: 60) { sidebar.tap() }
-        let local = app.cells["DOC.sidebar.item.On My iPad"]
-        if local.waitForExistence(timeout: 3) { local.tap() }
-        let create = app.buttons["FullDocumentManagerViewControllerNavigationBarCreateButtonIdentifier"]
-        XCTAssertTrue(create.waitForExistence(timeout: 60), app.debugDescription)
-        create.tap()
+        let landingCreate = app.buttons["Create Document"]
+        if landingCreate.waitForExistence(timeout: 5) {
+            landingCreate.tap()
+        } else {
+            let sidebar = app.buttons["ToggleSidebar"]
+            if sidebar.waitForExistence(timeout: 15) { sidebar.tap() }
+            let local = app.cells["DOC.sidebar.item.On My iPad"]
+            if local.waitForExistence(timeout: 3) { local.tap() }
+            let create = app.buttons["FullDocumentManagerViewControllerNavigationBarCreateButtonIdentifier"]
+            XCTAssertTrue(create.waitForExistence(timeout: 30), app.debugDescription)
+            create.tap()
+        }
 
         let editor = app.textViews.firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 30), app.debugDescription)

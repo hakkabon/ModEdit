@@ -300,6 +300,25 @@ are now routed to those same providers through Language-Tooling's embedded-
 region compositor. ModEdit owns region discovery and presentation, not another
 embedded parser.
 
+### Grammar authoring with examples
+
+Open a BNF or EBNF grammar and show Preview. **Grammar examples** appears
+below the railroad diagrams. Load an examples JSON corpus or add examples,
+choose whether each input should be accepted, and edit the grammar normally.
+Checks update after editing. Select an example to inspect its outcome or
+accepted parse tree. Broken grammar drafts show diagnostics instead of
+results from an earlier source revision.
+
+Grammar files use the ordinary document Save command. **Save…** in Grammar
+examples saves the example corpus separately and detects external file changes.
+The corpus stays available when Preview is hidden and shown again.
+
+The [FeatureFlags trial](Examples/FeatureFlags/README.md) includes five positive
+and negative examples plus two broken drafts and a cross-consumer verification
+script. Grammar-LanguageKit owns the shared check, which uses Grammar's parser,
+Lexer's grammar-driven scanner, and LR-Parsing's native LALR runtime with
+recovery disabled. ModEdit supplies the editing controls.
+
 ### Live DOT preview
 
 Open a `.dot` or `.gv` file and use the Preview toolbar button to show or hide

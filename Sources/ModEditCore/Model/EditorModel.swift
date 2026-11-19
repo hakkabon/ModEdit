@@ -42,6 +42,8 @@ final class EditorModel: ObservableObject {
     private var nextRevealID: UInt64 = 0
     private var nextReplacementID: UInt64 = 0
 
+    let grammarExamples = GrammarExamplesProject()
+
     let tabSize = 4
     /// The format catalogue shown in the status-bar picker.
     let registry: FormatRegistry

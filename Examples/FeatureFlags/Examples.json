@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "examples": [
+    { "id": "enable-cache", "input": "enable cache", "shouldAccept": true },
+    { "id": "disable-logging", "input": "disable logging", "shouldAccept": true },
+    { "id": "two-commands", "input": "enable cache\ndisable logging", "shouldAccept": true },
+    { "id": "missing-feature", "input": "enable", "shouldAccept": false },
+    { "id": "unknown-action", "input": "remove cache", "shouldAccept": false }
+  ]
+}
