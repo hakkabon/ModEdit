@@ -1,16 +1,58 @@
-# Build and test on macOS (the app depends on AppKit, SwiftUI and WebKit, so
-# Linux is not supported).
+# Build and test on macOS. The app depends on AppKit, SwiftUI and WebKit, so
+# Linux is not supported.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev-branch]
+    tags: ["*"]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  truth:
+    name: Version and metadata truth
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Toolchain
+        run: swift --version
+      - name: Dependency resolution is committed
+        run: |
+          swift package resolve
+          if [ -n "$(git status --porcelain Package.resolved)" ]; then
+            echo "Package.resolved is out of date; run swift package resolve and commit it." >&2
+            git diff -- Package.resolved
+            exit 1
+          fi
+      - name: Version metadata is in sync
+        run: scripts/version.sh check
+      - name: Ecosystem pins are explicit tags
+        run: scripts/verify-ecosystem-versions.sh
+      - name: No generated metadata drift
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Generated metadata is out of sync." >&2
+            git status --short
+            exit 1
+          fi
+      - name: Release tag matches Version.json
+        if: github.ref_type == 'tag'
+        run: scripts/version.sh verify-tag
+
   test:
     name: Debug build and tests
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - run: swift --version
@@ -20,12 +62,26 @@ jobs:
   release:
     name: Release build and package
     runs-on: macos-15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: swift --version
+      - run: scripts/version.sh check
       - run: swift build -c release
       - run: swift test -c release
       - run: scripts/package-release.sh
+      - name: Packaged version matches Version.json
+        run: |
+          EXPECTED="$(scripts/version.sh show --marketing)"
+          ARCHIVE="dist/ModEdit-$EXPECTED-macos.zip"
+          if [ ! -f "$ARCHIVE" ]; then
+            echo "Expected $ARCHIVE, found:" >&2
+            ls -l dist >&2 || true
+            exit 1
+          fi
+          echo "Packaged $EXPECTED"
       - uses: actions/upload-artifact@v4
         with:
           name: ModEdit-release

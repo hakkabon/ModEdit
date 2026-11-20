@@ -7,6 +7,10 @@ import PL0FrontendConformance
 struct ModEditExperimentCLI {
     static func main() async throws {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.first == "--version" || arguments.first == "version" {
+            print("modedit-experiment \(ModEditVersion.display)")
+            return
+        }
         if arguments.first == "compare" {
             let reports = try arguments.dropFirst().map {
                 try PL0FrontendExperimentReport.decode(Data(contentsOf: URL(fileURLWithPath: $0)))

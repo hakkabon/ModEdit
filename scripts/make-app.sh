@@ -20,6 +20,8 @@ esac
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
+scripts/version.sh check
+
 INFO_PLIST="Sources/ModEditApp/Resources/Info.plist"
 plutil -lint "$INFO_PLIST" >/dev/null
 

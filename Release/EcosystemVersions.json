@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "snapshotDate": "2026-11-20",
+  "repositoryRoot": "https://github.com/hakkabon",
+  "note": "Current published tags for the ModEdit ecosystem. This is a tag snapshot, not a compatibility guarantee; Grammar-Workbench/Packaging/EcosystemCompatibility.json remains the downstream compatibility lock.",
+  "knownModEditDrift": {
+    "incremental-parsing": {
+      "resolved": "0.33.0",
+      "reason": "The PL/0, CSS, JSON, DOT and Grammar language kits all require Incremental-Parsing 0.33.x. The 0.33.0 to 0.35.0 diff is documentation-only, but SwiftPM still cannot resolve the newer tag until the kits publish compatible patch releases."
+    }
+  },
+  "components": [
+    {"name":"Incremental-Parsing","swiftPMIdentity":"incremental-parsing","tag":"0.35.0","layer":0,"role":"foundation","directDependency":true},
+    {"name":"GrammarTokenizer","swiftPMIdentity":"grammartokenizer","tag":"0.1.0","layer":0,"role":"foundation","directDependency":false},
+    {"name":"Grammar","swiftPMIdentity":"grammar","tag":"0.9.1","layer":0,"role":"foundation","directDependency":true},
+    {"name":"Lexer-FSA","swiftPMIdentity":"lexer-fsa","tag":"0.2.0","layer":0,"role":"foundation","directDependency":false},
+    {"name":"Lexer","swiftPMIdentity":"lexer","tag":"0.9.1","layer":0,"role":"foundation","directDependency":false},
+    {"name":"Parser","swiftPMIdentity":"parser","tag":"0.12.1","layer":0,"role":"foundation","directDependency":false},
+
+    {"name":"LL-Parsing","swiftPMIdentity":"ll-parsing","tag":"0.5.1","layer":1,"role":"engine","directDependency":false},
+    {"name":"LR-Parsing","swiftPMIdentity":"lr-parsing","tag":"0.8.1","layer":1,"role":"engine","directDependency":false},
+    {"name":"Earley-Parser","swiftPMIdentity":"earley-parser","tag":"0.10.1","layer":1,"role":"engine","directDependency":false},
+    {"name":"Earley-TableParser","swiftPMIdentity":"earley-tableparser","tag":"0.3.1","layer":1,"role":"engine","directDependency":false},
+    {"name":"CYK-Parser","swiftPMIdentity":"cyk-parser","tag":"0.3.1","layer":1,"role":"engine","directDependency":false},
+    {"name":"RNGLR-Parser","swiftPMIdentity":"rnglr-parser","tag":"0.10.1","layer":1,"role":"engine","directDependency":false},
+    {"name":"Railroad","swiftPMIdentity":"railroad","tag":"0.1.0","layer":1,"role":"support","directDependency":true},
+    {"name":"Swift-Layout","swiftPMIdentity":"swift-layout","tag":"0.0.3","layer":1,"role":"support","directDependency":true},
+    {"name":"GrammarDiagram","swiftPMIdentity":"grammardiagram","tag":"0.1.1","layer":1,"role":"support","directDependency":false},
+    {"name":"TerminalColors","swiftPMIdentity":"terminalcolors","tag":"0.1.0","layer":1,"role":"support","directDependency":false},
+    {"name":"Grammar-DiagramKit","swiftPMIdentity":"grammar-diagramkit","tag":"0.1.0","layer":1,"role":"support","directDependency":false},
+
+    {"name":"Compiler","swiftPMIdentity":"compiler","tag":"0.10.1","layer":2,"role":"tooling","directDependency":false},
+    {"name":"Language-Tooling","swiftPMIdentity":"language-tooling","tag":"0.10.2","layer":2,"role":"tooling","directDependency":true},
+
+    {"name":"PL0-LanguageKit","swiftPMIdentity":"pl0-languagekit","tag":"0.16.2","layer":3,"role":"language-kit","directDependency":true},
+    {"name":"Pascal-LanguageKit","swiftPMIdentity":"pascal-languagekit","tag":"0.9.0","layer":3,"role":"language-kit","directDependency":false},
+    {"name":"JSON-LanguageKit","swiftPMIdentity":"json-languagekit","tag":"0.2.1","layer":3,"role":"language-kit","directDependency":true},
+    {"name":"Grammar-LanguageKit","swiftPMIdentity":"grammar-languagekit","tag":"0.3.0","layer":3,"role":"language-kit","directDependency":true},
+    {"name":"ModEdit-Bundled-Languages","swiftPMIdentity":"modedit-bundled-languages","tag":"0.1.0","layer":3,"role":"language-kit","directDependency":true},
+    {"name":"DOT-LanguageKit","swiftPMIdentity":"dot-languagekit","tag":"0.2.3","layer":3,"role":"language-kit","directDependency":true},
+    {"name":"CSS-LanguageKit","swiftPMIdentity":"css-languagekit","tag":"0.2.1","layer":3,"role":"language-kit","directDependency":true},
+
+    {"name":"ModEdit","swiftPMIdentity":"modedit","tag":"0.41.0","layer":4,"role":"product","directDependency":false},
+    {"name":"Grammar-REPL","swiftPMIdentity":"grammar-repl","tag":"0.17.1","layer":4,"role":"product","directDependency":false},
+    {"name":"Grammar-Workbench","swiftPMIdentity":"grammar-workbench","tag":"1.10.1","layer":4,"role":"product","directDependency":false}
+  ]
+}

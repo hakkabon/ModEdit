@@ -9,6 +9,9 @@ case "$action" in
 esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
+scripts/version.sh check
+
 set -- -project "$root/iPad/ModEdit-iPad.xcodeproj" \
     -scheme ModEdit-iPad -destination "$destination" \
     -derivedDataPath "${MODEDIT_DERIVED_DATA:-$root/iPad/DerivedData}"

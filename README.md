@@ -4,11 +4,14 @@ A native macOS text editor for **editing text that renders differently from its
 plain-ASCII source**. You type Markdown or LaTeX on the left; a live preview on
 the right shows it as headings, emphasis, symbols and mathematics.
 
-> **Status: early development (v0.1.0).** The editor, syntax colouring, format
+**Current version:** <!-- VERSION -->0.41.0 (build 4100)<!-- /VERSION --> · [Versioning and releases](Docs/Versioning.md)
+
+> **Status: active development.** The editor, syntax colouring, format
 > switching, file open/save and the live preview work end to end for Plain Text,
-> Markdown, LaTeX and HTML. An initial PL/0 parsing workbench provides a
-> reference lexer/parser with incremental token and syntax-tree reuse, explicit
-> recovery traces and CST inspection.
+> Markdown, LaTeX and HTML. A PL/0 language workbench provides a reference
+> lexer/parser with incremental token and syntax-tree reuse, explicit recovery
+> traces, CST inspection, semantic analysis, a compiler/VM and a ten-engine
+> comparison.
 > Rendering *inside* the editor pane (single-pane
 > "live preview" with a caret that moves through rendered text) is the next big
 > milestone; see the [roadmap](#roadmap).
@@ -29,8 +32,8 @@ the right shows it as headings, emphasis, symbols and mathematics.
 12. [Design decisions](#design-decisions)
 13. [Known limitations](#known-limitations)
 14. [Roadmap](#roadmap)
-14. [Contributing](#contributing)
-15. [License](#license)
+15. [Contributing](#contributing)
+16. [License](#license)
 
 ## Features
 
@@ -85,7 +88,8 @@ a SwiftUI document browser and UIKit source editor.
 
 * macOS 13 or newer
 * Swift 6.1 / Xcode 16.3 or newer
-* No third-party dependencies
+* No third-party UI frameworks. Runtime libraries are pinned SwiftPM packages
+  from the hakkabon ecosystem, plus their transitive Swift packages.
 
 ## Build, run, test
 
@@ -96,12 +100,15 @@ swift test                      # macOS only: the module uses AppKit/SwiftUI/Web
 scripts/make-app.sh             # builds .build/.../ModEdit.app (debug)
 scripts/make-app.sh release     # release build
 scripts/package-release.sh      # release .app + dist/ModEdit-<version>-macos.zip
+scripts/version.sh check        # verify Version.json and generated metadata agree
+scripts/verify-ecosystem-versions.sh  # check tag graph and dependency pins
+scripts/verify-clean-checkout.sh      # pre-release build in a temporary copy
 open "$(swift build --show-bin-path)/ModEdit.app"
 ```
 
-The current source is verified with `swift build` and `swift test` (141 editor tests;
-the PL/0 language package maintains its own conformance suite)
-using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
+The current source is verified with `swift build` and `swift test` (the full
+editor test suite; the PL/0 language package maintains its own conformance
+suite) using Swift 6.1.2 and the macOS 15.5 SDK. CI builds and tests both debug and
 release, packages the release app, and uploads the zip as an artifact on every
 push and pull request. The large-file benchmark suite is skipped by default;
 see [Large-file benchmark](#large-file-benchmark).
@@ -407,7 +414,7 @@ status-bar format menu, or press the **Parsing Workbench** toolbar button from
 any document. The toolbar button selects PL/0 when necessary; once PL/0 is
 active it toggles the right-hand workbench.
 
-The first implementation is a deliberately small vertical slice:
+The workbench is built around a deliberately small parser vertical slice:
 
 * `PL0Language` is supplied by the separate, platform-neutral
   `PL0-LanguageKit` package. It does not import AppKit or know about ModEdit.
@@ -722,13 +729,20 @@ A new preview is a `PreviewRenderer` returning an HTML string; wrap bodies with
 
 ```
 Package.swift
+Version.json                        single version source (marketing, build, channel)
+Docs/Versioning.md                  version, tag and release policy
+Release/EcosystemVersions.json      current ecosystem tag snapshot
 scripts/make-app.sh                 build ModEdit.app
 scripts/package-release.sh          build and zip the release app
+scripts/version.sh                  sync/check/bump version metadata
+scripts/verify-ecosystem-versions.sh  validate tags and dependency pins
+scripts/verify-clean-checkout.sh    pre-release build in a temporary copy
 scripts/benchmark-large-files.sh    run the 10/50 MB benchmark
 Sources/
   ModEditApp/                       @main entry point, Info.plist
   ModEditCore/
     ModEditApplication.swift        AppKit application, delegate and main menu
+    Version.swift                   generated version constants (do not edit)
     Model/ModEditDocument.swift     NSDocument shell and window controller
     Formats/                        DocumentFormat, FormatRegistry, PreferenceStore, formats
     Highlighting/                   Token, Tokenizer, scanners, DirtyRange, EditorTheme, StorageHighlighter
@@ -739,7 +753,7 @@ Sources/
     UI/                             root/status bar, editor/gutter, preview
 Tests/ModEditTests/                 Swift Testing suites
 ../PL0-LanguageKit/                 language, grammar, conformance corpus and tests
-.github/workflows/ci.yml            debug + release build, tests and packaged artifact
+.github/workflows/ci.yml            truth, debug + release build, tests and packaged artifact
 ```
 
 ## Design decisions
@@ -815,7 +829,8 @@ Tests/ModEditTests/                 Swift Testing suites
   external replacement and pulled into the text view, covering reload/revert.
 * **Generation-based save status.** Save snapshots carry their source generation.
   A completed older autosave cannot incorrectly mark a newer edit clean.
-* **Small public surface.** Only `ModEditApplication` is public.
+* **Small public surface.** Only `ModEditApplication` and the generated
+  `ModEditVersion` constants are public.
 * **Language engine outside the editor.** `PL0Language` exposes immutable,
   `Sendable` snapshots and results. ModEdit is one client; command-line and LSP
   executables can consume the same engine later.

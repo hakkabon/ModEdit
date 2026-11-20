@@ -1,4 +1,9 @@
 // swift-tools-version: 6.1
+//
+// The package version is the git tag, not a field in this manifest. Keep the
+// tag and the direct dependency pins aligned with Version.json and the
+// ecosystem tag snapshot in Release/EcosystemVersions.json. See
+// Docs/Versioning.md.
 import PackageDescription
 
 let package = Package(
