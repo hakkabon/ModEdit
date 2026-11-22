@@ -14,7 +14,8 @@ the right shows it as headings, emphasis, symbols and mathematics.
 > comparison.
 > Rendering *inside* the editor pane (single-pane
 > "live preview" with a caret that moves through rendered text) is the next big
-> milestone; see the [roadmap](#roadmap).
+> milestone; the platform-neutral projection and source/display map are already
+> implemented in `RenderedText`. See the [roadmap](#roadmap).
 
 ## Table of contents
 
@@ -89,7 +90,9 @@ a SwiftUI document browser and UIKit source editor.
 * macOS 13 or newer
 * Swift 6.1 / Xcode 16.3 or newer
 * No third-party UI frameworks. Runtime libraries are pinned SwiftPM packages
-  from the hakkabon ecosystem, plus their transitive Swift packages.
+  from the hakkabon ecosystem, plus `swift-markdown` 0.6.0 and its `swift-cmark`
+  0.9.0 parser. The external pair is pinned exactly because `swift-markdown`
+  0.7.x requires Swift 6.2; ModEdit builds with Swift 6.1.
 
 ## Build, run, test
 
@@ -284,6 +287,19 @@ language-service boundary: it sends versioned snapshots to `PL0-LanguageKit`
 and projects recognition summaries for SwiftUI. Lexing, parsing, recovery,
 semantic analysis, compilation, execution and engine comparison remain owned
 by the language kit and parser packages; ModEdit owns no parser state machine.
+
+### RenderedText projection
+
+`RenderedText` is a platform-neutral library product in the same package. It
+wraps swift-markdown and projects a Markdown document into display runs that
+tile the source exactly: hidden markup becomes a zero-width run, and
+`SourceDisplayMap` maps UTF-16 source offsets to display offsets with leading
+and trailing affinity. Blocks carry content-derived IDs, so an edit can reuse
+unchanged blocks; `MarkdownRenderedText` reparses the document, swaps only the
+invalidated range and shifts the retained runs. The projection handles
+headings, paragraphs, lists, quotes, code, tables, HTML blocks, inline markup,
+entities and hard/soft breaks. The WebKit preview still uses `MarkdownHTML`;
+wiring this projection into TextKit is roadmap step 4.
 
 ### Unified language providers
 
@@ -751,7 +767,9 @@ Sources/
     Preview/                        PreviewRenderer, MarkdownHTML, LaTeXHTML, escaping, page
     Workbench/                      PL/0 parser inspector
     UI/                             root/status bar, editor/gutter, preview
+  RenderedText/                     platform-neutral Markdown projection and source/display map
 Tests/ModEditTests/                 Swift Testing suites
+Tests/RenderedTextTests/            projection, mapping, renderer and incrementality suites
 ../PL0-LanguageKit/                 language, grammar, conformance corpus and tests
 .github/workflows/ci.yml            truth, debug + release build, tests and packaged artifact
 ```
@@ -847,8 +865,10 @@ Tests/ModEditTests/                 Swift Testing suites
   parser (for example, tilde fences and embedded languages are not recognised).
 * **Preview is a separate pane.** The caret and scroll position are not
   synchronised with the source.
-* **Markdown subset only** (no nested lists, tables, images, setext headings).
-  **LaTeX subset only** (no environments, `\frac`, `\sqrt`, macros).
+* **Markdown preview subset only** (no nested lists, tables, images, setext
+  headings). The `RenderedText` projection supports them but is not wired to
+  the preview yet. **LaTeX subset only** (no environments, `\frac`, `\sqrt`,
+  macros).
 * **HTML preview cannot load relative resources** (images, CSS) yet. The
   `NSDocument` shell now exposes the document URL, so supplying it as the web
   view's base URL is a natural next step.
@@ -959,16 +979,17 @@ evidence as stable-prefix reuse.
 3. **Standards-facing LSP transport.** Wrap the implemented, version-safe
    `PL0LSPAdapter` in JSON-RPC framing, add initialize/capability negotiation,
    cancellation and the standard delta-encoded semantic-token wire format.
-4. **Rendering inside the editor.** Introduce a
-   platform-neutral `TextRenderer` that emits *runs tiling the source exactly*
-   (hidden markup = zero-width run) with a two-way source↔display offset map;
-   draw the rendered form for everything except the line under the caret using
-   TextKit 2 layout fragments or text attachments. The offset map is what lets
-   the caret move through rendered text.
+4. **Rendering inside the editor.** The platform-neutral `RenderedText` library
+   now provides the block/run projection, the two-way source↔display offset map
+   and incremental block reuse. The remaining work is to draw that projection
+   for everything except the line under the caret using TextKit 2 layout
+   fragments or text attachments, and to move the caret through rendered text.
 5. **Scroll and caret synchronisation** between source and preview (needs the
    same source map).
-6. **Real markup parsers:** `swift-markdown` for CommonMark/GFM and a bundled KaTeX for
-   typeset maths; expand stateful highlighting to embedded languages.
+6. **Real markup parsers:** `swift-markdown` now drives the `RenderedText`
+   projection; the WebKit preview still uses the small `MarkdownHTML` subset.
+   Move the preview onto the shared projection, bundle KaTeX for typeset maths,
+   and expand stateful highlighting to embedded languages.
 7. **Relative resources in the preview**, using the document URL as the web
    view's base URL.
 8. User-selectable themes, font and size settings; soft-wrap toggle.

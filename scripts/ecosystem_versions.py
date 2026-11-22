@@ -100,6 +100,47 @@ def validate_schema(data: dict) -> list[str]:
         if not isinstance(direct, bool):
             errors.append(f"{label}.directDependency must be true or false")
 
+    external = data.get("externalDependencies", [])
+    if not isinstance(external, list):
+        errors.append("externalDependencies must be an array")
+    else:
+        for index, component in enumerate(external):
+            label = f"externalDependencies[{index}]"
+            if not isinstance(component, dict):
+                errors.append(f"{label} must be an object")
+                continue
+            name = component.get("name")
+            identity = component.get("swiftPMIdentity")
+            url = component.get("url")
+            tag = component.get("tag")
+            direct = component.get("directDependency")
+
+            if not isinstance(name, str) or not name:
+                errors.append(f"{label}.name must be a non-empty string")
+            elif name in names:
+                errors.append(f"duplicate component name {name!r}")
+            else:
+                names.add(name)
+
+            if not isinstance(identity, str) or not identity:
+                errors.append(
+                    f"{label}.swiftPMIdentity must be a non-empty string"
+                )
+            elif identity in identities:
+                errors.append(f"duplicate SwiftPM identity {identity!r}")
+            else:
+                identities.add(identity)
+
+            if not isinstance(url, str) or not url.startswith("https://"):
+                errors.append(f"{label}.url must be an https:// URL")
+            if not isinstance(tag, str) or not SEMVER.fullmatch(tag):
+                errors.append(f"{label}.tag must look like MAJOR.MINOR.PATCH")
+            if not isinstance(direct, bool):
+                errors.append(f"{label}.directDependency must be true or false")
+            reason = component.get("reason")
+            if not isinstance(reason, str) or not reason:
+                errors.append(f"{label}.reason must be a non-empty string")
+
     drift = data.get("knownModEditDrift", {})
     if not isinstance(drift, dict):
         errors.append("knownModEditDrift must be an object")
@@ -142,8 +183,12 @@ def resolved_pins() -> dict[str, dict]:
     for pin in data.get("pins", []):
         identity = pin.get("identity")
         if isinstance(identity, str):
-            pins[identity] = pin.get("state", {})
+            pins[identity] = pin
     return pins
+
+
+def resolved_version(pins: dict[str, dict], identity: str) -> str:
+    return pins.get(identity, {}).get("state", {}).get("version", "-")
 
 
 def check_local_paths() -> list[str]:
@@ -166,6 +211,29 @@ def check_local_paths() -> list[str]:
     return errors
 
 
+def check_external_declarations(data: dict) -> list[str]:
+    """Require direct external dependencies to use exact pins in Package.swift."""
+    errors: list[str] = []
+    package_text = PACKAGE.read_text(encoding="utf-8")
+    for component in data.get("externalDependencies", []):
+        if not component.get("directDependency"):
+            continue
+        partial = re.compile(
+            r"\.package\(\s*url:\s*\""
+            + re.escape(component["url"])
+            + r"\"\s*,\s*exact:\s*\""
+            + re.escape(component["tag"])
+            + r"\"\s*\)"
+        )
+        if not partial.search(package_text):
+            errors.append(
+                f"{component['name']}: Package.swift must declare "
+                f'.package(url: "{component["url"]}", exact: '
+                f'"{component["tag"]}")'
+            )
+    return errors
+
+
 def check_resolved_dependencies(data: dict) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -175,12 +243,12 @@ def check_resolved_dependencies(data: dict) -> tuple[list[str], list[str]]:
         name = component["name"]
         identity = component["swiftPMIdentity"]
         expected = component["tag"]
-        state = pins.get(identity)
-        if state is None:
+        pin = pins.get(identity)
+        if pin is None:
             if component.get("directDependency"):
                 errors.append(f"{name}: no pin for SwiftPM identity {identity!r}")
             continue
-        version = state.get("version")
+        version = pin.get("state", {}).get("version")
         if not isinstance(version, str):
             errors.append(
                 f"{name}: resolved from a branch or revision, not a tagged release"
@@ -199,6 +267,37 @@ def check_resolved_dependencies(data: dict) -> tuple[list[str], list[str]]:
             errors.append(
                 f"{name}: ModEdit resolves {version}, ecosystem tag is {expected}; "
                 "update the pin or record a known drift entry with a reason"
+            )
+
+    for component in data.get("externalDependencies", []):
+        name = component["name"]
+        identity = component["swiftPMIdentity"]
+        expected = component["tag"]
+        pin = pins.get(identity)
+        if pin is None:
+            if component.get("directDependency"):
+                errors.append(
+                    f"{name}: no pin for external SwiftPM identity {identity!r}"
+                )
+            continue
+        version = pin.get("state", {}).get("version")
+        if not isinstance(version, str):
+            errors.append(
+                f"{name}: resolved from a branch or revision, not the exact "
+                f"recorded tag {expected}"
+            )
+            continue
+        if version != expected:
+            errors.append(
+                f"{name}: ModEdit resolves external dependency {version}, "
+                f"recorded exact pin is {expected}; update the pin and this "
+                "snapshot together"
+            )
+        location = pin.get("location")
+        if location != component["url"]:
+            errors.append(
+                f"{name}: resolves from {location!r}, recorded URL is "
+                f"{component['url']!r}"
             )
     return errors, warnings
 
@@ -316,12 +415,26 @@ def print_table(data: dict) -> None:
     print(f"{'Component':28} {'Tag':9} {'Layer':5} {'Direct':6} {'Resolved':9}")
     print("-" * 66)
     for component in data["components"]:
-        resolved = pins.get(component["swiftPMIdentity"], {}).get("version", "-")
+        resolved = resolved_version(pins, component["swiftPMIdentity"])
         direct = "yes" if component["directDependency"] else "no"
         print(
             f"{component['name']:28} {component['tag']:9} "
             f"{component['layer']:<5} {direct:6} {resolved:9}"
         )
+
+    external = data.get("externalDependencies", [])
+    if external:
+        print()
+        print("External dependencies:")
+        print(f"{'Package':28} {'Tag':9} {'Direct':7} {'Resolved':9}")
+        print("-" * 57)
+        for component in external:
+            resolved = resolved_version(pins, component["swiftPMIdentity"])
+            direct = "yes" if component["directDependency"] else "no"
+            print(
+                f"{component['name']:28} {component['tag']:9} "
+                f"{direct:7} {resolved:9}"
+            )
 
 
 def main(argv: list[str]) -> int:
@@ -356,6 +469,7 @@ def main(argv: list[str]) -> int:
     warnings: list[str] = []
     if not errors:
         errors.extend(check_local_paths())
+        errors.extend(check_external_declarations(data))
         dependency_errors, dependency_warnings = check_resolved_dependencies(data)
         errors.extend(dependency_errors)
         warnings.extend(dependency_warnings)
@@ -390,10 +504,23 @@ def main(argv: list[str]) -> int:
     drift_count = len(data.get("knownModEditDrift", {}))
     matched_count = resolved_count - drift_count
     drift_note = f"; {drift_count} known drift" if drift_count else ""
+    external = data.get("externalDependencies", [])
+    external_matched = sum(
+        1
+        for component in external
+        if resolved_version(pins, component["swiftPMIdentity"])
+        == component["tag"]
+    )
+    external_note = (
+        f" {external_matched}/{len(external)} external dependencies match "
+        "their exact pins."
+        if external
+        else ""
+    )
     print(
         f"Ecosystem tag graph OK: {len(components)} components; "
         f"{matched_count}/{resolved_count} resolved packages match published tags"
-        f"{drift_note}; {direct_count} direct dependencies."
+        f"{drift_note}; {direct_count} direct dependencies.{external_note}"
     )
     return 0
 

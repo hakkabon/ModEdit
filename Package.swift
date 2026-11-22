@@ -19,6 +19,9 @@ let package = Package(
             name: "ModEdit",
             targets: ["ModEditApp"]),
         .executable(name: "modedit-experiment", targets: ["ModEditExperimentCLI"]),
+        .library(
+            name: "RenderedText",
+            targets: ["RenderedText"]),
     ],
     dependencies: [
         .package(url: "https://github.com/hakkabon/PL0-LanguageKit.git", .upToNextMinor(from: "0.16.2")),
@@ -32,8 +35,17 @@ let package = Package(
         .package(url: "https://github.com/hakkabon/DOT-LanguageKit.git", .upToNextMinor(from: "0.2.3")),
         .package(url: "https://github.com/hakkabon/CSS-LanguageKit.git", .upToNextMinor(from: "0.2.1")),
         .package(url: "https://github.com/hakkabon/Swift-Layout.git", .upToNextMinor(from: "0.0.3")),
+        // CommonMark/GFM parsing with source ranges for RenderedText. Pinned
+        // exactly because swift-markdown 0.7.x requires a newer Swift tools
+        // version than the rest of this package.
+        .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.6.0"),
     ],
     targets: [
+        .target(
+            name: "RenderedText",
+            dependencies: [
+                .product(name: "Markdown", package: "swift-markdown"),
+            ]),
         .target(
             name: "ModEditCore",
             dependencies: [
@@ -74,5 +86,8 @@ let package = Package(
                 .product(name: "IncrementalParsing", package: "Incremental-Parsing"),
                 .product(name: "LanguageTooling", package: "Language-Tooling"),
             ]),
+        .testTarget(
+            name: "RenderedTextTests",
+            dependencies: ["RenderedText"]),
     ]
 )

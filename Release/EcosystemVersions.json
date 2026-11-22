@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "snapshotDate": "2026-11-20",
+  "snapshotDate": "2026-11-21",
   "repositoryRoot": "https://github.com/hakkabon",
   "note": "Current published tags for the ModEdit ecosystem. This is a tag snapshot, not a compatibility guarantee; Grammar-Workbench/Packaging/EcosystemCompatibility.json remains the downstream compatibility lock.",
   "knownModEditDrift": {
@@ -9,6 +9,24 @@
       "reason": "The PL/0, CSS, JSON, DOT and Grammar language kits all require Incremental-Parsing 0.33.x. The 0.33.0 to 0.35.0 diff is documentation-only, but SwiftPM still cannot resolve the newer tag until the kits publish compatible patch releases."
     }
   },
+  "externalDependencies": [
+    {
+      "name": "swift-markdown",
+      "swiftPMIdentity": "swift-markdown",
+      "url": "https://github.com/swiftlang/swift-markdown.git",
+      "tag": "0.6.0",
+      "directDependency": true,
+      "reason": "CommonMark/GFM parsing for the platform-neutral RenderedText projection. Pinned exactly because 0.7.x requires Swift tools 6.2 while ModEdit builds with Swift 6.1."
+    },
+    {
+      "name": "swift-cmark",
+      "swiftPMIdentity": "swift-cmark",
+      "url": "https://github.com/swiftlang/swift-cmark.git",
+      "tag": "0.9.0",
+      "directDependency": false,
+      "reason": "Transitive C parser used by swift-markdown 0.6.0; recorded so the complete external resolution is auditable."
+    }
+  ],
   "components": [
     {"name":"Incremental-Parsing","swiftPMIdentity":"incremental-parsing","tag":"0.35.0","layer":0,"role":"foundation","directDependency":true},
     {"name":"GrammarTokenizer","swiftPMIdentity":"grammartokenizer","tag":"0.1.0","layer":0,"role":"foundation","directDependency":false},

@@ -86,7 +86,8 @@ is not a release.
 current published tag for 29 ecosystem components: the 24 components in
 Incremental-Parsing's release manifest, plus Railroad, Swift-Layout,
 GrammarDiagram, TerminalColors, and Grammar-DiagramKit, which ModEdit or
-Grammar-Workbench consume directly or transitively.
+Grammar-Workbench consume directly or transitively. It also records the exact
+pins for external packages that are not part of the hakkabon tag graph.
 
 The snapshot is a **tag graph**, not a compatibility guarantee. It answers "what
 was published?" Grammar-Workbench's `Packaging/EcosystemCompatibility.json` is
@@ -111,9 +112,35 @@ scripts/verify-ecosystem-versions.sh --root /path/to/sibling/checkouts --update
 ```
 
 The script also rejects local filesystem package dependencies and requires every
-ecosystem package that appears in `Package.resolved` to resolve to the recorded
-tag. A direct dependency with no pin is an error; a transitive package that is
-not in the current resolution is simply absent from the check.
+ecosystem package or external dependency that appears in `Package.resolved` to
+resolve to the recorded tag. A direct dependency with no pin is an error; a
+transitive package that is not in the current resolution is simply absent from
+the check.
+
+### External dependencies
+
+`externalDependencies` records packages that are not part of the hakkabon tag
+graph but are required to build ModEdit. Each entry names the SwiftPM identity,
+repository URL, exact tag, whether ModEdit declares it directly, and why it is
+recorded. The validator:
+
+* requires a direct external dependency to be declared in `Package.swift` as
+  `.package(url: ..., exact: ...)`;
+* requires every recorded external dependency that appears in
+  `Package.resolved` to resolve to the recorded tag and URL;
+* fails if the exact pin and the snapshot disagree.
+
+The current entries are:
+
+* **swift-markdown 0.6.0** — the CommonMark/GFM parser behind `RenderedText`.
+  It is pinned exactly because 0.7.x raises the minimum Swift tools version to
+  6.2, while ModEdit builds with Swift 6.1.
+* **swift-cmark 0.9.0** — swift-markdown's C parser dependency. It is recorded
+  so that a transitive resolution change is visible instead of implicit.
+
+Upgrading either package means changing `Package.swift`, resolving
+`Package.resolved`, updating this snapshot, and running the projection tests in
+the same change.
 
 ### Known drift
 
@@ -161,7 +188,8 @@ directory. Run it before a release, not on every edit.
 3. Wait for CI: truth, debug tests, release tests, packaged artifact.
 4. `scripts/version.sh tag` if the tag does not exist yet; push it explicitly.
 5. `scripts/version.sh verify-tag` to confirm the tag matches `Version.json`.
-6. Update `Release/EcosystemVersions.json` if the ecosystem tag graph moved.
+6. Update `Release/EcosystemVersions.json` if the ecosystem tag graph or an
+   external exact pin moved.
 7. Run `scripts/verify-ecosystem-versions.sh --root ...` against sibling
    checkouts.
 8. Run `scripts/verify-clean-checkout.sh`.
