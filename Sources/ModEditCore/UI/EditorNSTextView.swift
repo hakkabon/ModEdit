@@ -11,6 +11,42 @@ final class EditorNSTextView: NSTextView {
         didSet { needsDisplay = true }
     }
 
+    /// Handles horizontal caret movement through the rendered projection.
+    ///
+    /// Returns `true` when the projection consumed the move. The coordinator
+    /// only installs this while rendered editing is active; plain source mode
+    /// keeps AppKit's native movement.
+    var renderedNavigation: ((_ direction: Int, _ extending: Bool) -> Bool)?
+
+    override func moveLeft(_ sender: Any?) {
+        moveThroughRenderedText(direction: -1, extending: false, sender: sender)
+    }
+
+    override func moveRight(_ sender: Any?) {
+        moveThroughRenderedText(direction: 1, extending: false, sender: sender)
+    }
+
+    override func moveLeftAndModifySelection(_ sender: Any?) {
+        moveThroughRenderedText(direction: -1, extending: true, sender: sender)
+    }
+
+    override func moveRightAndModifySelection(_ sender: Any?) {
+        moveThroughRenderedText(direction: 1, extending: true, sender: sender)
+    }
+
+    private func moveThroughRenderedText(direction: Int,
+                                         extending: Bool,
+                                         sender: Any?) {
+        if renderedNavigation?(direction, extending) == true { return }
+        switch (direction, extending) {
+        case (-1, false): super.moveLeft(sender)
+        case (1, false): super.moveRight(sender)
+        case (-1, true): super.moveLeftAndModifySelection(sender)
+        case (1, true): super.moveRightAndModifySelection(sender)
+        default: break
+        }
+    }
+
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         currentLineColor.setFill()

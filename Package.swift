@@ -49,6 +49,7 @@ let package = Package(
         .target(
             name: "ModEditCore",
             dependencies: [
+                "RenderedText",
                 .product(name: "PL0Language", package: "PL0-LanguageKit"),
                 .product(name: "PL0FrontendConformance", package: "PL0-LanguageKit"),
                 .product(name: "IncrementalParsing", package: "Incremental-Parsing"),

@@ -153,6 +153,12 @@ struct EditorTheme {
         [.font: baseFont, .foregroundColor: textColor]
     }
 
+    var defaultTextColor: NSColor { textColor }
+
+    func color(for kind: TokenKind) -> NSColor {
+        tokenColors[kind] ?? textColor
+    }
+
     func attributes(for kind: TokenKind) -> [NSAttributedString.Key: Any] {
         switch kind {
         case .strong:

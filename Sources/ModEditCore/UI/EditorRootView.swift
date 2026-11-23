@@ -90,6 +90,23 @@ private struct EditorStatusBar: View {
             Text("Tab Size: \(model.tabSize)")
                 .foregroundStyle(.secondary)
 
+            if model.supportsRenderedEditing {
+                Button {
+                    model.toggleRenderedEditing()
+                } label: {
+                    Label("Rendered",
+                          systemImage: model.isRenderedEditingActive
+                            ? "textformat" : "text.alignleft")
+                        .foregroundStyle(model.isRenderedEditingActive
+                            ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.canUseRenderedEditing)
+                .help(model.canUseRenderedEditing
+                    ? "Show rendered Markdown while keeping the caret line editable"
+                    : "Rendered editing is unavailable for very large documents")
+            }
+
             if model.supportsProblems {
                 Button {
                     model.showProblems.toggle()

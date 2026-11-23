@@ -34,12 +34,19 @@ protocol DocumentFormat: Sendable {
 
     var supportsPreview: Bool { get }
 
+    /// Whether the editor can project this format's rendered text in place.
+    ///
+    /// Formats that do not opt in keep the plain source presentation even when
+    /// the rendered-editing toggle is on.
+    var supportsRenderedEditing: Bool { get }
+
     /// An HTML renderer for formats displayed in the web preview.
     func makePreviewRenderer() -> (any PreviewRenderer)?
 }
 
 extension DocumentFormat {
     var supportsPreview: Bool { makePreviewRenderer() != nil }
+    var supportsRenderedEditing: Bool { false }
     var scanner: (any StatefulScanner)? { nil }
 }
 

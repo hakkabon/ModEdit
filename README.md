@@ -12,10 +12,10 @@ the right shows it as headings, emphasis, symbols and mathematics.
 > lexer/parser with incremental token and syntax-tree reuse, explicit recovery
 > traces, CST inspection, semantic analysis, a compiler/VM and a ten-engine
 > comparison.
-> Rendering *inside* the editor pane (single-pane
-> "live preview" with a caret that moves through rendered text) is the next big
-> milestone; the platform-neutral projection and source/display map are already
-> implemented in `RenderedText`. See the [roadmap](#roadmap).
+> Hybrid rendered editing is available for Markdown: markup outside the caret
+> line is collapsed in place while the caret line remains literal, editable
+> source. Display-only substitutions (bullets, entities, thematic breaks,
+> images) still show their source spelling. See the [roadmap](#roadmap).
 
 ## Table of contents
 
@@ -55,6 +55,12 @@ the right shows it as headings, emphasis, symbols and mathematics.
   large files do not freeze the UI, state-aware for multiline Markdown fences
   and HTML tags/comments, and safe with input methods
   (Japanese/Chinese/Korean composition).
+* **Rendered editing** for Markdown (toolbar and status-bar toggle): markup
+  outside the caret line is collapsed in place, headings and emphasis are styled,
+  and the caret line stays literal source. The source in `NSTextStorage` is
+  unchanged, so offsets, find, undo and saving behave exactly as in source mode,
+  and the caret moves through display positions across collapsed markup. Edits
+  reuse unchanged projection blocks; documents above 512 KB stay in source mode.
 * **Live preview** (WebKit) that keeps its scroll position while you type.
   Documents above 5 MB show a notice instead of being copied and rendered:
   * *Markdown* — headings, paragraphs, lists, block quotes, fenced code,
@@ -298,8 +304,17 @@ and trailing affinity. Blocks carry content-derived IDs, so an edit can reuse
 unchanged blocks; `MarkdownRenderedText` reparses the document, swaps only the
 invalidated range and shifts the retained runs. The projection handles
 headings, paragraphs, lists, quotes, code, tables, HTML blocks, inline markup,
-entities and hard/soft breaks. The WebKit preview still uses `MarkdownHTML`;
-wiring this projection into TextKit is roadmap step 4.
+entities and hard/soft breaks.
+
+`RenderedEditorPresentation` adapts that projection to the editor. It marks the
+runs intersecting the caret line as raw and every zero-width run elsewhere as
+collapsed, and it moves the caret by display position outside the caret line.
+`RenderedEditorStyler` keeps collapsed characters in storage but clears their
+colour and applies a per-character negative kern, reducing their advance to zero
+without changing line height. Text edits call `MarkdownRenderedText.apply` so
+only invalidated blocks are reparsed, while selection changes restyle just the
+old and new caret lines. The WebKit preview still uses `MarkdownHTML`; moving it
+onto the same projection is roadmap step 6.
 
 ### Unified language providers
 
@@ -863,18 +878,25 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
 * **Partial language grammars.** The stateful scanner handles multiline Markdown
   fences and HTML tags/comments, but it is not a complete CommonMark or HTML
   parser (for example, tilde fences and embedded languages are not recognised).
-* **Preview is a separate pane.** The caret and scroll position are not
-  synchronised with the source.
+* **Rendered editing is hybrid.** The caret line always shows literal source, so
+  markup is visible wherever you are editing. Display-only content is not glyph-
+  substituted yet: list bullets, entities, thematic breaks and images still show
+  their Markdown source spelling (styled by role) rather than their rendered
+  form. Collapsed characters remain in storage with zero width, so text
+  selection may visually begin or end on hidden syntax.
+* **Preview and rendered editing are independent.** The preview remains a
+  separate pane; rendered editing does not synchronise its scroll position or
+  selection with the preview.
 * **Markdown preview subset only** (no nested lists, tables, images, setext
-  headings). The `RenderedText` projection supports them but is not wired to
-  the preview yet. **LaTeX subset only** (no environments, `\frac`, `\sqrt`,
-  macros).
+  headings). The `RenderedText` projection supports them and now drives rendered
+  editing, but the preview is not wired to it yet. **LaTeX subset only** (no
+  environments, `\frac`, `\sqrt`, macros).
 * **HTML preview cannot load relative resources** (images, CSS) yet. The
   `NSDocument` shell now exposes the document URL, so supplying it as the web
   view's base URL is a natural next step.
-* **Live preview is capped at 5 MB.** Larger documents remain editable and
-  savable; the preview pane shows a notice instead of copying and rendering
-  them.
+* **Live preview is capped at 5 MB and rendered editing at 512 KB.** Larger
+  documents remain editable and savable in source mode; the preview pane shows a
+  notice instead of copying and rendering them.
 * **Edits still move suffix bytes.** The document uses `NSMutableString`, so it
   avoids a second full-file model copy but insertion near the beginning of a very
   large file remains O(n). A piece table or rope is the next scaling step.
@@ -979,11 +1001,13 @@ evidence as stable-prefix reuse.
 3. **Standards-facing LSP transport.** Wrap the implemented, version-safe
    `PL0LSPAdapter` in JSON-RPC framing, add initialize/capability negotiation,
    cancellation and the standard delta-encoded semantic-token wire format.
-4. **Rendering inside the editor.** The platform-neutral `RenderedText` library
-   now provides the block/run projection, the two-way source↔display offset map
-   and incremental block reuse. The remaining work is to draw that projection
-   for everything except the line under the caret using TextKit 2 layout
-   fragments or text attachments, and to move the caret through rendered text.
+4. **Rendering inside the editor.** Hybrid rendered editing is implemented:
+   `RenderedEditorPresentation` collapses `RenderedText` runs outside the caret
+   line, and the caret moves through source/display positions. Remaining work is
+   glyph substitution for display-only content (list bullets, entities,
+   thematic breaks, images) through text attachments or TextKit 2 layout
+   fragments, plus raising the 512 KB limit by sharing incremental parsing with
+   the preview.
 5. **Scroll and caret synchronisation** between source and preview (needs the
    same source map).
 6. **Real markup parsers:** `swift-markdown` now drives the `RenderedText`

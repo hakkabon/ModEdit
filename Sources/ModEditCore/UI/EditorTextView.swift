@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import PL0Language
+import RenderedText
 
 /// SwiftUI wrapper around an AppKit `NSTextView`.
 struct EditorTextView: NSViewRepresentable {
@@ -87,7 +88,8 @@ extension EditorTextView {
 
         private let model: EditorModel
         private weak var textView: NSTextView?
-        let theme = EditorTheme()
+        let theme: EditorTheme
+        private let renderedStyler: RenderedEditorStyler
 
         /// Highlighter cache: compiling the regular expressions is expensive,
         /// so build once per format instead of once per pass.
@@ -100,6 +102,7 @@ extension EditorTextView {
         private var dirty = DirtyRange()
         private var highlightTask: Task<Void, Never>?
         private var fullPassTask: Task<Void, Never>?
+        private var renderedTask: Task<Void, Never>?
         private var synchronizedGeneration: UInt64 = 0
         private var isSynchronizing = false
         private var isProcessingCharacterEdit = false
@@ -107,14 +110,26 @@ extension EditorTextView {
         private var handledRevealID: UInt64 = 0
         private var handledReplacementID: UInt64 = 0
 
+        /// Rendered-editing state. The presentation is rebuilt only when the
+        /// mode changes or the text changes outside this coordinator; ordinary
+        /// edits apply incrementally.
+        private var renderedModeActive = false
+        private var renderedPresentation: RenderedEditorPresentation?
+        private var renderedGeneration: UInt64?
+        private var lastRenderedActiveLine: Range<Int>?
+
         init(model: EditorModel) {
             self.model = model
+            let theme = EditorTheme()
+            self.theme = theme
+            self.renderedStyler = RenderedEditorStyler(theme: theme, tabSize: model.tabSize)
             super.init()
         }
 
         deinit {
             highlightTask?.cancel()
             fullPassTask?.cancel()
+            renderedTask?.cancel()
         }
 
         func attach(to textView: NSTextView) {
@@ -122,6 +137,13 @@ extension EditorTextView {
             synchronizedGeneration = model.documentTextGeneration
             textView.delegate = self
             textView.textStorage?.delegate = self
+            if let editor = textView as? EditorNSTextView {
+                editor.renderedNavigation = { [weak self, weak textView] direction, extending in
+                    guard let self, let textView else { return false }
+                    return self.moveRenderedCaret(
+                        in: textView, direction: direction, extending: extending)
+                }
+            }
             updateCursorLocation()
         }
 
@@ -148,7 +170,12 @@ extension EditorTextView {
                 self.model.refreshAfterExternalChange()
                 self.updateCursorLocation()
             }
-            highlightWholeDocument()
+            if model.isRenderedEditingActive {
+                rebuildRenderedPresentation()
+                scheduleRenderedProjection(full: true, delay: .zero)
+            } else {
+                highlightWholeDocument()
+            }
         }
 
         /// Called from `updateNSView`; starts a full pass when the format changed.
@@ -160,6 +187,8 @@ extension EditorTextView {
                 // selection after SwiftUI finishes updating the representable.
                 Task { @MainActor [weak self] in self?.fulfillRevealRequest() }
             }
+            updateRenderedEditingMode()
+            guard !model.isRenderedEditingActive else { return }
             guard textView != nil, fullPassFormatID != model.format.id else { return }
             fullPassFormatID = model.format.id
             highlightWholeDocument()
@@ -180,6 +209,7 @@ extension EditorTextView {
             guard !isSynchronizing else { return }
             updateCursorLocation()
             textView?.needsDisplay = true
+            renderedSelectionDidChange()
         }
 
         private func updateCursorLocation() {
@@ -203,9 +233,13 @@ extension EditorTextView {
             guard editedMask.contains(.editedCharacters) else { return }
             isProcessingCharacterEdit = true
             defer { isProcessingCharacterEdit = false }
+
+            let oldRange = NSRange(location: editedRange.location,
+                                   length: editedRange.length - delta)
+            var replacement = ""
             if !isSynchronizing {
                 // Read only the replacement; do not materialize the whole file.
-                let replacement = (textStorage.mutableString as NSString)
+                replacement = (textStorage.mutableString as NSString)
                     .substring(with: editedRange)
                 synchronizedGeneration = model.applyTextEdit(
                     editedRange: editedRange, delta: delta, replacement: replacement)
@@ -215,11 +249,21 @@ extension EditorTextView {
             if displayedVisualization != nil {
                 Task { @MainActor [weak self] in self?.refreshParserVisualization() }
             }
-            dirty.record(edited: editedRange, delta: delta)
             // A character change can invalidate the Markdown/HTML scanner state
             // for the edit point and everything after it.
             highlighter?.invalidateCheckpoints(from: editedRange.location)
-            scheduleHighlight()
+
+            if model.isRenderedEditingActive {
+                if !isSynchronizing {
+                    observeRenderedEdit(oldRange: oldRange, replacement: replacement,
+                                        textStorage: textStorage)
+                }
+                scheduleRenderedProjection(full: true,
+                                           delay: .milliseconds(25))
+            } else {
+                dirty.record(edited: editedRange, delta: delta)
+                scheduleHighlight()
+            }
         }
 
         // MARK: Highlighting
@@ -260,6 +304,265 @@ extension EditorTextView {
                 }
             }
             return highlighter
+        }
+
+        // MARK: Rendered editing
+
+        /// Starts, stops or refreshes live rendered editing after a model
+        /// change. The expensive full-document pass is always deferred; mode
+        /// changes happen while SwiftUI is updating the view.
+        private func updateRenderedEditingMode() {
+            let active = model.isRenderedEditingActive
+            if active {
+                let length = textView?.textStorage?.length ?? 0
+                if !renderedModeActive {
+                    renderedModeActive = true
+                    fullPassFormatID = nil
+                    rebuildRenderedPresentation()
+                    scheduleRenderedProjection(full: true, delay: .zero)
+                } else if renderedPresentation == nil
+                            || renderedGeneration != synchronizedGeneration
+                            || renderedPresentation?.sourceLength != length {
+                    rebuildRenderedPresentation()
+                    scheduleRenderedProjection(full: true, delay: .zero)
+                }
+            } else if renderedModeActive {
+                renderedModeActive = false
+                renderedPresentation = nil
+                renderedGeneration = nil
+                lastRenderedActiveLine = nil
+                renderedTask?.cancel()
+                highlighter?.invalidateCheckpoints()
+                // Let `modelDidChange` start a source-highlighting pass for the
+                // plain presentation.
+                fullPassFormatID = nil
+            }
+        }
+
+        private func rebuildRenderedPresentation() {
+            guard let storage = textView?.textStorage else {
+                renderedPresentation = nil
+                renderedGeneration = nil
+                return
+            }
+            do {
+                renderedPresentation = try RenderedEditorPresentation(source: storage.string)
+                renderedGeneration = synchronizedGeneration
+                lastRenderedActiveLine = nil
+            } catch {
+                renderedPresentation = nil
+                renderedGeneration = nil
+                assertionFailure("Rendered Markdown projection failed: \(error)")
+            }
+        }
+
+        /// Keeps the projection in sync with one character edit. Applying the
+        /// edit incrementally reuses unchanged blocks and avoids reparsing the
+        /// whole document into fresh block identities.
+        private func observeRenderedEdit(oldRange: NSRange,
+                                         replacement: String,
+                                         textStorage: NSTextStorage) {
+            guard let presentation = renderedPresentation,
+                  presentation.sourceLength == oldRange.location + oldRange.length else {
+                rebuildRenderedPresentation()
+                return
+            }
+            do {
+                var updated = presentation
+                try updated.apply(SourceEdit(
+                    range: oldRange.location..<(oldRange.location + oldRange.length),
+                    replacement: replacement))
+                renderedPresentation = updated
+                renderedGeneration = synchronizedGeneration
+            } catch {
+                rebuildRenderedPresentation()
+            }
+        }
+
+        private func scheduleRenderedProjection(full: Bool, delay: Duration) {
+            renderedTask?.cancel()
+            renderedTask = Task { [weak self] in
+                try? await Task.sleep(for: delay)
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                self?.applyRenderedProjection(full: full)
+            }
+        }
+
+        /// Applies the current presentation to text-storage attributes.
+        ///
+        /// `full` restyles the whole document. Otherwise only the previous and
+        /// current caret lines are reset, which is what makes moving the caret
+        /// through rendered text cheap.
+        func applyRenderedProjection(full: Bool) {
+            guard model.isRenderedEditingActive,
+                  let textView,
+                  let storage = textView.textStorage else { return }
+
+            if renderedPresentation == nil || renderedGeneration != synchronizedGeneration {
+                rebuildRenderedPresentation()
+            }
+            guard let presentation = renderedPresentation,
+                  presentation.sourceLength == storage.length else { return }
+            if textView.hasMarkedText() {
+                scheduleRenderedProjection(full: full, delay: .milliseconds(80))
+                return
+            }
+            guard storage.length > 0 else {
+                lastRenderedActiveLine = nil
+                return
+            }
+
+            let activeLine = activeLineRange(in: textView)
+            let ranges: [Range<Int>]
+            if full || lastRenderedActiveLine == nil {
+                ranges = [0..<storage.length]
+            } else if let old = lastRenderedActiveLine, old != activeLine {
+                if old.overlaps(activeLine) {
+                    let lower = min(old.lowerBound, activeLine.lowerBound)
+                    let upper = max(old.upperBound, activeLine.upperBound)
+                    ranges = [lower..<upper]
+                } else {
+                    ranges = [old, activeLine]
+                }
+            } else {
+                ranges = []
+            }
+
+            let source = storage.mutableString
+            for range in ranges where !range.isEmpty {
+                applyRenderedStyles(presentation: presentation,
+                                    to: storage,
+                                    in: range,
+                                    activeLine: activeLine,
+                                    source: source)
+            }
+
+            if activeLine.lowerBound < activeLine.upperBound {
+                currentHighlighter()?.apply(
+                    to: storage,
+                    in: NSRange(location: activeLine.lowerBound,
+                                length: activeLine.count))
+            }
+            textView.typingAttributes = theme.baseAttributes
+            lastRenderedActiveLine = activeLine
+        }
+
+        private func applyRenderedStyles(presentation: RenderedEditorPresentation,
+                                         to storage: NSTextStorage,
+                                         in range: Range<Int>,
+                                         activeLine: Range<Int>,
+                                         source: NSString) {
+            let spans = presentation.spans(intersecting: range, activeLine: activeLine)
+            storage.beginEditing()
+            storage.setAttributes(
+                theme.baseAttributes,
+                range: NSRange(location: range.lowerBound, length: range.count))
+            renderedStyler.apply(spans: spans,
+                                 to: storage,
+                                 clippedTo: range,
+                                 source: source)
+            storage.endEditing()
+        }
+
+        /// Re-renders when the caret (or a selection endpoint) moves to another
+        /// line, revealing that line's markup and collapsing the previous one.
+        private func renderedSelectionDidChange() {
+            guard model.isRenderedEditingActive,
+                  renderedPresentation != nil,
+                  !isSynchronizing,
+                  let textView,
+                  !textView.hasMarkedText() else { return }
+            let active = activeLineRange(in: textView)
+            guard active != lastRenderedActiveLine else { return }
+            applyRenderedProjection(full: false)
+        }
+
+        /// Synchronous source-highlighting pass used when rendered editing is
+        /// turned off and by tests. Production normally uses the chunked pass.
+        func applySourceHighlightingNow() {
+            guard let storage = textView?.textStorage,
+                  let highlighter = currentHighlighter() else { return }
+            highlighter.invalidateCheckpoints()
+            highlighter.apply(to: storage,
+                              in: NSRange(location: 0, length: storage.length))
+            textView?.typingAttributes = theme.baseAttributes
+        }
+
+        /// The current projection, exposed for tests that need to assert the
+        /// host and the presentation agree.
+        var presentationForTesting: RenderedEditorPresentation? {
+            renderedPresentation
+        }
+
+        private func activeLineRange(in textView: NSTextView) -> Range<Int> {
+            guard let storage = textView.textStorage else { return 0..<0 }
+            let length = storage.length
+            let location = min(max(textView.selectedRange().location, 0), length)
+            let line = storage.mutableString.lineRange(
+                for: NSRange(location: location, length: 0))
+            return line.location..<NSMaxRange(line)
+        }
+
+        /// Moves the caret through display positions outside the active line.
+        /// Returns `false` when the caller should fall back to AppKit.
+        private func moveRenderedCaret(in textView: NSTextView,
+                                       direction: Int,
+                                       extending: Bool) -> Bool {
+            guard model.isRenderedEditingActive,
+                  let storage = textView.textStorage,
+                  let presentation = renderedPresentation,
+                  presentation.sourceLength == storage.length,
+                  presentation.sourceLength > 0 else { return false }
+
+            let length = storage.length
+            let location = min(max(textView.selectedRange().location, 0), length)
+            let selectionLength = min(max(textView.selectedRange().length, 0),
+                                      length - location)
+            let current = NSRange(location: location, length: selectionLength)
+            let activeLine = activeLineRange(in: textView)
+
+            let next: NSRange
+            if extending {
+                if current.length == 0 {
+                    let target = presentation.nextSourceOffset(
+                        from: current.location, direction: direction,
+                        activeLine: activeLine)
+                    if direction < 0 {
+                        next = NSRange(location: target,
+                                       length: max(0, current.location - target))
+                    } else {
+                        next = NSRange(location: current.location,
+                                       length: max(0, target - current.location))
+                    }
+                } else if direction < 0 {
+                    let target = presentation.nextSourceOffset(
+                        from: current.location, direction: -1,
+                        activeLine: activeLine)
+                    next = NSRange(location: target,
+                                   length: max(0, NSMaxRange(current) - target))
+                } else {
+                    let upper = NSMaxRange(current)
+                    let target = presentation.nextSourceOffset(
+                        from: upper, direction: 1, activeLine: activeLine)
+                    next = NSRange(location: current.location,
+                                   length: max(0, target - current.location))
+                }
+            } else if current.length > 0 {
+                next = direction < 0
+                    ? NSRange(location: current.location, length: 0)
+                    : NSRange(location: NSMaxRange(current), length: 0)
+            } else {
+                let target = presentation.nextSourceOffset(
+                    from: current.location, direction: direction,
+                    activeLine: activeLine)
+                next = NSRange(location: target, length: 0)
+            }
+
+            guard next != current else { return true }
+            textView.setSelectedRange(next)
+            textView.scrollRangeToVisible(next)
+            return true
         }
 
         // MARK: Parser visualization

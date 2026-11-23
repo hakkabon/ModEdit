@@ -271,6 +271,7 @@ private final class PendingWrite: @unchecked Sendable {
 @MainActor
 final class ModEditWindowController: NSWindowController, NSToolbarDelegate, NSMenuItemValidation {
     private static let previewItem = NSToolbarItem.Identifier("ModEdit.TogglePreview")
+    private static let renderedItem = NSToolbarItem.Identifier("ModEdit.ToggleRenderedEditing")
     private static let workbenchItem = NSToolbarItem.Identifier("ModEdit.ToggleWorkbench")
 
     let model: EditorModel
@@ -317,6 +318,10 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate, NSMe
         model.showPreview.toggle()
     }
 
+    @objc private func toggleRenderedEditing(_ sender: Any?) {
+        model.toggleRenderedEditing()
+    }
+
     @objc private func toggleWorkbench(_ sender: Any?) {
         if model.format.id == "pl0" {
             model.showWorkbench.toggle()
@@ -326,16 +331,28 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate, NSMe
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.workbenchItem, Self.previewItem]
+        [.flexibleSpace, Self.renderedItem, Self.workbenchItem, Self.previewItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.workbenchItem, Self.previewItem]
+        [.flexibleSpace, Self.renderedItem, Self.workbenchItem, Self.previewItem]
     }
 
     func toolbar(_ toolbar: NSToolbar,
                  itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == Self.renderedItem {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Rendered Editing"
+            item.paletteLabel = "Rendered Editing"
+            item.toolTip = "Render Markdown in the editor while keeping the caret line editable"
+            item.image = NSImage(systemSymbolName: "textformat",
+                                 accessibilityDescription: "Rendered Editing")
+            item.target = self
+            item.action = #selector(toggleRenderedEditing(_:))
+            item.isBordered = true
+            return item
+        }
         if itemIdentifier == Self.workbenchItem {
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Parser Inspector"
@@ -365,6 +382,8 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate, NSMe
         switch item.itemIdentifier {
         case Self.previewItem:
             return model.format.supportsPreview
+        case Self.renderedItem:
+            return model.canUseRenderedEditing
         case Self.workbenchItem:
             return model.registry.format(withID: "pl0") != nil
         default:

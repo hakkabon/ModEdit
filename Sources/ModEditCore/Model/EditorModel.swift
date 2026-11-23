@@ -25,6 +25,9 @@ final class EditorModel: ObservableObject {
     /// Whether the live-preview pane is shown. Owned here rather than in the
     /// view so the window's toolbar can toggle it.
     @Published var showPreview = true
+    /// Whether Markdown syntax outside the caret line is collapsed in the
+    /// editor. Only formats that support rendered editing honour this.
+    @Published var showsRenderedEditing = false
     /// Whether the experimental parser inspector is visible for PL/0.
     @Published var showWorkbench = false
     @Published var showProblems = false
@@ -151,12 +154,39 @@ final class EditorModel: ObservableObject {
     /// Switches the document's format (highlighting and preview).
     func setFormat(_ newFormat: any DocumentFormat) {
         format = newFormat
+        if !newFormat.supportsRenderedEditing {
+            showsRenderedEditing = false
+        }
         pl0Visualization = nil
         languageAnalysis = nil
         clearBuild()
         toolingDocument = nil
         document.setFormat(newFormat)
         onFormatChange?(newFormat)
+    }
+
+    var supportsRenderedEditing: Bool { format.supportsRenderedEditing }
+
+    /// Rendered editing parses the document on each edit, so very large files
+    /// stay in source mode. The limit matches the scale where live preview
+    /// remains comfortable; it can be raised once incremental parsing work is
+    /// shared with the preview.
+    static let maximumRenderedEditingLength = 512 * 1_024
+
+    var canUseRenderedEditing: Bool {
+        format.supportsRenderedEditing
+            && document.textLength <= Self.maximumRenderedEditingLength
+    }
+
+    /// Rendered editing only takes effect for formats that opt in and
+    /// documents small enough to project on each edit.
+    var isRenderedEditingActive: Bool {
+        showsRenderedEditing && canUseRenderedEditing
+    }
+
+    func toggleRenderedEditing() {
+        guard canUseRenderedEditing else { return }
+        showsRenderedEditing.toggle()
     }
 
     /// Opens the PL/0 workbench from any document. The toolbar item is a
