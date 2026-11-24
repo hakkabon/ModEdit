@@ -62,14 +62,55 @@ struct RenderedEditorPresentationTests {
         #expect(span?.role == .text)
     }
 
+    @Test func displayOnlyContentBecomesSubstitutions() throws {
+        let source = "- &amp; `code`\n\n***\n\n![](x)\n\nlast\n"
+        let presentation = try RenderedEditorPresentation(source: source)
+        let text = source as NSString
+
+        let bullet = presentation.substitution(at: 0)
+        #expect(bullet?.displayText == "• ")
+        #expect(bullet?.sourceRange == 0..<2)
+
+        let entity = text.range(of: "&amp;").location
+        #expect(presentation.substitution(at: entity)?.displayText == "&")
+
+        let code = text.range(of: "`code`").location
+        #expect(presentation.substitution(at: code)?.displayText == "code")
+
+        let thematicBreak = text.range(of: "***").location
+        #expect(presentation.substitution(at: thematicBreak)?.displayText == "───")
+
+        let image = text.range(of: "![](x)").location
+        #expect(presentation.substitution(at: image)?.displayText == "image")
+
+        #expect(presentation.substitutions.count == 5)
+    }
+
+    @Test func activeLineSuppressesSubstitutions() throws {
+        let source = "- &amp; word\n\nlast\n"
+        let presentation = try RenderedEditorPresentation(source: source)
+        let firstLine = presentation.lineRange(containing: 0)
+
+        let bullet = span(in: presentation, at: 0, activeLine: firstLine)
+        #expect(bullet?.isRaw == true)
+        #expect(bullet?.isSubstitution == false)
+        #expect(bullet?.displayText == "• ")
+
+        let bulletOutside = span(in: presentation, at: 0, activeLine: nil)
+        #expect(bulletOutside?.isRaw == false)
+        #expect(bulletOutside?.isSubstitution == true)
+        #expect(bulletOutside?.displayLength == 2)
+    }
+
     @Test func incrementalEditsMatchAFreshPresentation() throws {
         var incremental = try RenderedEditorPresentation(source: "One\n\nTwo\n")
-        try incremental.apply(SourceEdit(range: 3..<3, replacement: "!"))
+        try incremental.apply(SourceEdit(range: 5..<5, replacement: "- "))
 
-        let fresh = try RenderedEditorPresentation(source: "One!\n\nTwo\n")
+        let fresh = try RenderedEditorPresentation(source: "One\n\n- Two\n")
 
         #expect(incremental.source == fresh.source)
         #expect(incremental.spans(activeLine: nil) == fresh.spans(activeLine: nil))
+        #expect(incremental.substitutions == fresh.substitutions)
         #expect(incremental.displayLength == fresh.displayLength)
     }
 
@@ -90,6 +131,33 @@ struct RenderedEditorPresentationTests {
         // the displayed space after the emphasis.
         #expect(presentation.nextSourceOffset(
             from: 8, direction: 1, activeLine: secondLine) == 11)
+    }
+
+    @Test func controlCharacterSubstitutionsKeepSourceSpelling() throws {
+        let source = "a&#10;b\n"
+        let presentation = try RenderedEditorPresentation(source: source)
+        let entity = (source as NSString).range(of: "&#10;").location
+
+        // A substituted newline would silently change the document's line
+        // structure, so it must remain source text.
+        #expect(presentation.substitution(at: entity) == nil)
+    }
+
+    @Test func caretMovesThroughSubstitutionDisplayWidth() throws {
+        let source = "&amp;X\n\nsecond\n"
+        let presentation = try RenderedEditorPresentation(source: source)
+        let secondLine = presentation.lineRange(
+            containing: (source as NSString).range(of: "second").location)
+
+        // The five-character entity occupies one display cell, so moving right
+        // from its start lands on the `X`, and moving left skips back over the
+        // entire entity.
+        #expect(presentation.nextSourceOffset(
+            from: 0, direction: 1, activeLine: secondLine) == 5)
+        #expect(presentation.nextSourceOffset(
+            from: 5, direction: 1, activeLine: secondLine) == 6)
+        #expect(presentation.nextSourceOffset(
+            from: 5, direction: -1, activeLine: secondLine) == 0)
     }
 
     @Test func caretMovesThroughLiteralSourceInsideTheActiveLine() throws {

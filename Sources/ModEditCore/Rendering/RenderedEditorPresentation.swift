@@ -15,10 +15,30 @@ struct RenderedEditorSpan: Hashable, Sendable {
     /// Part of the line under the caret. The editor shows the literal source
     /// here so markup can be edited without switching modes.
     let isRaw: Bool
+    /// The text the projection wants displayed. It may differ from the source
+    /// spelling for entities, escapes, list markers, thematic breaks and
+    /// inline code.
+    let displayText: String
+    /// Whether the host should substitute `displayText` for the source
+    /// spelling. Raw and hidden spans never substitute.
+    let isSubstitution: Bool
     let role: RenderedRunRole
     let attributes: RenderedAttributes
 
-    var displayLength: Int { isHidden ? 0 : sourceRange.count }
+    var displayLength: Int {
+        if isHidden { return 0 }
+        return isSubstitution ? displayText.utf16.count : sourceRange.count
+    }
+}
+
+/// One source range whose visible spelling differs from its rendered display
+/// text. The host replaces glyphs without touching `NSTextStorage`.
+struct RenderedEditorSubstitution: Hashable, Sendable {
+    let sourceRange: Range<Int>
+    let displayText: String
+    let role: RenderedRunRole
+
+    var displayLength: Int { displayText.utf16.count }
 }
 
 /// The Markdown projection used by live rendered editing.
@@ -34,9 +54,13 @@ struct RenderedEditorSpan: Hashable, Sendable {
 /// its markup.
 struct RenderedEditorPresentation: Sendable {
     private(set) var text: MarkdownRenderedText
+    /// Display-only substitutions outside the raw caret line. Sorted by source
+    /// range, matching the runs of `text.document`.
+    private(set) var substitutions: [RenderedEditorSubstitution]
 
     init(source: String, renderer: MarkdownRenderer = MarkdownRenderer()) throws {
         self.text = try MarkdownRenderedText(source: source, renderer: renderer)
+        self.substitutions = Self.makeSubstitutions(in: text.document)
     }
 
     var source: String { text.document.source }
@@ -47,7 +71,27 @@ struct RenderedEditorPresentation: Sendable {
     /// blocks.
     @discardableResult
     mutating func apply(_ edit: SourceEdit) throws -> Set<BlockID> {
-        try text.apply(edit)
+        let invalidated = try text.apply(edit)
+        substitutions = Self.makeSubstitutions(in: text.document)
+        return invalidated
+    }
+
+    /// The substitution covering `offset`, if any.
+    func substitution(at offset: Int) -> RenderedEditorSubstitution? {
+        var low = 0
+        var high = substitutions.count - 1
+        while low <= high {
+            let middle = (low + high) / 2
+            let candidate = substitutions[middle]
+            if offset < candidate.sourceRange.lowerBound {
+                high = middle - 1
+            } else if offset >= candidate.sourceRange.upperBound {
+                low = middle + 1
+            } else {
+                return candidate
+            }
+        }
+        return nil
     }
 
     /// All spans that intersect `range`, in source order.
@@ -69,10 +113,15 @@ struct RenderedEditorPresentation: Sendable {
             for run in block.runs {
                 guard run.sourceRange.overlaps(query) else { continue }
                 let isRaw = activeLine.map { $0.overlaps(run.sourceRange) } ?? false
+                let isHidden = run.displayLength == 0 && !isRaw
+                let isSubstitution = !isRaw && !isHidden
+                    && substitution(at: run.sourceRange.lowerBound) != nil
                 spans.append(RenderedEditorSpan(
                     sourceRange: run.sourceRange,
-                    isHidden: run.displayLength == 0 && !isRaw,
+                    isHidden: isHidden,
                     isRaw: isRaw,
+                    displayText: run.displayText,
+                    isSubstitution: isSubstitution,
                     role: run.role,
                     attributes: run.attributes))
             }
@@ -145,5 +194,52 @@ struct RenderedEditorPresentation: Sendable {
 
     private func clamp(_ offset: Int) -> Int {
         max(0, min(offset, sourceLength))
+    }
+
+    // MARK: Substitutions
+
+    private static func makeSubstitutions(
+        in document: RenderedDocument
+    ) -> [RenderedEditorSubstitution] {
+        var result: [RenderedEditorSubstitution] = []
+        let source = document.source as NSString
+        for block in document.blocks {
+            for run in block.runs
+            where isDisplaySubstitution(run, in: source) {
+                result.append(RenderedEditorSubstitution(
+                    sourceRange: run.sourceRange,
+                    displayText: run.displayText,
+                    role: run.role))
+            }
+        }
+        return result
+    }
+
+    /// Substitutions preserve the source range but show different glyphs.
+    ///
+    /// A display string longer than its source range cannot be represented by
+    /// one visible source slot per display unit, so it keeps the source
+    /// spelling. Line breaks and other control characters are excluded because
+    /// hiding or substituting them would change the document's line structure.
+    private static func isDisplaySubstitution(
+        _ run: RenderedRun,
+        in source: NSString
+    ) -> Bool {
+        guard run.displayLength > 0,
+              run.displayLength <= run.sourceRange.count,
+              run.role != .lineBreak,
+              run.role != .softBreak,
+              !run.displayText.unicodeScalars.contains(where: { scalar in
+                  switch scalar.properties.generalCategory {
+                  case .control, .lineSeparator, .paragraphSeparator, .format:
+                      return true
+                  default:
+                      return false
+                  }
+              }) else { return false }
+        let sourceText = source.substring(
+            with: NSRange(location: run.sourceRange.lowerBound,
+                          length: run.sourceRange.count))
+        return sourceText != run.displayText
     }
 }

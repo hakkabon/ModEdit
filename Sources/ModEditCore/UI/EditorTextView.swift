@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreText
 import PL0Language
 import RenderedText
 
@@ -82,7 +83,9 @@ struct EditorTextView: NSViewRepresentable {
 
 extension EditorTextView {
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate, @preconcurrency NSTextStorageDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate,
+                             @preconcurrency NSLayoutManagerDelegate,
+                             @preconcurrency NSTextStorageDelegate {
         private static let debounce: Duration = .milliseconds(80)
         private static let chunkSize = 50_000
 
@@ -117,6 +120,13 @@ extension EditorTextView {
         private var renderedPresentation: RenderedEditorPresentation?
         private var renderedGeneration: UInt64?
         private var lastRenderedActiveLine: Range<Int>?
+        private var substitutionGlyphCache: [SubstitutionGlyphKey: [CGGlyph]] = [:]
+
+        private struct SubstitutionGlyphKey: Hashable {
+            let text: String
+            let fontName: String
+            let pointSize: CGFloat
+        }
 
         init(model: EditorModel) {
             self.model = model
@@ -137,6 +147,7 @@ extension EditorTextView {
             synchronizedGeneration = model.documentTextGeneration
             textView.delegate = self
             textView.textStorage?.delegate = self
+            textView.layoutManager?.delegate = self
             if let editor = textView as? EditorNSTextView {
                 editor.renderedNavigation = { [weak self, weak textView] direction, extending in
                     guard let self, let textView else { return false }
@@ -333,6 +344,9 @@ extension EditorTextView {
                 lastRenderedActiveLine = nil
                 renderedTask?.cancel()
                 highlighter?.invalidateCheckpoints()
+                // Substituted glyphs must return to their source spelling.
+                let length = textView?.textStorage?.length ?? 0
+                invalidateRenderedGlyphs(in: 0..<length)
                 // Let `modelDidChange` start a source-highlighting pass for the
                 // plain presentation.
                 fullPassFormatID = nil
@@ -446,6 +460,119 @@ extension EditorTextView {
             }
             textView.typingAttributes = theme.baseAttributes
             lastRenderedActiveLine = activeLine
+            for range in ranges {
+                invalidateRenderedGlyphs(in: range)
+            }
+        }
+
+        private func invalidateRenderedGlyphs(in range: Range<Int>) {
+            guard !range.isEmpty,
+                  let layoutManager = textView?.layoutManager else { return }
+            let characterRange = NSRange(location: range.lowerBound,
+                                         length: range.count)
+            layoutManager.invalidateGlyphs(
+                forCharacterRange: characterRange,
+                changeInLength: 0,
+                actualCharacterRange: nil)
+            layoutManager.invalidateLayout(
+                forCharacterRange: characterRange,
+                actualCharacterRange: nil)
+        }
+
+        // MARK: Rendered glyph substitution
+
+        /// Replaces source glyphs with their rendered spelling without touching
+        /// text storage. Each display unit occupies the source slot it replaces;
+        /// extra source slots become null glyphs, so layout width equals the
+        /// projection's display width while offsets, undo and saving stay tied
+        /// to the source.
+        func layoutManager(
+            _ layoutManager: NSLayoutManager,
+            shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+            properties props: UnsafePointer<NSLayoutManager.GlyphProperty>,
+            characterIndexes charIndexes: UnsafePointer<Int>,
+            font aFont: NSFont,
+            forGlyphRange glyphRange: NSRange
+        ) -> Int {
+            guard model.isRenderedEditingActive,
+                  let presentation = renderedPresentation,
+                  !presentation.substitutions.isEmpty,
+                  let storage = layoutManager.textStorage,
+                  presentation.sourceLength == storage.length,
+                  glyphRange.length > 0 else { return 0 }
+
+            var modifiedGlyphs = Array(UnsafeBufferPointer(
+                start: glyphs, count: glyphRange.length))
+            var modifiedProperties = Array(UnsafeBufferPointer(
+                start: props, count: glyphRange.length))
+            var changed = false
+
+            for index in 0..<glyphRange.length {
+                let characterIndex = charIndexes[index]
+                guard let substitution = presentation.substitution(at: characterIndex),
+                      !(lastRenderedActiveLine?.overlaps(substitution.sourceRange) ?? false),
+                      let displayGlyphs = displayGlyphs(
+                        for: substitution.displayText, font: aFont) else { continue }
+
+                let offset = characterIndex - substitution.sourceRange.lowerBound
+                if offset < displayGlyphs.count {
+                    modifiedGlyphs[index] = displayGlyphs[offset]
+                    modifiedProperties[index].remove(.null)
+                } else {
+                    modifiedGlyphs[index] = 0
+                    modifiedProperties[index] = .null
+                }
+                changed = true
+            }
+
+            guard changed else { return 0 }
+            modifiedGlyphs.withUnsafeBufferPointer { glyphBuffer in
+                modifiedProperties.withUnsafeBufferPointer { propertyBuffer in
+                    layoutManager.setGlyphs(
+                        glyphBuffer.baseAddress!,
+                        properties: propertyBuffer.baseAddress!,
+                        characterIndexes: charIndexes,
+                        font: aFont,
+                        forGlyphRange: glyphRange)
+                }
+            }
+            return glyphRange.length
+        }
+
+        /// Glyphs for a display string in the font the layout manager is using.
+        ///
+        /// Fonts without every glyph keep the source spelling instead of
+        /// drawing a missing-glyph box. Surrogate pairs and combining sequences
+        /// are left alone because one source slot cannot represent them
+        /// reliably.
+        private func displayGlyphs(for text: String, font: NSFont) -> [CGGlyph]? {
+            let key = SubstitutionGlyphKey(
+                text: text, fontName: font.fontName, pointSize: font.pointSize)
+            if let cached = substitutionGlyphCache[key] {
+                return cached.isEmpty ? nil : cached
+            }
+
+            let units = Array(text.utf16)
+            guard !units.isEmpty,
+                  units.count == text.unicodeScalars.count else {
+                substitutionGlyphCache[key] = []
+                return nil
+            }
+            var glyphs = [CGGlyph](repeating: 0, count: units.count)
+            let ctFont = font as CTFont
+            let found = units.withUnsafeBufferPointer { characters in
+                glyphs.withUnsafeMutableBufferPointer { buffer in
+                    CTFontGetGlyphsForCharacters(
+                        ctFont, characters.baseAddress!, buffer.baseAddress!,
+                        units.count)
+                }
+            }
+            guard found, !glyphs.contains(0) else {
+                substitutionGlyphCache[key] = []
+                return nil
+            }
+            substitutionGlyphCache[key] = glyphs
+            return glyphs
         }
 
         private func applyRenderedStyles(presentation: RenderedEditorPresentation,

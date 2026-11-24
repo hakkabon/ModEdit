@@ -14,8 +14,9 @@ the right shows it as headings, emphasis, symbols and mathematics.
 > comparison.
 > Hybrid rendered editing is available for Markdown: markup outside the caret
 > line is collapsed in place while the caret line remains literal, editable
-> source. Display-only substitutions (bullets, entities, thematic breaks,
-> images) still show their source spelling. See the [roadmap](#roadmap).
+> source. Entities, escapes, bullets, thematic breaks and inline-code delimiters
+> show their rendered glyphs; actual image attachments remain roadmapped. See
+> the [roadmap](#roadmap).
 
 ## Table of contents
 
@@ -57,10 +58,13 @@ the right shows it as headings, emphasis, symbols and mathematics.
   (Japanese/Chinese/Korean composition).
 * **Rendered editing** for Markdown (toolbar and status-bar toggle): markup
   outside the caret line is collapsed in place, headings and emphasis are styled,
-  and the caret line stays literal source. The source in `NSTextStorage` is
-  unchanged, so offsets, find, undo and saving behave exactly as in source mode,
-  and the caret moves through display positions across collapsed markup. Edits
-  reuse unchanged projection blocks; documents above 512 KB stay in source mode.
+  and the caret line stays literal source. Display-only content uses glyph
+  substitution: entities and escapes show their decoded character, bullets use
+  `•`, thematic breaks use a rule, and inline-code delimiters disappear. The
+  source in `NSTextStorage` is unchanged, so offsets, find, undo and saving
+  behave exactly as in source mode, and the caret moves through display
+  positions across collapsed markup. Edits reuse unchanged projection blocks;
+  documents above 512 KB stay in source mode.
 * **Live preview** (WebKit) that keeps its scroll position while you type.
   Documents above 5 MB show a notice instead of being copied and rendered:
   * *Markdown* — headings, paragraphs, lists, block quotes, fenced code,
@@ -313,8 +317,15 @@ collapsed, and it moves the caret by display position outside the caret line.
 colour and applies a per-character negative kern, reducing their advance to zero
 without changing line height. Text edits call `MarkdownRenderedText.apply` so
 only invalidated blocks are reparsed, while selection changes restyle just the
-old and new caret lines. The WebKit preview still uses `MarkdownHTML`; moving it
-onto the same projection is roadmap step 6.
+old and new caret lines.
+
+Display-only runs do not change storage either. The coordinator's
+`NSLayoutManager` delegate replaces source glyphs with the projection's display
+glyphs and marks surplus source slots as null glyphs, so `&amp;` renders as one
+cell containing `&`, a bullet source marker renders as `•`, and layout width
+matches the source↔display map. Unsupported glyphs, line breaks and substitutions
+longer than their source range keep the source spelling. The WebKit preview
+still uses `MarkdownHTML`; moving it onto the same projection is roadmap step 6.
 
 ### Unified language providers
 
@@ -879,11 +890,14 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
   fences and HTML tags/comments, but it is not a complete CommonMark or HTML
   parser (for example, tilde fences and embedded languages are not recognised).
 * **Rendered editing is hybrid.** The caret line always shows literal source, so
-  markup is visible wherever you are editing. Display-only content is not glyph-
-  substituted yet: list bullets, entities, thematic breaks and images still show
-  their Markdown source spelling (styled by role) rather than their rendered
-  form. Collapsed characters remain in storage with zero width, so text
-  selection may visually begin or end on hidden syntax.
+  markup is visible wherever you are editing. Display-only content uses glyph
+  substitution, but images are not drawn: the projection shows alt text or the
+  word `image`. Display strings that are longer than their source range, contain
+  control characters, or lack a glyph in the editor font fall back to source
+  spelling (the unchecked task box is one example in the system monospaced
+  font). Collapsed characters remain in storage with zero width, so text
+  selection may visually begin or end on hidden syntax, and the substitution
+  slots map to source characters rather than a separate rendered-text buffer.
 * **Preview and rendered editing are independent.** The preview remains a
   separate pane; rendered editing does not synchronise its scroll position or
   selection with the preview.
@@ -1003,11 +1017,11 @@ evidence as stable-prefix reuse.
    cancellation and the standard delta-encoded semantic-token wire format.
 4. **Rendering inside the editor.** Hybrid rendered editing is implemented:
    `RenderedEditorPresentation` collapses `RenderedText` runs outside the caret
-   line, and the caret moves through source/display positions. Remaining work is
-   glyph substitution for display-only content (list bullets, entities,
-   thematic breaks, images) through text attachments or TextKit 2 layout
-   fragments, plus raising the 512 KB limit by sharing incremental parsing with
-   the preview.
+   line, the caret moves through source/display positions, and layout-manager
+   glyph substitution draws entities, escapes, list markers, thematic breaks and
+   inline-code content. Remaining work is drawing real image attachments and
+   inline media, resolving missing display glyphs through fallback fonts, and
+   raising the 512 KB limit by sharing incremental parsing with the preview.
 5. **Scroll and caret synchronisation** between source and preview (needs the
    same source map).
 6. **Real markup parsers:** `swift-markdown` now drives the `RenderedText`

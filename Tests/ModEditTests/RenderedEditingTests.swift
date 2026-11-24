@@ -1,5 +1,6 @@
 import Testing
 import AppKit
+import CoreText
 @testable import ModEditCore
 
 @Suite("Rendered editing", .serialized)
@@ -166,6 +167,119 @@ struct RenderedEditingTests {
         #expect(harness.textView.renderedNavigation != nil)
         harness.textView.moveRight(nil)
         #expect(harness.textView.selectedRange().location == 2)
+    }
+
+    @Test func entitiesUseDisplayGlyphsAndDisplayWidth() throws {
+        let source = "&amp;X\n\n&X\n\nlast\n"
+        let harness = makeHarness(text: source, caret: source.utf16.count)
+        let layout = try #require(harness.textView.layoutManager)
+        let container = try #require(harness.textView.textContainer)
+        layout.ensureLayout(for: container)
+
+        let entityGlyph = try glyph(harness.textView, at: 0)
+        let literalGlyph = try glyph(harness.textView, at: 8)
+        #expect(entityGlyph == literalGlyph)
+
+        for offset in 1..<5 {
+            let glyphIndex = layout.glyphIndexForCharacter(at: offset)
+            #expect(layout.propertyForGlyph(at: glyphIndex).contains(.null))
+        }
+
+        // The entity occupies one display cell, so the following `X` starts at
+        // the same x position as the literal `&X` on the next line.
+        let entityX = layout.location(forGlyphAt: layout.glyphIndexForCharacter(at: 5)).x
+        let literalX = layout.location(forGlyphAt: layout.glyphIndexForCharacter(at: 9)).x
+        #expect(abs(entityX - literalX) < 0.5)
+    }
+
+    @Test func listMarkersAndThematicBreaksUseRenderedGlyphs() throws {
+        let source = "- item\n\n---\n\nlast\n"
+        let harness = makeHarness(text: source, caret: source.utf16.count)
+        let font = try #require(harness.textView.font)
+
+        let bulletGlyph = try glyph(harness.textView, at: 0)
+        #expect(bulletGlyph == glyph(for: "•", font: font))
+        #expect(bulletGlyph != glyph(for: "-", font: font))
+
+        let rule = (source as NSString).range(of: "---").location
+        let ruleGlyph = try glyph(harness.textView, at: rule)
+        #expect(ruleGlyph == glyph(for: "─", font: font))
+    }
+
+    @Test func caretLineRestoresSourceGlyphs() throws {
+        let source = "- item\n\nlast\n"
+        let harness = makeHarness(text: source, caret: source.utf16.count)
+        let font = try #require(harness.textView.font)
+
+        #expect(try glyph(harness.textView, at: 0) == glyph(for: "•", font: font))
+
+        harness.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        harness.coordinator.applyRenderedProjection(full: false)
+
+        #expect(try glyph(harness.textView, at: 0) == glyph(for: "-", font: font))
+    }
+
+    @Test func unsupportedSubstitutionsKeepSourceSpelling() throws {
+        // The monospaced system font has no glyph for the task checkbox. The
+        // projection still says "☐ ", but the editor must keep the source
+        // spelling rather than draw a missing-glyph box.
+        let source = "- [ ] task\n\nlast\n"
+        let harness = makeHarness(text: source, caret: source.utf16.count)
+        let font = try #require(harness.textView.font)
+        let marker = (source as NSString).range(of: "[ ]").location
+
+        #expect(try glyph(harness.textView, at: marker) == glyph(for: "[", font: font))
+    }
+
+    @Test func editingRemovesStaleSubstitutions() throws {
+        let source = "&amp;X\n\nlast\n"
+        let harness = makeHarness(text: source, caret: source.utf16.count)
+        let font = try #require(harness.textView.font)
+        let layout = try #require(harness.textView.layoutManager)
+
+        harness.textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 1, length: 3), with: "zzz")
+        harness.coordinator.applyRenderedProjection(full: true)
+
+        let edited = "&zzz;X\n\nlast\n"
+        #expect(harness.document.content.text == edited)
+        #expect(try glyph(harness.textView, at: 1) == glyph(for: "z", font: font))
+        let glyphIndex = layout.glyphIndexForCharacter(at: 1)
+        #expect(!layout.propertyForGlyph(at: glyphIndex).contains(.null))
+    }
+
+    @Test func disablingRenderedEditingRestoresSubstitutedGlyphs() throws {
+        let source = "- item\n\nlast\n"
+        let harness = makeHarness(text: source, caret: source.utf16.count)
+        let font = try #require(harness.textView.font)
+        #expect(try glyph(harness.textView, at: 0) == glyph(for: "•", font: font))
+
+        harness.model.showsRenderedEditing = false
+        harness.coordinator.modelDidChange()
+        harness.coordinator.applySourceHighlightingNow()
+
+        #expect(try glyph(harness.textView, at: 0) == glyph(for: "-", font: font))
+    }
+
+    private func glyph(_ textView: NSTextView, at characterIndex: Int) throws -> CGGlyph {
+        let layout = try #require(textView.layoutManager)
+        let container = try #require(textView.textContainer)
+        layout.ensureLayout(for: container)
+        return layout.cgGlyph(at: layout.glyphIndexForCharacter(at: characterIndex))
+    }
+
+    private func glyph(for character: Character, font: NSFont) -> CGGlyph {
+        let units = Array(String(character).utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: units.count)
+        let font = font as CTFont
+        units.withUnsafeBufferPointer { characters in
+            glyphs.withUnsafeMutableBufferPointer { buffer in
+                _ = CTFontGetGlyphsForCharacters(
+                    font, characters.baseAddress!, buffer.baseAddress!,
+                    units.count)
+            }
+        }
+        return glyphs[0]
     }
 
     private func isHidden(_ textView: NSTextView, at location: Int) -> Bool {
