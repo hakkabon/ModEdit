@@ -93,6 +93,7 @@ extension EditorTextView {
         private weak var textView: NSTextView?
         let theme: EditorTheme
         private let renderedStyler: RenderedEditorStyler
+        private let renderedImageCache = RenderedEditorImageCache()
 
         /// Highlighter cache: compiling the regular expressions is expensive,
         /// so build once per format instead of once per pass.
@@ -111,6 +112,7 @@ extension EditorTextView {
         private var isProcessingCharacterEdit = false
         private var displayedVisualization: PL0EditorVisualization?
         private var handledRevealID: UInt64 = 0
+        private var handledScrollID: UInt64 = 0
         private var handledReplacementID: UInt64 = 0
 
         /// Rendered-editing state. The presentation is rebuilt only when the
@@ -120,6 +122,7 @@ extension EditorTextView {
         private var renderedPresentation: RenderedEditorPresentation?
         private var renderedGeneration: UInt64?
         private var lastRenderedActiveLine: Range<Int>?
+        private var lastRenderedImageLines: [Range<Int>] = []
         private var substitutionGlyphCache: [SubstitutionGlyphKey: [CGGlyph]] = [:]
 
         private struct SubstitutionGlyphKey: Hashable {
@@ -149,6 +152,7 @@ extension EditorTextView {
             textView.textStorage?.delegate = self
             textView.layoutManager?.delegate = self
             if let editor = textView as? EditorNSTextView {
+                editor.renderedImageBackgroundColor = theme.backgroundColor
                 editor.renderedNavigation = { [weak self, weak textView] direction, extending in
                     guard let self, let textView else { return false }
                     return self.moveRenderedCaret(
@@ -174,6 +178,8 @@ extension EditorTextView {
             // The whole text was replaced; every cached scanner state refers to
             // text that no longer exists.
             highlighter?.invalidateCheckpoints()
+            lastRenderedImageLines = []
+            (textView as? EditorNSTextView)?.renderedImages = []
             // Do not publish model state from inside `updateNSView`; refresh
             // after the current view update has finished.
             Task { @MainActor [weak self] in
@@ -197,6 +203,9 @@ extension EditorTextView {
                 // Selecting text fires the AppKit delegate. Publish the new
                 // selection after SwiftUI finishes updating the representable.
                 Task { @MainActor [weak self] in self?.fulfillRevealRequest() }
+            }
+            if let request = model.editorScrollRequest, request.id != handledScrollID {
+                Task { @MainActor [weak self] in self?.fulfillEditorScrollRequest() }
             }
             updateRenderedEditingMode()
             guard !model.isRenderedEditingActive else { return }
@@ -344,6 +353,14 @@ extension EditorTextView {
                 lastRenderedActiveLine = nil
                 renderedTask?.cancel()
                 highlighter?.invalidateCheckpoints()
+                // Image line heights and cleared text colour must not leak into
+                // source mode.
+                if let storage = textView?.textStorage {
+                    resetRenderedImageLines(in: storage)
+                }
+                if let editor = textView as? EditorNSTextView {
+                    editor.renderedImages = []
+                }
                 // Substituted glyphs must return to their source spelling.
                 let length = textView?.textStorage?.length ?? 0
                 invalidateRenderedGlyphs(in: 0..<length)
@@ -417,13 +434,21 @@ extension EditorTextView {
                 rebuildRenderedPresentation()
             }
             guard let presentation = renderedPresentation,
-                  presentation.sourceLength == storage.length else { return }
+                  presentation.sourceLength == storage.length else {
+                resetRenderedImageLines(in: storage)
+                if let editor = textView as? EditorNSTextView {
+                    editor.renderedImages = []
+                }
+                return
+            }
             if textView.hasMarkedText() {
                 scheduleRenderedProjection(full: full, delay: .milliseconds(80))
                 return
             }
             guard storage.length > 0 else {
                 lastRenderedActiveLine = nil
+                resetRenderedImageLines(in: storage)
+                (textView as? EditorNSTextView)?.renderedImages = []
                 return
             }
 
@@ -452,6 +477,12 @@ extension EditorTextView {
                                     source: source)
             }
 
+            // Image attachments change line height and clear the source
+            // colour. Do this before the caret-line highlighting, so an image
+            // line that just became active does not lose its syntax colours.
+            let imageLines = updateRenderedImages(
+                presentation: presentation, activeLine: activeLine, in: textView)
+
             if activeLine.lowerBound < activeLine.upperBound {
                 currentHighlighter()?.apply(
                     to: storage,
@@ -460,9 +491,91 @@ extension EditorTextView {
             }
             textView.typingAttributes = theme.baseAttributes
             lastRenderedActiveLine = activeLine
+
             for range in ranges {
                 invalidateRenderedGlyphs(in: range)
             }
+            for range in imageLines {
+                invalidateRenderedGlyphs(in: range)
+            }
+        }
+
+        /// Loads standalone images and reserves their line height. Returns the
+        /// line ranges whose layout attributes changed.
+        @discardableResult
+        private func updateRenderedImages(presentation: RenderedEditorPresentation,
+                                          activeLine: Range<Int>,
+                                          in textView: NSTextView) -> [Range<Int>] {
+            guard let storage = textView.textStorage,
+                  let editor = textView as? EditorNSTextView else { return [] }
+            let oldLines = lastRenderedImageLines
+            resetRenderedImageLines(in: storage)
+
+            guard model.isRenderedEditingActive else {
+                editor.renderedImages = []
+                return oldLines
+            }
+            renderedImageCache.setBaseURL(model.resourceBaseURL)
+            let loaded = renderedImageCache.loadImages(for: presentation.images)
+            guard !loaded.isEmpty else {
+                editor.renderedImages = []
+                return oldLines
+            }
+
+            let availableWidth = max(0, (textView.textContainer?.containerSize.width
+                ?? textView.bounds.width) - textView.textContainerInset.width * 2)
+            var attachments: [EditorNSTextView.RenderedImageAttachment] = []
+            var newLines: [Range<Int>] = []
+
+            for item in loaded {
+                let line = presentation.lineRange(containing: item.sourceRange.lowerBound)
+                guard !activeLine.overlaps(line) else { continue }
+                let clipped = clippedRange(line, to: storage.length)
+                guard !clipped.isEmpty else { continue }
+                let imageSize = item.image.size
+                let displaySize = EditorNSTextView.displaySize(
+                    for: imageSize, availableWidth: availableWidth)
+                guard displaySize.width > 0, displaySize.height > 0 else { continue }
+
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.minimumLineHeight =
+                    EditorNSTextView.reservedImageHeight(for: displaySize)
+                storage.addAttributes([
+                    .foregroundColor: NSColor.clear,
+                    .paragraphStyle: paragraph,
+                ], range: NSRange(location: clipped.lowerBound,
+                                  length: clipped.count))
+                attachments.append(.init(
+                    sourceRange: item.sourceRange,
+                    lineRange: clipped,
+                    image: item.image,
+                    displaySize: displaySize))
+                newLines.append(clipped)
+            }
+
+            lastRenderedImageLines = newLines
+            editor.renderedImages = attachments
+            return oldLines + newLines
+        }
+
+        /// Restores the base attributes on lines whose height or colour was
+        /// changed for an image attachment.
+        private func resetRenderedImageLines(in storage: NSTextStorage) {
+            guard !lastRenderedImageLines.isEmpty else { return }
+            for line in lastRenderedImageLines {
+                let clipped = clippedRange(line, to: storage.length)
+                guard !clipped.isEmpty else { continue }
+                storage.setAttributes(
+                    theme.baseAttributes,
+                    range: NSRange(location: clipped.lowerBound, length: clipped.count))
+            }
+            lastRenderedImageLines = []
+        }
+
+        private func clippedRange(_ range: Range<Int>, to length: Int) -> Range<Int> {
+            let lower = max(0, min(range.lowerBound, length))
+            let upper = max(lower, min(range.upperBound, length))
+            return lower..<upper
         }
 
         private func invalidateRenderedGlyphs(in range: Range<Int>) {
@@ -622,6 +735,16 @@ extension EditorTextView {
             renderedPresentation
         }
 
+        /// Image attachments currently installed in the text view, for tests.
+        var renderedImageAttachmentsForTesting: [EditorNSTextView.RenderedImageAttachment] {
+            (textView as? EditorNSTextView)?.renderedImages ?? []
+        }
+
+        /// Source lines whose height was reserved for an image, for tests.
+        var renderedImageLinesForTesting: [Range<Int>] {
+            lastRenderedImageLines
+        }
+
         private func activeLineRange(in textView: NSTextView) -> Range<Int> {
             guard let storage = textView.textStorage else { return 0..<0 }
             let length = storage.length
@@ -733,6 +856,50 @@ extension EditorTextView {
             textView.scrollRangeToVisible(selection)
             updateCursorLocation()
             model.acknowledgeRevealRequest(id: request.id)
+        }
+
+        /// Scrolls the source editor to the line the user is reading in the
+        /// preview. The caret is deliberately left alone: browsing the preview
+        /// must not move the insertion point or steal first responder.
+        func fulfillEditorScrollRequest() {
+            guard let request = model.editorScrollRequest,
+                  request.id != handledScrollID,
+                  let textView else { return }
+            handledScrollID = request.id
+            defer { model.acknowledgeEditorScrollRequest(id: request.id) }
+
+            let length = textView.textStorage?.length ?? 0
+            let location = min(max(model.lineStart(atLine: request.line), 0), length)
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer,
+                  let scrollView = textView.enclosingScrollView else {
+                textView.scrollRangeToVisible(NSRange(location: location, length: 0))
+                return
+            }
+
+            let lineRange = (textView.string as NSString).lineRange(
+                for: NSRange(location: location, length: 0))
+            layoutManager.ensureLayout(for: textContainer)
+            var rect: NSRect
+            if lineRange.length > 0 {
+                let glyphRange = layoutManager.glyphRange(
+                    forCharacterRange: lineRange, actualCharacterRange: nil)
+                rect = layoutManager.boundingRect(forGlyphRange: glyphRange,
+                                                  in: textContainer)
+            } else {
+                rect = layoutManager.extraLineFragmentRect
+            }
+            rect.origin.y += textView.textContainerInset.height
+
+            let clipView = scrollView.contentView
+            // Leave a little context above the target line instead of pinning
+            // it to the very top edge.
+            let y = rect.minY - clipView.bounds.height * 0.12
+            let maximum = max(0, textView.frame.height - clipView.bounds.height)
+            clipView.scroll(to: NSPoint(
+                x: clipView.bounds.origin.x,
+                y: min(max(0, y), maximum)))
+            scrollView.reflectScrolledClipView(clipView)
         }
 
         func fulfillSourceReplacementRequest() {

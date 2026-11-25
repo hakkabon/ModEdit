@@ -26,7 +26,7 @@ enum PreviewRendering {
 /// Markdown preview: converts with `MarkdownHTML` and wraps in the shared page.
 struct MarkdownPreviewRenderer: PreviewRenderer {
     func renderHTML(from source: String) async throws -> String {
-        PreviewPage.wrap(body: MarkdownHTML.render(source))
+        PreviewPage.wrap(body: MarkdownHTML.render(source, sourceAnchors: true))
     }
 }
 

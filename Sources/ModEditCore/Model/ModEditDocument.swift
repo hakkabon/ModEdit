@@ -70,6 +70,7 @@ final class ModEditDocument: NSDocument {
 
     override func makeWindowControllers() {
         let model = EditorModel(document: buffer, registry: registry)
+        model.resourceBaseURL = fileURL?.deletingLastPathComponent()
         model.onTextChange = { [weak self] in
             // This drives autosave, the window's edited dot and close prompts.
             self?.updateChangeCount(.changeDone)
@@ -169,6 +170,13 @@ final class ModEditDocument: NSDocument {
                                     for: url,
                                     registry: registry,
                                     store: formatStore)
+                Task { @MainActor [weak self] in
+                    let directory = self?.fileURL?.deletingLastPathComponent()
+                    for case let controller as ModEditWindowController
+                        in self?.windowControllers ?? [] {
+                        controller.model.resourceBaseURL = directory
+                    }
+                }
             }
             completionHandler(error)
         }

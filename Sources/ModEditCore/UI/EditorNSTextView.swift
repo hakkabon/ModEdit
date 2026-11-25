@@ -11,6 +11,48 @@ final class EditorNSTextView: NSTextView {
         didSet { needsDisplay = true }
     }
 
+    /// A standalone Markdown image drawn over its source line.
+    struct RenderedImageAttachment {
+        let sourceRange: Range<Int>
+        let lineRange: Range<Int>
+        let image: NSImage
+        /// The scaled size actually painted, also used to reserve line height.
+        let displaySize: NSSize
+    }
+
+    /// Images to paint after AppKit has drawn the text. The source characters
+    /// stay in storage; the coordinator clears their colour and reserves line
+    /// height, so the image is a presentation attachment rather than a second
+    /// text buffer.
+    var renderedImages: [RenderedImageAttachment] = [] {
+        didSet { needsDisplay = true }
+    }
+
+    var renderedImageBackgroundColor: NSColor = .textBackgroundColor {
+        didSet { needsDisplay = true }
+    }
+
+    static let maximumImageHeight: CGFloat = 320
+    static let imageVerticalPadding: CGFloat = 8
+    private static let imageHorizontalInset: CGFloat = 4
+
+    /// The reserved line height for an image, including padding.
+    static func reservedImageHeight(for displaySize: NSSize) -> CGFloat {
+        min(max(0, displaySize.height), maximumImageHeight) + imageVerticalPadding
+    }
+
+    /// Scales an image to the available width and the maximum height without
+    /// enlarging small images.
+    static func displaySize(for imageSize: NSSize,
+                            availableWidth: CGFloat) -> NSSize {
+        guard imageSize.width > 0, imageSize.height > 0,
+              availableWidth > 0 else { return .zero }
+        let scale = min(1, min(availableWidth / imageSize.width,
+                               maximumImageHeight / imageSize.height))
+        return NSSize(width: imageSize.width * scale,
+                      height: imageSize.height * scale)
+    }
+
     /// Handles horizontal caret movement through the rendered projection.
     ///
     /// Returns `true` when the projection consumed the move. The coordinator
@@ -52,6 +94,51 @@ final class EditorNSTextView: NSTextView {
         currentLineColor.setFill()
         for lineRect in currentLineFragmentRects() where lineRect.intersects(rect) {
             lineRect.fill()
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawRenderedImages(intersecting: dirtyRect)
+    }
+
+    private func drawRenderedImages(intersecting dirtyRect: NSRect) {
+        guard !renderedImages.isEmpty,
+              let layoutManager else { return }
+        let length = textStorage?.length ?? 0
+
+        for attachment in renderedImages {
+            guard attachment.lineRange.lowerBound < length else { continue }
+            let characterRange = NSRange(
+                location: attachment.lineRange.lowerBound,
+                length: min(attachment.lineRange.count, length - attachment.lineRange.lowerBound))
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: characterRange, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else { continue }
+            let fragment = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphRange.location, effectiveRange: nil)
+            let lineRect = NSRect(
+                x: 0,
+                y: fragment.minY + textContainerInset.height,
+                width: bounds.width,
+                height: max(fragment.height,
+                            Self.reservedImageHeight(for: attachment.displaySize)))
+            guard lineRect.intersects(dirtyRect) else { continue }
+
+            let originX = textContainerInset.width + Self.imageHorizontalInset
+                + layoutManager.location(forGlyphAt: glyphRange.location).x
+            let displaySize = attachment.displaySize
+            guard displaySize.width > 0, displaySize.height > 0 else { continue }
+
+            // Cover the (invisible) source glyphs before compositing the image.
+            renderedImageBackgroundColor.setFill()
+            lineRect.fill()
+            attachment.image.draw(
+                in: NSRect(x: originX,
+                           y: lineRect.minY + Self.imageVerticalPadding / 2,
+                           width: displaySize.width,
+                           height: displaySize.height),
+                from: .zero, operation: .sourceOver, fraction: 1)
         }
     }
 

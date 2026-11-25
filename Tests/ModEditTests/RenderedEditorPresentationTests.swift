@@ -86,6 +86,49 @@ struct RenderedEditorPresentationTests {
         #expect(presentation.substitutions.count == 5)
     }
 
+    @Test func imagesExposeTheirFullSyntaxAndStandaloneStatus() throws {
+        let source = """
+            Before ![alt](img.png) after.
+
+            ![solo](photo.jpg)
+
+            ![](empty.png)
+            """
+        let presentation = try RenderedEditorPresentation(source: source)
+        let text = source as NSString
+
+        #expect(presentation.images.count == 3)
+        let inline = presentation.images[0]
+        let inlineRange = text.range(of: "![alt](img.png)")
+        #expect(inline.sourceRange == inlineRange.location..<NSMaxRange(inlineRange))
+        #expect(inline.destination == "img.png")
+        #expect(inline.altText == "alt")
+        #expect(!inline.isStandalone)
+
+        let solo = presentation.images[1]
+        #expect(solo.destination == "photo.jpg")
+        #expect(solo.altText == "solo")
+        #expect(solo.isStandalone)
+
+        let empty = presentation.images[2]
+        #expect(empty.altText == "")
+        #expect(empty.isStandalone)
+    }
+
+    @Test func incrementalImageEditsRefreshDestinations() throws {
+        var presentation = try RenderedEditorPresentation(source: "![a](old.png)\n")
+        #expect(presentation.images.first?.destination == "old.png")
+
+        let replacement = "![a](new.png)\n"
+        let sourceLength = presentation.sourceLength
+        try presentation.apply(SourceEdit(
+            range: 0..<sourceLength, replacement: replacement))
+
+        #expect(presentation.images.count == 1)
+        #expect(presentation.images.first?.destination == "new.png")
+        #expect(presentation.source == replacement)
+    }
+
     @Test func activeLineSuppressesSubstitutions() throws {
         let source = "- &amp; word\n\nlast\n"
         let presentation = try RenderedEditorPresentation(source: source)

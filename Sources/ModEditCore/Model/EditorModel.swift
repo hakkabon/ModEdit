@@ -21,10 +21,18 @@ final class EditorModel: ObservableObject {
     @Published private(set) var pl0Visualization: PL0EditorVisualization?
     /// Monotonic request used to reveal workbench items in the source editor.
     @Published private(set) var revealRequest: EditorRevealRequest?
+    /// Latest caret position the live preview should follow.
+    @Published private(set) var previewScrollRequest: PreviewScrollRequest?
+    /// Latest preview scroll the source editor should reveal without moving
+    /// the caret.
+    @Published private(set) var editorScrollRequest: EditorScrollRequest?
     @Published private(set) var sourceReplacementRequest: EditorSourceReplacementRequest?
     /// Whether the live-preview pane is shown. Owned here rather than in the
     /// view so the window's toolbar can toggle it.
     @Published var showPreview = true
+    /// Directory used to resolve relative image destinations in rendered
+    /// Markdown. The document shell updates it when the file is saved as.
+    var resourceBaseURL: URL?
     /// Whether Markdown syntax outside the caret line is collapsed in the
     /// editor. Only formats that support rendered editing honour this.
     @Published var showsRenderedEditing = false
@@ -43,6 +51,8 @@ final class EditorModel: ObservableObject {
     /// published separately because every edit also publishes `textRevision`.
     private(set) var lastSourceEdit: PL0Language.SourceEdit?
     private var nextRevealID: UInt64 = 0
+    private var nextPreviewScrollID: UInt64 = 0
+    private var nextEditorScrollID: UInt64 = 0
     private var nextReplacementID: UInt64 = 0
 
     let grammarExamples = GrammarExamplesProject()
@@ -70,6 +80,8 @@ final class EditorModel: ObservableObject {
         self.lastSourceEdit = nil
         self.pl0Visualization = nil
         self.revealRequest = nil
+        self.previewScrollRequest = nil
+        self.editorScrollRequest = nil
         self.sourceReplacementRequest = nil
         document.setSaveObserver { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -124,13 +136,42 @@ final class EditorModel: ObservableObject {
         if self.selection != selection { self.selection = selection }
         let line = max(1, line)
         let column = max(1, column)
-        if cursorLine != line { cursorLine = line }
+        if cursorLine != line {
+            cursorLine = line
+            requestPreviewScroll(toLine: line)
+        }
         if cursorColumn != column { cursorColumn = column }
+    }
+
+    /// Publishes a new request even when the line is unchanged, so a fresh
+    /// preview pane (or one that was manually scrolled away) follows the
+    /// caret again.
+    func requestPreviewScroll(toLine line: Int) {
+        let line = max(1, min(line, lineCount))
+        nextPreviewScrollID &+= 1
+        previewScrollRequest = PreviewScrollRequest(id: nextPreviewScrollID, line: line)
+    }
+
+    /// Scrolls the editor without changing the caret, in response to the user
+    /// browsing the preview.
+    func scrollEditor(toPreviewLine line: Int) {
+        let line = max(1, min(line, lineCount))
+        nextEditorScrollID &+= 1
+        editorScrollRequest = EditorScrollRequest(id: nextEditorScrollID, line: line)
+    }
+
+    func acknowledgeEditorScrollRequest(id: UInt64) {
+        if editorScrollRequest?.id == id { editorScrollRequest = nil }
     }
 
     /// Shared line lookup used by the status bar and the gutter.
     func lineAndColumn(at location: Int) -> (line: Int, column: Int) {
         document.lineAndColumn(at: location)
+    }
+
+    /// UTF-16 offset of a one-based line start, clamped to the document.
+    func lineStart(atLine line: Int) -> Int {
+        document.lineStart(atLine: line)
     }
 
     /// Refreshes UI state after a document replacement that did not originate
@@ -163,6 +204,7 @@ final class EditorModel: ObservableObject {
         toolingDocument = nil
         document.setFormat(newFormat)
         onFormatChange?(newFormat)
+        requestPreviewScroll(toLine: cursorLine)
     }
 
     var supportsRenderedEditing: Bool { format.supportsRenderedEditing }

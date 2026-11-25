@@ -219,16 +219,43 @@ struct RenderedEditingTests {
         #expect(try glyph(harness.textView, at: 0) == glyph(for: "-", font: font))
     }
 
-    @Test func unsupportedSubstitutionsKeepSourceSpelling() throws {
-        // The monospaced system font has no glyph for the task checkbox. The
-        // projection still says "☐ ", but the editor must keep the source
-        // spelling rather than draw a missing-glyph box.
+    @Test func taskCheckboxesUseFallbackFontGlyphs() throws {
+        // The monospaced editor font has no unchecked-box glyph. The styler
+        // selects a fallback font for the substitution and the layout manager
+        // draws the box in that font instead of keeping `[ ]`.
         let source = "- [ ] task\n\nlast\n"
         let harness = makeHarness(text: source, caret: source.utf16.count)
-        let font = try #require(harness.textView.font)
         let marker = (source as NSString).range(of: "[ ]").location
+        let presentation = try #require(harness.coordinator.presentationForTesting)
+        let substitution = try #require(presentation.substitution(at: marker))
+        let storageFont = try #require(harness.textView.textStorage?
+            .attribute(.font, at: substitution.sourceRange.lowerBound,
+                       effectiveRange: nil) as? NSFont)
+        let baseFont = harness.coordinator.theme.baseFont
 
-        #expect(try glyph(harness.textView, at: marker) == glyph(for: "[", font: font))
+        #expect(storageFont.fontName != baseFont.fontName)
+        #expect(try glyph(harness.textView, at: substitution.sourceRange.lowerBound)
+            == glyph(for: "☐", font: storageFont))
+        // The source slots after the two display units stay in place as null
+        // glyphs, so the checkbox occupies the original marker's width.
+        let layout = try #require(harness.textView.layoutManager)
+        let nullSlot = layout.glyphIndexForCharacter(at: marker)
+        #expect(layout.propertyForGlyph(at: nullSlot).contains(.null))
+    }
+
+    @Test func unrenderableSubstitutionsKeepSourceSpelling() throws {
+        // U+E000 is a private-use character; no regular font has a glyph for
+        // it. The styler must not select LastResort, which would draw a blank
+        // box, and the host must keep the source spelling.
+        let source = "a&#xE000;b\n\nlast\n"
+        let harness = makeHarness(text: source, caret: source.utf16.count)
+        let font = try #require(harness.textView.font)
+        let marker = (source as NSString).range(of: "&#xE000;").location
+        let presentation = try #require(harness.coordinator.presentationForTesting)
+        #expect(presentation.substitution(at: marker) != nil)
+
+        #expect(try glyph(harness.textView, at: marker)
+            == glyph(for: "&", font: font))
     }
 
     @Test func editingRemovesStaleSubstitutions() throws {

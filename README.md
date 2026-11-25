@@ -15,8 +15,10 @@ the right shows it as headings, emphasis, symbols and mathematics.
 > Hybrid rendered editing is available for Markdown: markup outside the caret
 > line is collapsed in place while the caret line remains literal, editable
 > source. Entities, escapes, bullets, thematic breaks and inline-code delimiters
-> show their rendered glyphs; actual image attachments remain roadmapped. See
-> the [roadmap](#roadmap).
+> show their rendered glyphs, standalone local and `data:` images are drawn as
+> attachments, and missing glyphs use Core Text font fallback. The preview
+> follows the caret line, and scrolling the preview reveals the matching source
+> block without moving the caret. See the [roadmap](#roadmap).
 
 ## Table of contents
 
@@ -60,13 +62,18 @@ the right shows it as headings, emphasis, symbols and mathematics.
   outside the caret line is collapsed in place, headings and emphasis are styled,
   and the caret line stays literal source. Display-only content uses glyph
   substitution: entities and escapes show their decoded character, bullets use
-  `•`, thematic breaks use a rule, and inline-code delimiters disappear. The
-  source in `NSTextStorage` is unchanged, so offsets, find, undo and saving
-  behave exactly as in source mode, and the caret moves through display
+  `•`, thematic breaks use a rule, and inline-code delimiters disappear.
+  Standalone local and `data:` images are drawn over their source line as
+  attachments, while inline images keep their alt text. If the editor font lacks
+  a display glyph, Core Text selects a fallback font rather than drawing a blank
+  box. The source in `NSTextStorage` is unchanged, so offsets, find, undo and
+  saving behave exactly as in source mode, and the caret moves through display
   positions across collapsed markup. Edits reuse unchanged projection blocks;
   documents above 512 KB stay in source mode.
-* **Live preview** (WebKit) that keeps its scroll position while you type.
-  Documents above 5 MB show a notice instead of being copied and rendered:
+* **Live preview** (WebKit) that keeps its scroll position while you type. For
+  Markdown it follows the caret's source line, and scrolling the preview reveals
+  the matching block in the editor without moving the caret. Documents above
+  5 MB show a notice instead of being copied and rendered:
   * *Markdown* — headings, paragraphs, lists, block quotes, fenced code,
     `**bold**`, `*italic*`, `` `code` ``, links (including URLs with balanced
     parentheses such as `/wiki/Foo_(bar)`).
@@ -324,8 +331,21 @@ Display-only runs do not change storage either. The coordinator's
 glyphs and marks surplus source slots as null glyphs, so `&amp;` renders as one
 cell containing `&`, a bullet source marker renders as `•`, and layout width
 matches the source↔display map. Unsupported glyphs, line breaks and substitutions
-longer than their source range keep the source spelling. The WebKit preview
+longer than their source range keep the source spelling. When the editor font
+has no glyph for a display character, `RenderedEditorStyler` asks Core Text for
+a fallback font and applies it only to that substitution; `LastResort` is
+rejected so an unmapped character never becomes a blank box. The WebKit preview
 still uses `MarkdownHTML`; moving it onto the same projection is roadmap step 6.
+
+Standalone Markdown images are presentation attachments rather than a second
+text buffer. `RenderedEditorImageCache` resolves relative destinations against
+the document directory, accepts local files and `data:image` payloads, rejects
+remote schemes and files over 32 MB, and caches decoded images. The coordinator
+clears the source line's colour, reserves its height with a paragraph style, and
+`EditorNSTextView` paints the scaled image (at most the available width and
+320 pt high) after AppKit draws the text. Moving the caret onto the line removes
+the attachment so the literal `![alt](path)` source is editable again. Inline
+images and standalone images that cannot be resolved keep their alt text.
 
 ### Unified language providers
 
@@ -448,6 +468,16 @@ document on the main actor, the format's renderer transforms it on a detached
 task, and only the finished HTML returns to the main actor for the `WKWebView`
 load and scroll restoration. A superseded render is cancelled, and identical
 output is skipped before the web view is touched.
+
+Markdown previews also carry one-based `data-source-line` anchors on headings,
+paragraphs, lists, block quotes and fenced code. Only
+`MarkdownHTML.render(..., sourceAnchors: true)` emits them, and only Markdown
+opts into scroll synchronisation, so anchors in untrusted user HTML are never
+interpreted as source positions. After each load the pane injects a small scroll
+bridge (page JavaScript stays disabled; app-injected scripts still run), applies
+the caret's line, and debounces user scrolling back into an editor reveal. The
+preview never moves the caret, and programmatic caret-following scrolls are
+suppressed so they cannot feed back as user scrolls.
 
 ## PL/0 parsing workbench
 
@@ -891,20 +921,26 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
   parser (for example, tilde fences and embedded languages are not recognised).
 * **Rendered editing is hybrid.** The caret line always shows literal source, so
   markup is visible wherever you are editing. Display-only content uses glyph
-  substitution, but images are not drawn: the projection shows alt text or the
-  word `image`. Display strings that are longer than their source range, contain
-  control characters, or lack a glyph in the editor font fall back to source
-  spelling (the unchecked task box is one example in the system monospaced
-  font). Collapsed characters remain in storage with zero width, so text
+  substitution. Standalone local files and `data:` images are drawn as
+  attachments; inline images, remote URLs, unresolved paths and documents
+  without a file location keep their alt text. Display strings that are longer
+  than their source range or contain control characters fall back to source
+  spelling. Missing glyphs are resolved through Core Text fallback fonts; a
+  character with no fallback (or only `LastResort`) also keeps its source
+  spelling. Collapsed characters remain in storage with zero width, so text
   selection may visually begin or end on hidden syntax, and the substitution
   slots map to source characters rather than a separate rendered-text buffer.
-* **Preview and rendered editing are independent.** The preview remains a
-  separate pane; rendered editing does not synchronise its scroll position or
-  selection with the preview.
+* **Scroll synchronisation is block-granular and Markdown-only.** The preview
+  follows the caret's source line and reports the block at its viewport top;
+  scrolling it reveals that line in the editor without moving the caret.
+  Anchors exist for headings, paragraphs, lists, block quotes and fenced code,
+  so links, tables or very short blocks can map to a neighbouring line. The
+  preview does not mirror the selection, find results or rendered-mode caret
+  positions, and LaTeX and HTML previews keep their independent scroll position.
 * **Markdown preview subset only** (no nested lists, tables, images, setext
   headings). The `RenderedText` projection supports them and now drives rendered
-  editing, but the preview is not wired to it yet. **LaTeX subset only** (no
-  environments, `\frac`, `\sqrt`, macros).
+  editing, including editor-side image attachments, but the preview is not wired
+  to it yet. **LaTeX subset only** (no environments, `\frac`, `\sqrt`, macros).
 * **HTML preview cannot load relative resources** (images, CSS) yet. The
   `NSDocument` shell now exposes the document URL, so supplying it as the web
   view's base URL is a natural next step.
@@ -1019,11 +1055,15 @@ evidence as stable-prefix reuse.
    `RenderedEditorPresentation` collapses `RenderedText` runs outside the caret
    line, the caret moves through source/display positions, and layout-manager
    glyph substitution draws entities, escapes, list markers, thematic breaks and
-   inline-code content. Remaining work is drawing real image attachments and
-   inline media, resolving missing display glyphs through fallback fonts, and
+   inline-code content. Standalone local and `data:` images are drawn as
+   attachments, and missing display glyphs resolve through fallback fonts.
+   Remaining work is inline media, attachment-aware selection geometry, and
    raising the 512 KB limit by sharing incremental parsing with the preview.
-5. **Scroll and caret synchronisation** between source and preview (needs the
-   same source map).
+5. **Scroll and caret synchronisation** between source and preview. Markdown
+   now emits one-based source-line anchors, the preview follows the caret, and
+   user scrolling reveals the matching editor line without moving the caret.
+   Remaining work is selection and find-result mirroring, finer-grained anchors,
+   and extending synchronisation to other formats once they share a source map.
 6. **Real markup parsers:** `swift-markdown` now drives the `RenderedText`
    projection; the WebKit preview still uses the small `MarkdownHTML` subset.
    Move the preview onto the shared projection, bundle KaTeX for typeset maths,

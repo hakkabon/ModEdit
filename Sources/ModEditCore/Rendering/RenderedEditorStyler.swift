@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 
 /// Turns platform-neutral rendered presentation into AppKit attributes.
 ///
@@ -21,6 +22,12 @@ final class RenderedEditorStyler {
         let italic: Bool
     }
 
+    private struct FallbackFontKey: Hashable {
+        let text: String
+        let baseFontName: String
+        let size: CGFloat
+    }
+
     private static let headingSizes: [CGFloat] = [22, 19, 17, 15.5, 14.5, 13.5]
 
     private let theme: EditorTheme
@@ -29,6 +36,8 @@ final class RenderedEditorStyler {
     private let spaceAdvance: CGFloat
     private let codeBackgroundColor: NSColor
     private var fonts: [FontKey: NSFont] = [:]
+    private var fallbackFonts: [FallbackFontKey: NSFont] = [:]
+    private var missingFallbackFonts: Set<FallbackFontKey> = []
 
     init(theme: EditorTheme, tabSize: Int) {
         self.theme = theme
@@ -112,9 +121,68 @@ final class RenderedEditorStyler {
             color = theme.color(for: .listMarker)
         }
 
-        attributes[.font] = font(size: size, bold: bold, italic: italic)
+        let base = font(size: size, bold: bold, italic: italic)
+        if span.isSubstitution,
+           let fallback = substitutionFont(for: span.displayText, base: base) {
+            attributes[.font] = fallback
+        } else {
+            attributes[.font] = base
+        }
         attributes[.foregroundColor] = color
         return attributes
+    }
+
+    /// A font that can draw the whole display string, or `nil` when the base
+    /// font already can or no installed font has every glyph.
+    ///
+    /// The editor's monospaced font intentionally lacks some symbols (the
+    /// unchecked task box, for example). CoreText finds a fallback such as
+    /// Menlo or the emoji font; the layout manager's glyph substitution then
+    /// uses that font for the substituted slots. Keeping the base font when no
+    /// fallback covers the string preserves the source spelling rather than
+    /// drawing a missing-glyph box.
+    private func substitutionFont(for text: String, base: NSFont) -> NSFont? {
+        guard !text.isEmpty else { return nil }
+        let key = FallbackFontKey(text: text, baseFontName: base.fontName,
+                                  size: base.pointSize)
+        if let cached = fallbackFonts[key] { return cached }
+        if missingFallbackFonts.contains(key) { return nil }
+
+        let units = Array(text.utf16)
+        guard units.count == text.unicodeScalars.count else {
+            missingFallbackFonts.insert(key)
+            return nil
+        }
+        let string = text as NSString
+        let fallback = CTFontCreateForString(
+            base as CTFont, string, CFRange(location: 0, length: string.length)) as NSFont
+        guard fallback.fontName != base.fontName else {
+            // The base font already covers the string; use it directly.
+            fallbackFonts[key] = fallback
+            return fallback
+        }
+        guard fallback.fontName != "LastResort",
+              fallback.fontName != ".LastResort" else {
+            // LastResort only draws a blank fallback box. Keeping the source
+            // spelling is more useful than a tofu character.
+            missingFallbackFonts.insert(key)
+            return nil
+        }
+
+        var glyphs = [CGGlyph](repeating: 0, count: units.count)
+        let found = units.withUnsafeBufferPointer { characters in
+            glyphs.withUnsafeMutableBufferPointer { buffer in
+                CTFontGetGlyphsForCharacters(
+                    fallback as CTFont, characters.baseAddress!, buffer.baseAddress!,
+                    units.count)
+            }
+        }
+        guard found, !glyphs.contains(0) else {
+            missingFallbackFonts.insert(key)
+            return nil
+        }
+        fallbackFonts[key] = fallback
+        return fallback
     }
 
     private func applyHidden(to storage: NSTextStorage,

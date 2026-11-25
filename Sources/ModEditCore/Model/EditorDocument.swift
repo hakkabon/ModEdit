@@ -98,6 +98,14 @@ final class EditorDocument: @unchecked Sendable {
         }
     }
 
+    /// UTF-16 offset at the start of a one-based line, clamped to the last line.
+    func lineStart(atLine line: Int) -> Int {
+        lock.withLock {
+            let index = min(max(line - 1, 0), lineIndex.lineCount - 1)
+            return lineIndex.starts[index]
+        }
+    }
+
     /// Whether `location` is the start of a logical line.
     func isLineStart(at location: Int) -> Bool {
         lock.withLock {

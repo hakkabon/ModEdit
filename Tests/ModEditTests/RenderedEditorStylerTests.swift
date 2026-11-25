@@ -1,5 +1,6 @@
 import Testing
 import AppKit
+import RenderedText
 @testable import ModEditCore
 
 @Suite("Rendered editor styling", .serialized)
@@ -74,6 +75,37 @@ struct RenderedEditorStylerTests {
 
         #expect(!isHidden(storage, at: 0))
         #expect(isHidden(storage, at: marker.location))
+    }
+
+    @Test func taskCheckboxesSelectAFallbackFont() throws {
+        let theme = EditorTheme()
+        let styler = RenderedEditorStyler(theme: theme, tabSize: 4)
+        let source = "- [ ] task\n"
+        let presentation = try RenderedEditorPresentation(source: source)
+        let storage = makeStorage(source: source, theme: theme, styler: styler,
+                                  presentation: presentation, activeLine: nil)
+        let marker = (source as NSString).range(of: "[ ]").location
+        let font = try #require(storage.attribute(.font, at: marker,
+                                                  effectiveRange: nil) as? NSFont)
+
+        #expect(font.fontName != theme.baseFont.fontName)
+        #expect(font.pointSize == theme.baseFont.pointSize)
+    }
+
+    @Test func unrenderableDisplayTextKeepsTheBaseFont() {
+        let theme = EditorTheme()
+        let styler = RenderedEditorStyler(theme: theme, tabSize: 4)
+        let span = RenderedEditorSpan(
+            sourceRange: 0..<8,
+            isHidden: false,
+            isRaw: false,
+            displayText: "\u{E000}",
+            isSubstitution: true,
+            role: .text,
+            attributes: RenderedAttributes())
+
+        let font = styler.attributes(for: span)[.font] as? NSFont
+        #expect(font?.fontName == theme.baseFont.fontName)
     }
 
     private func makeStorage(source: String,

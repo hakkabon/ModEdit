@@ -26,7 +26,10 @@ struct EditorRootView: View {
                     VSplitView {
                         PreviewPane(renderer: renderer,
                                     revision: model.textRevision,
-                                    source: { model.previewSnapshot(upTo: PreviewPane.maximumSourceLength) })
+                                    source: { model.previewSnapshot(upTo: PreviewPane.maximumSourceLength) },
+                                    scrollRequest: model.previewScrollRequest,
+                                    synchronizesScroll: model.format.supportsPreviewSourceMapping,
+                                    onScrollToLine: { model.scrollEditor(toPreviewLine: $0) })
                             .frame(minHeight: 120)
                         if model.format is GrammarFormat {
                             ScrollView { GrammarExamplesPane(model: model) }

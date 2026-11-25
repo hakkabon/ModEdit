@@ -40,6 +40,13 @@ protocol DocumentFormat: Sendable {
     /// the rendered-editing toggle is on.
     var supportsRenderedEditing: Bool { get }
 
+    /// Whether the preview HTML carries one-based `data-source-line` anchors.
+    ///
+    /// Preview scroll synchronisation is only safe when the anchors come from
+    /// the renderer: a hand-written HTML document might use the same attribute
+    /// for unrelated content.
+    var supportsPreviewSourceMapping: Bool { get }
+
     /// An HTML renderer for formats displayed in the web preview.
     func makePreviewRenderer() -> (any PreviewRenderer)?
 }
@@ -47,6 +54,7 @@ protocol DocumentFormat: Sendable {
 extension DocumentFormat {
     var supportsPreview: Bool { makePreviewRenderer() != nil }
     var supportsRenderedEditing: Bool { false }
+    var supportsPreviewSourceMapping: Bool { false }
     var scanner: (any StatefulScanner)? { nil }
 }
 

@@ -41,6 +41,19 @@ struct RenderedEditorSubstitution: Hashable, Sendable {
     var displayLength: Int { displayText.utf16.count }
 }
 
+/// A Markdown image whose destination the editor may draw as a real attachment.
+///
+/// `sourceRange` covers the complete `![alt](destination)` syntax, not just the
+/// alt-text run the projection exposes. `isStandalone` is true when the image
+/// is the only content on its line, which is the case the editor can lay out at
+/// its natural aspect ratio without disturbing surrounding text.
+struct RenderedEditorImage: Hashable, Sendable {
+    let sourceRange: Range<Int>
+    let destination: String
+    let altText: String
+    let isStandalone: Bool
+}
+
 /// The Markdown projection used by live rendered editing.
 ///
 /// The editor keeps the Markdown source in `NSTextStorage`. This value owns the
@@ -57,10 +70,13 @@ struct RenderedEditorPresentation: Sendable {
     /// Display-only substitutions outside the raw caret line. Sorted by source
     /// range, matching the runs of `text.document`.
     private(set) var substitutions: [RenderedEditorSubstitution]
+    /// Images the editor may draw, sorted by source range.
+    private(set) var images: [RenderedEditorImage]
 
     init(source: String, renderer: MarkdownRenderer = MarkdownRenderer()) throws {
         self.text = try MarkdownRenderedText(source: source, renderer: renderer)
         self.substitutions = Self.makeSubstitutions(in: text.document)
+        self.images = Self.makeImages(in: text.document)
     }
 
     var source: String { text.document.source }
@@ -73,6 +89,7 @@ struct RenderedEditorPresentation: Sendable {
     mutating func apply(_ edit: SourceEdit) throws -> Set<BlockID> {
         let invalidated = try text.apply(edit)
         substitutions = Self.makeSubstitutions(in: text.document)
+        images = Self.makeImages(in: text.document)
         return invalidated
     }
 
@@ -215,6 +232,8 @@ struct RenderedEditorPresentation: Sendable {
         return result
     }
 
+    // MARK: Images
+
     /// Substitutions preserve the source range but show different glyphs.
     ///
     /// A display string longer than its source range cannot be represented by
@@ -241,5 +260,100 @@ struct RenderedEditorPresentation: Sendable {
             with: NSRange(location: run.sourceRange.lowerBound,
                           length: run.sourceRange.count))
         return sourceText != run.displayText
+    }
+
+    private static func makeImages(in document: RenderedDocument) -> [RenderedEditorImage] {
+        let source = document.source as NSString
+        var result: [RenderedEditorImage] = []
+        var seen = Set<Range<Int>>()
+
+        for block in document.blocks {
+            for run in block.runs where run.attributes.isImage {
+                guard let destination = run.attributes.linkDestination,
+                      let sourceRange = imageSyntaxRange(
+                        containing: run.sourceRange, in: source),
+                      seen.insert(sourceRange).inserted else { continue }
+
+                let syntax = source.substring(with: NSRange(
+                    location: sourceRange.lowerBound, length: sourceRange.count))
+                let line = source.lineRange(for: NSRange(
+                    location: sourceRange.lowerBound, length: 0))
+                let lineText = source.substring(with: line)
+                let altText = run.role == .image ? "" : run.displayText
+
+                result.append(RenderedEditorImage(
+                    sourceRange: sourceRange,
+                    destination: destination,
+                    altText: altText,
+                    isStandalone: lineText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        == syntax))
+            }
+        }
+        return result.sorted { $0.sourceRange.lowerBound < $1.sourceRange.lowerBound }
+    }
+
+    /// The complete `![alt](destination)` range for an image run.
+    ///
+    /// The renderer reports the alt text (or the empty-alt placeholder) as the
+    /// image run, with the brackets and destination in neighbouring hidden
+    /// runs. Expanding from the run again keeps the projection untouched while
+    /// still giving the host a range to draw over.
+    private static func imageSyntaxRange(containing run: Range<Int>,
+                                         in source: NSString) -> Range<Int>? {
+        let length = source.length
+        guard run.lowerBound <= length, run.upperBound <= length else { return nil }
+
+        var lower = run.lowerBound
+        if lower >= 2,
+           source.substring(with: NSRange(location: lower - 2, length: 2)) == "![" {
+            lower -= 2
+        }
+        guard lower + 1 < length,
+              source.substring(with: NSRange(location: lower, length: 2)) == "![" else {
+            return nil
+        }
+
+        // Find the closing bracket of the alt text. Starting at `lower + 2`
+        // (rather than after the run) matters for empty alt text, where the
+        // renderer's run can extend into the destination instead of covering
+        // just the alt text.
+        var index = lower + 2
+        var bracketDepth = 0
+        while index < length {
+            let character = source.character(at: index)
+            if character == 0x0A || character == 0x0D { return nil }
+            if character == 0x5C {   // backslash escapes the next unit
+                index += 2
+                continue
+            }
+            if character == 0x5B {   // "["
+                bracketDepth += 1
+            } else if character == 0x5D {   // "]"
+                if bracketDepth == 0 { break }
+                bracketDepth -= 1
+            }
+            index += 1
+        }
+        guard index + 1 < length,
+              source.character(at: index) == 0x5D,
+              source.character(at: index + 1) == 0x28 else { return nil } // "("
+
+        index += 2
+        var depth = 1
+        while index < length {
+            let character = source.character(at: index)
+            if character == 0x0A || character == 0x0D { return nil }
+            if character == 0x5C {   // backslash escapes the next unit
+                index += 2
+                continue
+            }
+            if character == 0x28 { depth += 1 }
+            if character == 0x29 {
+                depth -= 1
+                if depth == 0 { return lower..<(index + 1) }
+            }
+            index += 1
+        }
+        return nil
     }
 }

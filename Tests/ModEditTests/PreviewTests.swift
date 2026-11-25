@@ -100,6 +100,66 @@ struct MarkdownHTMLTests {
         #expect(html.contains("<h1>A</h1>"))
         #expect(html.contains("<p>text</p>"))
     }
+
+    @Test func sourceAnchorsTrackOneBasedBlockLines() {
+        let source = """
+            # A
+
+            text
+
+            - one
+            - two
+
+            ```
+            code
+            ```
+            """
+        let html = MarkdownHTML.render(source, sourceAnchors: true)
+
+        #expect(html.contains("<h1 data-source-line=\"1\">A</h1>"))
+        #expect(html.contains("<p data-source-line=\"3\">text</p>"))
+        #expect(html.contains("<ul data-source-line=\"5\">"))
+        #expect(html.contains("<li data-source-line=\"5\">one</li>"))
+        #expect(html.contains("<li data-source-line=\"6\">two</li>"))
+        #expect(html.contains("<pre data-source-line=\"8\"><code>code</code></pre>"))
+    }
+
+    @Test func sourceAnchorsCanBeOmitted() {
+        let html = MarkdownHTML.render("# A\n\ntext")
+        #expect(!html.contains("data-source-line"))
+    }
+}
+
+@Suite("Preview scroll bridge")
+struct PreviewScrollBridgeTests {
+
+    @Test func markdownPreviewsOptIntoSourceMapping() {
+        #expect(MarkdownFormat().supportsPreviewSourceMapping)
+        #expect(!HTMLFormat().supportsPreviewSourceMapping)
+        #expect(!LaTeXFormat().supportsPreviewSourceMapping)
+    }
+
+    @Test func installScriptReportsScrollsAndDefinesTheScrollFunction() {
+        let script = PreviewScrollBridge.installScript
+        #expect(script.contains("data-source-line"))
+        #expect(script.contains(PreviewScrollBridge.messageHandlerName))
+        #expect(script.contains("window.modEditScrollToLine"))
+        #expect(script.contains("suppress"))
+    }
+
+    @Test func scrollScriptClampsToTheFirstLine() {
+        #expect(PreviewScrollBridge.scrollScript(toLine: 0)
+            .contains("modEditScrollToLine(1)"))
+        #expect(PreviewScrollBridge.scrollScript(toLine: 42)
+            .contains("modEditScrollToLine(42)"))
+    }
+
+    @Test func messageBodiesDecodeIntegersAndNumbers() {
+        #expect(PreviewScrollBridge.line(fromMessageBody: ["line": 7]) == 7)
+        #expect(PreviewScrollBridge.line(fromMessageBody: ["line": NSNumber(value: 9)]) == 9)
+        #expect(PreviewScrollBridge.line(fromMessageBody: ["other": 7]) == nil)
+        #expect(PreviewScrollBridge.line(fromMessageBody: "7") == nil)
+    }
 }
 
 @Suite("HTML preview")

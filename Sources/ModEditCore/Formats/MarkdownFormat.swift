@@ -7,6 +7,7 @@ struct MarkdownFormat: DocumentFormat {
     let fileExtensions = ["md", "markdown", "mdown"]
     let scanner: (any StatefulScanner)? = MarkdownScanner()
     let supportsRenderedEditing = true
+    let supportsPreviewSourceMapping = true
 
     /// Lowest priority first; code spans last so their colour wins over
     /// anything that happens to match inside them.

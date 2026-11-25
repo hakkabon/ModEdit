@@ -17,7 +17,13 @@ import Foundation
 /// re-interpreted. Raw HTML in the source is shown as text, not executed.
 enum MarkdownHTML {
 
-    static func render(_ source: String) -> String {
+    /// Converts Markdown to HTML.
+    ///
+    /// - Parameter sourceAnchors: Adds a one-based `data-source-line`
+    ///   attribute to every top-level block. The live preview uses these to
+    ///   map its scroll position to and from source lines; leaving them off
+    ///   keeps the plain HTML output compact for other callers.
+    static func render(_ source: String, sourceAnchors: Bool = false) -> String {
         // "\r\n" is a single Character in Swift, so normalise before splitting.
         let normalized = source
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -25,13 +31,18 @@ enum MarkdownHTML {
 
         var out: [String] = []
         var paragraph: [String] = []
+        var paragraphLine = 0
         var listTag: String?
         var inFence = false
         var fence: [String] = []
+        var fenceLine = 0
 
+        func anchor(_ lineIndex: Int) -> String {
+            sourceAnchors ? " data-source-line=\"\(lineIndex + 1)\"" : ""
+        }
         func flushParagraph() {
             guard !paragraph.isEmpty else { return }
-            out.append("<p>" + inline(paragraph.joined(separator: "\n")) + "</p>")
+            out.append("<p\(anchor(paragraphLine))>" + inline(paragraph.joined(separator: "\n")) + "</p>")
             paragraph.removeAll()
         }
         func closeList() {
@@ -40,11 +51,16 @@ enum MarkdownHTML {
             listTag = nil
         }
         func flushFence() {
-            out.append("<pre><code>" + HTMLEscaping.escape(fence.joined(separator: "\n")) + "</code></pre>")
+            out.append("<pre\(anchor(fenceLine))><code>"
+                + HTMLEscaping.escape(fence.joined(separator: "\n"))
+                + "</code></pre>")
             fence.removeAll()
         }
 
-        for line in normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+        for (lineIndex, line) in normalized
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+            .enumerated() {
             if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                 if inFence {
                     flushFence()
@@ -53,6 +69,7 @@ enum MarkdownHTML {
                     flushParagraph()
                     closeList()
                     inFence = true
+                    fenceLine = lineIndex
                 }
                 continue
             }
@@ -69,27 +86,28 @@ enum MarkdownHTML {
                 flushParagraph()
                 closeList()
                 let title = String(line.dropFirst(level).drop(while: { $0 == " " }))
-                out.append("<h\(level)>\(inline(title))</h\(level)>")
+                out.append("<h\(level)\(anchor(lineIndex))>\(inline(title))</h\(level)>")
                 continue
             }
             if line.hasPrefix(">") {
                 flushParagraph()
                 closeList()
                 let quoted = String(line.dropFirst().drop(while: { $0 == " " }))
-                out.append("<blockquote>\(inline(quoted))</blockquote>")
+                out.append("<blockquote\(anchor(lineIndex))>\(inline(quoted))</blockquote>")
                 continue
             }
             if let item = listItem(line) {
                 flushParagraph()
                 if listTag != item.tag {
                     closeList()
-                    out.append("<\(item.tag)>")
+                    out.append("<\(item.tag)\(anchor(lineIndex))>")
                     listTag = item.tag
                 }
-                out.append("<li>\(inline(item.content))</li>")
+                out.append("<li\(anchor(lineIndex))>\(inline(item.content))</li>")
                 continue
             }
             closeList()
+            if paragraph.isEmpty { paragraphLine = lineIndex }
             paragraph.append(line)
         }
         if inFence { flushFence() }   // unterminated fence: still show the code
