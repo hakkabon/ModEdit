@@ -128,6 +128,85 @@ struct MarkdownHTMLTests {
         let html = MarkdownHTML.render("# A\n\ntext")
         #expect(!html.contains("data-source-line"))
     }
+
+    @Test func sharedProjectionAddsSetextHeadings() {
+        let html = MarkdownHTML.render("Title\n=====\n\nSub\n---")
+        #expect(html.contains("<h1>Title</h1>"))
+        #expect(html.contains("<h2>Sub</h2>"))
+    }
+
+    @Test func sharedProjectionAddsTables() {
+        let html = MarkdownHTML.render("| a | b |\n|---|---|\n| 1 | 2 |")
+        #expect(html.contains("<table>"))
+        #expect(html.contains("<thead><tr><th>a</th><th>b</th></tr></thead>"))
+        #expect(html.contains("<tr><td>1</td><td>2</td></tr>"))
+        #expect(!html.contains("---"))
+    }
+
+    @Test func sharedProjectionAddsNestedLists() {
+        let html = MarkdownHTML.render("- one\n  - nested\n- two")
+        #expect(html.contains("<li>one\n<ul>\n<li>nested</li>\n</ul></li>"))
+        #expect(html.contains("<li>two</li>"))
+    }
+
+    @Test func sharedProjectionAddsListsInsideBlockQuotes() {
+        let onlyList = MarkdownHTML.render("> - one\n> - two")
+        #expect(onlyList == "<blockquote>\n<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n</blockquote>")
+
+        let withProse = MarkdownHTML.render("> intro\n>\n> - one\n>   - nested")
+        #expect(withProse.contains("<p>intro</p>"))
+        #expect(withProse.contains("<li>one\n<ul>\n<li>nested</li>\n</ul></li>"))
+    }
+
+    @Test func escapedPipesStayInsideASingleCell() {
+        let html = MarkdownHTML.render("| a | b |\n|---|---|\n| 1 | \\| |")
+        #expect(html.contains("<tr><td>1</td><td>|</td></tr>"))
+        #expect(!html.contains("<td></td>"))
+    }
+
+    @Test func sharedProjectionAddsStrikethroughAndTaskLists() {
+        let html = MarkdownHTML.render("~~gone~~\n\n- [ ] todo\n- [x] done")
+        #expect(html.contains("<del>gone</del>"))
+        #expect(html.contains("<input type=\"checkbox\" disabled> todo"))
+        #expect(html.contains("<input type=\"checkbox\" disabled checked> done"))
+    }
+
+    @Test func orderedListsKeepANonDefaultStart() {
+        let html = MarkdownHTML.render("3. three\n4. four")
+        #expect(html.contains("<ol start=\"3\">"))
+    }
+
+    @Test func hardBreaksBecomeLineBreaks() {
+        let html = MarkdownHTML.render("line  \nbreak")
+        #expect(html.contains("line<br>break"))
+    }
+
+    @Test func sourceAnchorsCoverListsTablesAndQuotes() {
+        let source = """
+            > quote
+
+            | a | b |
+            |---|---|
+            | 1 | 2 |
+
+            3. three
+            4. four
+            """
+        let html = MarkdownHTML.render(source, sourceAnchors: true)
+
+        #expect(html.contains("<blockquote data-source-line=\"1\">"))
+        #expect(html.contains("<table data-source-line=\"3\">"))
+        #expect(html.contains("<ol data-source-line=\"7\" start=\"3\">"))
+        #expect(html.contains("<li data-source-line=\"7\">three</li>"))
+        #expect(html.contains("<li data-source-line=\"8\">four</li>"))
+    }
+
+    @Test func unresolvedImagesKeepAltTextAndUnsafeLinksStayText() {
+        let html = MarkdownHTML.render("[x](javascript:alert(1)) ![alt](pic.png)")
+        #expect(!html.contains("<a "))
+        #expect(!html.contains("<img "))
+        #expect(html.contains("x alt"))
+    }
 }
 
 @Suite("Preview scroll bridge")
@@ -262,6 +341,22 @@ struct PreviewRenderingTests {
         let helper = try await PreviewRendering.renderHTML(from: "# Title",
                                                            with: MarkdownPreviewRenderer())
         #expect(helper == direct)
+    }
+
+    @Test func markdownPreviewUsesTheSharedProjection() async throws {
+        let source = """
+            Title
+            =====
+
+            | a | b |
+            |---|---|
+            | 1 | 2 |
+            """
+        let html = try await MarkdownPreviewRenderer().renderHTML(from: source)
+
+        #expect(html.contains("<h1 data-source-line=\"1\">Title</h1>"))
+        #expect(html.contains("<table data-source-line=\"4\">"))
+        #expect(html.contains("<th>a</th><th>b</th>"))
     }
 }
 

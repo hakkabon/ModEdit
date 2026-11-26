@@ -974,6 +974,7 @@ public struct MarkdownRenderer: RenderedTextRenderer, Sendable {
             let text = tree.source as NSString
             while index < contentEnd {
                 if text.character(at: index) == 0x7C,
+                   !isEscapedPipe(at: index, in: text),
                    !cellSpans.contains(where: { $0.range.contains(index) }) {
                     let before = tree.sourceText(in: line.lowerBound..<index)
                         .trimmingCharacters(in: .whitespaces)
@@ -1021,6 +1022,19 @@ public struct MarkdownRenderer: RenderedTextRenderer, Sendable {
             character == "|" || character == "-" || character == ":" ||
                 character == " " || character == "\t"
         }
+    }
+
+    /// True when the pipe at `index` is escaped by an odd number of preceding
+    /// backslashes, as in a GFM table cell containing a literal `|`. Such a
+    /// pipe is content, not a cell boundary (and not the closing delimiter).
+    private func isEscapedPipe(at index: Int, in text: NSString) -> Bool {
+        var backslashes = 0
+        var cursor = index - 1
+        while cursor >= 0, text.character(at: cursor) == 0x5C {
+            backslashes += 1
+            cursor -= 1
+        }
+        return backslashes % 2 == 1
     }
 
     // MARK: Leaf blocks

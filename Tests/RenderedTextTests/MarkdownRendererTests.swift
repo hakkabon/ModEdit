@@ -290,6 +290,13 @@ struct MarkdownRendererTests {
         #expect(!table.displayText.contains(":--"))
     }
 
+    @Test func escapedPipesStayInsideTableCells() throws {
+        let document = try render("| A | B |\n|---|---|\n| 1 | \\| |\n")
+        let table = try #require(block(document, kind: .table))
+        #expect(table.displayText == "A\tB\n1\t|")
+        #expect(table.runs.filter { $0.role == .tableSeparator }.count == 2)
+    }
+
     // MARK: Leaf blocks
 
     @Test func rendersThematicBreaksAndHTMLBlocks() throws {

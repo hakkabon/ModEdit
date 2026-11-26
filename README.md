@@ -16,9 +16,12 @@ the right shows it as headings, emphasis, symbols and mathematics.
 > line is collapsed in place while the caret line remains literal, editable
 > source. Entities, escapes, bullets, thematic breaks and inline-code delimiters
 > show their rendered glyphs, standalone local and `data:` images are drawn as
-> attachments, and missing glyphs use Core Text font fallback. The preview
-> follows the caret line, and scrolling the preview reveals the matching source
-> block without moving the caret. See the [roadmap](#roadmap).
+> attachments, and missing glyphs use Core Text font fallback. Rendered editing
+> and the Markdown preview now share one `RenderedText` projection, so setext
+> headings, nested and task lists, tables, strikethrough and block-quote lists
+> appear in the preview too. The preview follows the caret line, and scrolling
+> the preview reveals the matching source block without moving the caret. See the
+> [roadmap](#roadmap).
 
 ## Table of contents
 
@@ -74,9 +77,11 @@ the right shows it as headings, emphasis, symbols and mathematics.
   Markdown it follows the caret's source line, and scrolling the preview reveals
   the matching block in the editor without moving the caret. Documents above
   5 MB show a notice instead of being copied and rendered:
-  * *Markdown* — headings, paragraphs, lists, block quotes, fenced code,
-    `**bold**`, `*italic*`, `` `code` ``, links (including URLs with balanced
-    parentheses such as `/wiki/Foo_(bar)`).
+  * *Markdown* — setext and ATX headings, paragraphs, nested and task lists,
+    block quotes, tables, fenced code, `**bold**`, `*italic*`, `~~struck~~`,
+    `` `code` `` and links (including URLs with balanced parentheses such as
+    `/wiki/Foo_(bar)`). Images show their alt text until relative resources are
+    supported.
   * *LaTeX* — `\section`, `\textbf`, `\emph`, math with Greek letters and
     operators (`\alpha` → α), super/subscripts (`x^2`, `x_{i}`), comments hidden.
   * *HTML* — your page as written, with scripts, frames and remote loads
@@ -266,7 +271,7 @@ ModEditCore (library)
 │               EditorTheme: TokenKind → fonts/colours (AppKit)            │
 │               StorageHighlighter: applies tokens to NSTextStorage        │
 │               DirtyRange: accumulates pending edits for debouncing       │
-│ Preview       PreviewRenderer → MarkdownHTML / LaTeXHTML → PreviewPage   │
+│ Preview       PreviewRenderer → RenderedHTML / LaTeXHTML → PreviewPage   │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -335,7 +340,9 @@ longer than their source range keep the source spelling. When the editor font
 has no glyph for a display character, `RenderedEditorStyler` asks Core Text for
 a fallback font and applies it only to that substitution; `LastResort` is
 rejected so an unmapped character never becomes a blank box. The WebKit preview
-still uses `MarkdownHTML`; moving it onto the same projection is roadmap step 6.
+consumes the same projection through `RenderedHTML`; `MarkdownHTML` is a thin
+adapter that owns escaping and the preview page's safety rules, not a second
+Markdown parser.
 
 Standalone Markdown images are presentation attachments rather than a second
 text buffer. `RenderedEditorImageCache` resolves relative destinations against
@@ -451,9 +458,10 @@ Previewed files are *untrusted input*, so the preview is hardened:
   frame) is cancelled. Link previews and back/forward gestures are disabled;
 * all text is **HTML-escaped** before markup is added; raw HTML in a Markdown or
   LaTeX file is shown as text;
-* Markdown link destinations are parsed with balanced parentheses and escaped
-  before insertion, so emphasis cannot rewrite a URL. Only `http`, `https` and
-  `mailto` become links; `javascript:`, `data:` and `file:` stay literal text;
+* Markdown is parsed by `swift-markdown` and projected once into `RenderedText`
+  blocks and runs; destinations are escaped before insertion, so emphasis cannot
+  rewrite a URL. Only `http`, `https` and `mailto` become links; `javascript:`,
+  `data:` and `file:` stay plain text, and images show their alt text;
 * generated pages and user HTML files carry the same **Content-Security-Policy**:
   no scripts, frames, objects, forms or connections, and no remote loads
   (`data:` images and fonts still work). The policy is injected into a user
@@ -470,8 +478,9 @@ load and scroll restoration. A superseded render is cancelled, and identical
 output is skipped before the web view is touched.
 
 Markdown previews also carry one-based `data-source-line` anchors on headings,
-paragraphs, lists, block quotes and fenced code. Only
-`MarkdownHTML.render(..., sourceAnchors: true)` emits them, and only Markdown
+paragraphs, lists and their items, block quotes, tables, thematic breaks and
+fenced code. They are emitted only by the trusted `RenderedHTML` projection when
+`MarkdownHTML.render(..., sourceAnchors: true)` is called, and only Markdown
 opts into scroll synchronisation, so anchors in untrusted user HTML are never
 interpreted as source positions. After each load the pane injects a small scroll
 bridge (page JavaScript stays disabled; app-injected scripts still run), applies
@@ -820,7 +829,8 @@ Sources/
     Highlighting/                   Token, Tokenizer, scanners, DirtyRange, EditorTheme, StorageHighlighter
     IO/TextIO.swift
     Model/                          EditorDocument, EditorModel, LineIndex, LineNumberSource
-    Preview/                        PreviewRenderer, MarkdownHTML, LaTeXHTML, escaping, page
+    Preview/                        PreviewRenderer, RenderedHTML, MarkdownHTML, LaTeXHTML,
+                                    escaping, page
     Workbench/                      PL/0 parser inspector
     UI/                             root/status bar, editor/gutter, preview
   RenderedText/                     platform-neutral Markdown projection and source/display map
@@ -933,14 +943,18 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
 * **Scroll synchronisation is block-granular and Markdown-only.** The preview
   follows the caret's source line and reports the block at its viewport top;
   scrolling it reveals that line in the editor without moving the caret.
-  Anchors exist for headings, paragraphs, lists, block quotes and fenced code,
-  so links, tables or very short blocks can map to a neighbouring line. The
-  preview does not mirror the selection, find results or rendered-mode caret
-  positions, and LaTeX and HTML previews keep their independent scroll position.
-* **Markdown preview subset only** (no nested lists, tables, images, setext
-  headings). The `RenderedText` projection supports them and now drives rendered
-  editing, including editor-side image attachments, but the preview is not wired
-  to it yet. **LaTeX subset only** (no environments, `\frac`, `\sqrt`, macros).
+  Anchors exist for headings, paragraphs, lists and list items, block quotes,
+  tables, thematic breaks and fenced code, so inline links or very short blocks
+  can map to a neighbouring line. The preview does not mirror the selection,
+  find results or rendered-mode caret positions, and LaTeX and HTML previews
+  keep their independent scroll position.
+* **Markdown preview images stay textual.** Rendered editing and the preview
+  share the `RenderedText` projection, including setext headings, nested and
+  task lists, tables, strikethrough and block-quote lists, but the preview shows
+  every image as its alt text until relative resources are supported. Table
+  column alignment is not reproduced, and maths (KaTeX) and embedded-language
+  highlighting remain roadmap work. **LaTeX subset only** (no environments,
+  `\frac`, `\sqrt`, macros).
 * **HTML preview cannot load relative resources** (images, CSS) yet. The
   `NSDocument` shell now exposes the document URL, so supplying it as the web
   view's base URL is a natural next step.
@@ -1065,9 +1079,9 @@ evidence as stable-prefix reuse.
    Remaining work is selection and find-result mirroring, finer-grained anchors,
    and extending synchronisation to other formats once they share a source map.
 6. **Real markup parsers:** `swift-markdown` now drives the `RenderedText`
-   projection; the WebKit preview still uses the small `MarkdownHTML` subset.
-   Move the preview onto the shared projection, bundle KaTeX for typeset maths,
-   and expand stateful highlighting to embedded languages.
+   projection, and rendered editing and the WebKit preview both render from it.
+   Bundle KaTeX for typeset maths and expand stateful highlighting to embedded
+   languages.
 7. **Relative resources in the preview**, using the document URL as the web
    view's base URL.
 8. User-selectable themes, font and size settings; soft-wrap toggle.
