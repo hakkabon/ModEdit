@@ -31,8 +31,10 @@ final class EditorModel: ObservableObject {
     /// view so the window's toolbar can toggle it.
     @Published var showPreview = true
     /// Directory used to resolve relative image destinations in rendered
-    /// Markdown. The document shell updates it when the file is saved as.
-    var resourceBaseURL: URL?
+    /// Markdown and relative resources in the live preview. The document shell
+    /// updates it when the file is saved as, and the preview reloads with the
+    /// new base URL.
+    @Published var resourceBaseURL: URL?
     /// Whether Markdown syntax outside the caret line is collapsed in the
     /// editor. Only formats that support rendered editing honour this.
     @Published var showsRenderedEditing = false

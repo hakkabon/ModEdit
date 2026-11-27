@@ -27,6 +27,7 @@ struct EditorRootView: View {
                         PreviewPane(renderer: renderer,
                                     revision: model.textRevision,
                                     source: { model.previewSnapshot(upTo: PreviewPane.maximumSourceLength) },
+                                    baseURL: model.resourceBaseURL,
                                     scrollRequest: model.previewScrollRequest,
                                     synchronizesScroll: model.format.supportsPreviewSourceMapping,
                                     onScrollToLine: { model.scrollEditor(toPreviewLine: $0) })

@@ -20,8 +20,9 @@ the right shows it as headings, emphasis, symbols and mathematics.
 > and the Markdown preview now share one `RenderedText` projection, so setext
 > headings, nested and task lists, tables, strikethrough and block-quote lists
 > appear in the preview too. The preview follows the caret line, and scrolling
-> the preview reveals the matching source block without moving the caret. See the
-> [roadmap](#roadmap).
+> the preview reveals the matching source block without moving the caret.
+> Relative images, styles and fonts resolve against the document's directory,
+> including after Save As. See the [roadmap](#roadmap).
 
 ## Table of contents
 
@@ -80,12 +81,14 @@ the right shows it as headings, emphasis, symbols and mathematics.
   * *Markdown* — setext and ATX headings, paragraphs, nested and task lists,
     block quotes, tables, fenced code, `**bold**`, `*italic*`, `~~struck~~`,
     `` `code` `` and links (including URLs with balanced parentheses such as
-    `/wiki/Foo_(bar)`). Images show their alt text until relative resources are
-    supported.
+    `/wiki/Foo_(bar)`). Local images resolve against the document's directory
+    and `data:image` payloads work in any document; remote and unsafe image
+    destinations keep their alt text.
   * *LaTeX* — `\section`, `\textbf`, `\emph`, math with Greek letters and
     operators (`\alpha` → α), super/subscripts (`x^2`, `x_{i}`), comments hidden.
   * *HTML* — your page as written, with scripts, frames and remote loads
-    disabled by the preview policy.
+    disabled by the preview policy. Local images, styles and fonts resolve
+    against the document's directory.
 * **Encoding-faithful I/O**: UTF-8 (with/without BOM), UTF-16 little- and
   big-endian (with BOM, plus unambiguous BOM-less ASCII/Latin text), and
   detected legacy encodings are written back with the same encoding. UTF-16
@@ -291,8 +294,10 @@ Data flow while typing:
 4. SwiftUI re-evaluates `EditorRootView`; after a 250 ms debounce `PreviewPane`
    takes one immutable snapshot on the main actor, renders the HTML on a detached
    task, skips identical output, and restores the scroll position. Fast typing
-   therefore does not copy the complete file for every keystroke. Documents over
-   5 MB are not copied at all; the preview shows a size notice.
+   therefore does not copy the complete file for every keystroke. The document
+   directory is forwarded as the web view's base URL, and a Save As reloads even
+   unchanged HTML so relative resources re-resolve. Documents over 5 MB are not
+   copied at all; the preview shows a size notice.
 5. Selection changes update the status bar's one-based `line:column` location.
    A successful write records the exact saved generation; the document becomes
    clean only when no newer edit exists.
@@ -342,7 +347,9 @@ a fallback font and applies it only to that substitution; `LastResort` is
 rejected so an unmapped character never becomes a blank box. The WebKit preview
 consumes the same projection through `RenderedHTML`; `MarkdownHTML` is a thin
 adapter that owns escaping and the preview page's safety rules, not a second
-Markdown parser.
+Markdown parser. When the document has a directory, the preview emits local
+images as `<img>` elements and lets the web view resolve them against that
+directory; otherwise images remain alt text.
 
 Standalone Markdown images are presentation attachments rather than a second
 text buffer. `RenderedEditorImageCache` resolves relative destinations against
@@ -461,10 +468,13 @@ Previewed files are *untrusted input*, so the preview is hardened:
 * Markdown is parsed by `swift-markdown` and projected once into `RenderedText`
   blocks and runs; destinations are escaped before insertion, so emphasis cannot
   rewrite a URL. Only `http`, `https` and `mailto` become links; `javascript:`,
-  `data:` and `file:` stay plain text, and images show their alt text;
+  `data:` and `file:` link destinations stay plain text. Image sources are
+  limited to `data:image` payloads and local files in documents that have a
+  directory; remote and unsafe image sources keep their alt text;
 * generated pages and user HTML files carry the same **Content-Security-Policy**:
-  no scripts, frames, objects, forms or connections, and no remote loads
-  (`data:` images and fonts still work). The policy is injected into a user
+  no scripts, frames, objects, forms or connections, and no remote loads.
+  `data:` and local `file:` subresources are allowed for styles, images, fonts
+  and media so relative document assets load. The policy is injected into a user
   document's `<head>`, after `<html>`, after a doctype, or before a fragment.
 
 Earlier versions inserted LaTeX source into the page unescaped (so a `.tex` file
@@ -476,6 +486,13 @@ document on the main actor, the format's renderer transforms it on a detached
 task, and only the finished HTML returns to the main actor for the `WKWebView`
 load and scroll restoration. A superseded render is cancelled, and identical
 output is skipped before the web view is touched.
+
+The page is loaded with the document's directory as the `WKWebView` base URL.
+Markdown emits local images only when such a directory exists, and user HTML
+files can load relative stylesheets, images and fonts next to the file. Untitled
+documents keep a `nil` base URL, so relative resources stay inert. The directory
+is published by `EditorModel`, so Save As both re-renders and reloads the page
+even when the HTML itself is unchanged.
 
 Markdown previews also carry one-based `data-source-line` anchors on headings,
 paragraphs, lists and their items, block quotes, tables, thematic breaks and
@@ -903,7 +920,9 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
   on the main actor, renders Markdown/LaTeX/HTML on a detached task, then
   returns to the main actor for the `WKWebView` load and scroll restoration.
   Cancellation is forwarded to the detached render, and identical HTML is
-  skipped before the web view is touched.
+  skipped before the web view is touched. The document directory travels with
+  the render request and is also the load's base URL, so local resources resolve
+  without being inlined into the HTML.
 * **One shared incremental line index.** The document owns the UTF-16 line
   starts. A text edit rebuilds only the affected line window and shifts the
   remaining starts; the status bar and gutter both read that index instead of
@@ -948,16 +967,18 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
   can map to a neighbouring line. The preview does not mirror the selection,
   find results or rendered-mode caret positions, and LaTeX and HTML previews
   keep their independent scroll position.
-* **Markdown preview images stay textual.** Rendered editing and the preview
+* **Markdown preview is still a subset.** Rendered editing and the preview
   share the `RenderedText` projection, including setext headings, nested and
-  task lists, tables, strikethrough and block-quote lists, but the preview shows
-  every image as its alt text until relative resources are supported. Table
+  task lists, tables, strikethrough and block-quote lists. Images resolve from
+  `data:image` payloads or local destinations in documents with a file location;
+  remote images and images in untitled documents keep their alt text. Table
   column alignment is not reproduced, and maths (KaTeX) and embedded-language
   highlighting remain roadmap work. **LaTeX subset only** (no environments,
   `\frac`, `\sqrt`, macros).
-* **HTML preview cannot load relative resources** (images, CSS) yet. The
-  `NSDocument` shell now exposes the document URL, so supplying it as the web
-  view's base URL is a natural next step.
+* **Preview resources are local-only.** The base URL is the document directory,
+  so relative and absolute local resources load, but remote stylesheets, images,
+  fonts and media stay blocked by policy. Documents without a file location
+  cannot resolve relative resources.
 * **Live preview is capped at 5 MB and rendered editing at 512 KB.** Larger
   documents remain editable and savable in source mode; the preview pane shows a
   notice instead of copying and rendering them.
@@ -1082,8 +1103,10 @@ evidence as stable-prefix reuse.
    projection, and rendered editing and the WebKit preview both render from it.
    Bundle KaTeX for typeset maths and expand stateful highlighting to embedded
    languages.
-7. **Relative resources in the preview**, using the document URL as the web
-   view's base URL.
+7. **Relative resources in the preview** are implemented: the pane loads with
+   the document directory as its base URL, Markdown emits local images only for
+   located documents, and Save As refreshes the base URL. Remote resources stay
+   blocked by policy.
 8. User-selectable themes, font and size settings; soft-wrap toggle.
 9. Export (HTML/PDF) from the preview.
 

@@ -23,10 +23,18 @@ enum MarkdownHTML {
     ///   attribute to top-level blocks (and list items). The live preview uses
     ///   these to map its scroll position to and from source lines; leaving
     ///   them off keeps the plain HTML output compact for other callers.
-    static func render(_ source: String, sourceAnchors: Bool = false) -> String {
+    /// - Parameter baseURL: The document directory, when it has one. Relative
+    ///   local images become `<img>` elements so the preview's document base
+    ///   URL can resolve them. Without it they remain alt text. Remote images
+    ///   always remain alt text; `data:image` sources work either way.
+    static func render(_ source: String,
+                       sourceAnchors: Bool = false,
+                       baseURL: URL? = nil) -> String {
         do {
             let document = try MarkdownRenderer().render(source)
-            return RenderedHTML.render(document, sourceAnchors: sourceAnchors)
+            return RenderedHTML.render(document,
+                                       sourceAnchors: sourceAnchors,
+                                       allowsLocalImages: baseURL != nil)
         } catch {
             // The projection validates its own block/run invariants. A failure
             // should not hide the document, so show the escaped source instead.

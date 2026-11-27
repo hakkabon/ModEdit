@@ -27,12 +27,15 @@ enum PreviewPage {
     ///
     /// It forbids scripts, remote loads, frames and form submissions. Inline
     /// styles are allowed so documents still look like themselves; `data:`
-    /// images/fonts keep self-contained files working. `base-uri` prevents a
-    /// `<base>` tag from redirecting links elsewhere.
+    /// images/fonts keep self-contained files working, and `file:` lets
+    /// resources relative to the document directory load through the preview's
+    /// base URL. `base-uri` prevents a `<base>` tag from redirecting links
+    /// elsewhere.
     static let contentSecurityPolicy = """
-        default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; \
-        img-src data:; font-src data:; media-src data:; connect-src 'none'; \
-        frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'
+        default-src 'none'; script-src 'none'; style-src 'unsafe-inline' file:; \
+        img-src data: file:; font-src data: file:; media-src data: file:; \
+        connect-src 'none'; frame-src 'none'; object-src 'none'; \
+        base-uri 'none'; form-action 'none'
         """
 
     /// Wraps `body` in a complete document with shared styling.
@@ -56,6 +59,7 @@ enum PreviewPage {
         pre { background: rgba(127,127,127,0.12); padding: 12px; border-radius: 6px; overflow-x: auto; }
         pre code { background: none; padding: 0; }
         blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid rgba(127,127,127,0.5); color: gray; }
+        img { max-width: 100%; height: auto; }
         .math { font-family: "STIX Two Math", "Times New Roman", serif; font-style: italic; }
         .math.display { display: block; text-align: center; margin: 1em 0; }
         </style>

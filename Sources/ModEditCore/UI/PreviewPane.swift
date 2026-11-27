@@ -16,6 +16,9 @@ struct PreviewPane: NSViewRepresentable {
     let renderer: any PreviewRenderer
     let revision: UInt64
     let source: @MainActor () -> String?
+    /// Document directory used to resolve relative images, styles and fonts.
+    /// `nil` for untitled documents, which keeps those resources inert.
+    var baseURL: URL?
     /// Caret line the preview should follow, when the format emits source
     /// anchors. `nil` leaves the preview's scroll position alone.
     var scrollRequest: PreviewScrollRequest?
@@ -47,6 +50,7 @@ struct PreviewPane: NSViewRepresentable {
         context.coordinator.updateConfiguration(
             synchronizesScroll: synchronizesScroll,
             scrollRequest: scrollRequest,
+            baseURL: baseURL,
             onScrollToLine: onScrollToLine)
         context.coordinator.render(revision: revision, source: source,
                                    with: renderer, into: webView)
@@ -56,9 +60,11 @@ struct PreviewPane: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         private var task: Task<Void, Never>?
         private var lastHTML: String?
+        private var lastBaseURL: URL?
         private var pendingScrollY: Double = 0
 
         private var synchronizesScroll = false
+        private var baseURL: URL?
         private var latestScrollRequest: PreviewScrollRequest?
         private var appliedScrollRequestID: UInt64 = 0
         private var pageReady = false
@@ -72,8 +78,10 @@ struct PreviewPane: NSViewRepresentable {
 
         func updateConfiguration(synchronizesScroll: Bool,
                                  scrollRequest: PreviewScrollRequest?,
+                                 baseURL: URL?,
                                  onScrollToLine: @escaping (Int) -> Void) {
             self.synchronizesScroll = synchronizesScroll
+            self.baseURL = baseURL
             self.onScrollToLine = onScrollToLine
             if synchronizesScroll {
                 latestScrollRequest = scrollRequest
@@ -100,6 +108,7 @@ struct PreviewPane: NSViewRepresentable {
                 guard !Task.isCancelled else { return }
 
                 let html: String
+                let baseURL = self?.baseURL
                 do {
                     // Materialize the complete document only after the debounce,
                     // not once for every key event. Large documents are not
@@ -109,21 +118,27 @@ struct PreviewPane: NSViewRepresentable {
                             <p>Live preview is disabled for documents larger than \
                             \(PreviewPane.maximumSourceLength / 1_024 / 1_024) MB.</p>
                             """)
-                        guard !Task.isCancelled, let self, let webView, html != self.lastHTML else { return }
-                        await self.load(html, into: webView)
+                        guard !Task.isCancelled, let self, let webView,
+                              html != self.lastHTML || baseURL != self.lastBaseURL
+                        else { return }
+                        await self.load(html, baseURL: baseURL, into: webView)
                         return
                     }
-                    html = try await PreviewRendering.renderHTML(from: text, with: renderer)
+                    html = try await PreviewRendering.renderHTML(from: text,
+                                                                 baseURL: baseURL,
+                                                                 with: renderer)
                 } catch {
                     html = PreviewPage.wrap(body: "<pre>\(HTMLEscaping.escape("Preview failed: \(error)"))</pre>")
                 }
-                guard !Task.isCancelled, let self, let webView, html != self.lastHTML else { return }
-                await self.load(html, into: webView)
+                guard !Task.isCancelled, let self, let webView,
+                      html != self.lastHTML || baseURL != self.lastBaseURL else { return }
+                await self.load(html, baseURL: baseURL, into: webView)
             }
         }
 
-        private func load(_ html: String, into webView: WKWebView) async {
+        private func load(_ html: String, baseURL: URL?, into webView: WKWebView) async {
             lastHTML = html
+            lastBaseURL = baseURL
             pageReady = false
             // A reload discards the installed bridge and the old source-line
             // anchors. Reapply the current caret position once the new page
@@ -133,7 +148,7 @@ struct PreviewPane: NSViewRepresentable {
             // App-injected scripts still work with page JavaScript disabled.
             let value = try? await webView.evaluateJavaScript("window.scrollY")
             pendingScrollY = (value as? Double) ?? 0
-            webView.loadHTMLString(html, baseURL: nil)
+            webView.loadHTMLString(html, baseURL: baseURL)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

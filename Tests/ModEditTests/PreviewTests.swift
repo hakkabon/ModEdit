@@ -10,6 +10,29 @@ struct HTMLEscapingTests {
     }
 }
 
+@Suite("Preview page")
+struct PreviewPageTests {
+
+    @Test func localResourcesAreAllowedWithoutRemoteLoads() {
+        let policy = PreviewPage.contentSecurityPolicy
+        #expect(policy.contains("script-src 'none'"))
+        #expect(policy.contains("style-src 'unsafe-inline' file:"))
+        #expect(policy.contains("img-src data: file:"))
+        #expect(policy.contains("font-src data: file:"))
+        #expect(policy.contains("media-src data: file:"))
+        #expect(policy.contains("connect-src 'none'"))
+        #expect(policy.contains("frame-src 'none'"))
+        #expect(policy.contains("base-uri 'none'"))
+        #expect(!policy.contains("http:"))
+        #expect(!policy.contains("https:"))
+    }
+
+    @Test func imagesFitThePreviewWidth() {
+        let html = PreviewPage.wrap(body: "<p>x</p>")
+        #expect(html.contains("img { max-width: 100%; height: auto; }"))
+    }
+}
+
 @Suite("MarkdownHTML")
 struct MarkdownHTMLTests {
 
@@ -207,6 +230,83 @@ struct MarkdownHTMLTests {
         #expect(!html.contains("<img "))
         #expect(html.contains("x alt"))
     }
+
+    @Test func relativeImagesNeedADocumentDirectory() {
+        let source = "![alt](pic.png)"
+        let without = MarkdownHTML.render(source)
+        #expect(!without.contains("<img "))
+        #expect(without.contains("alt"))
+
+        let with = MarkdownHTML.render(
+            source, baseURL: URL(fileURLWithPath: "/tmp/docs", isDirectory: true))
+        #expect(with == "<p><img src=\"pic.png\" alt=\"alt\"></p>")
+    }
+
+    @Test func absoluteAndLocalFileImagesNeedADocumentDirectory() {
+        for destination in ["/tmp/pic.png", "file:///tmp/pic.png"] {
+            let source = "![alt](\(destination))"
+            #expect(!MarkdownHTML.render(source).contains("<img "))
+
+            let html = MarkdownHTML.render(
+                source, baseURL: URL(fileURLWithPath: "/tmp/docs", isDirectory: true))
+            #expect(html.contains("<img src=\"\(destination)\" alt=\"alt\">"))
+        }
+    }
+
+    @Test func formattedAltTextBecomesOneImage() {
+        let html = MarkdownHTML.render(
+            "![a **b** and `code`](pic.png)",
+            baseURL: URL(fileURLWithPath: "/tmp/docs", isDirectory: true))
+
+        #expect(html == "<p><img src=\"pic.png\" alt=\"a b and code\"></p>")
+    }
+
+    @Test func adjacentImagesWithTheSameDestinationStaySeparate() {
+        let html = MarkdownHTML.render(
+            "![a](pic.png)![b](pic.png)",
+            baseURL: URL(fileURLWithPath: "/tmp/docs", isDirectory: true))
+
+        #expect(html == "<p><img src=\"pic.png\" alt=\"a\"><img src=\"pic.png\" alt=\"b\"></p>")
+    }
+
+    @Test func emptyAltTextStaysEmpty() {
+        let html = MarkdownHTML.render(
+            "![](pic.png)",
+            baseURL: URL(fileURLWithPath: "/tmp/docs", isDirectory: true))
+
+        #expect(html == "<p><img src=\"pic.png\" alt=\"\"></p>")
+    }
+
+    @Test func dataImagesWorkWithoutADocumentDirectory() {
+        let source = "![alt](data:image/png;base64,AAAA)"
+        let html = MarkdownHTML.render(source)
+
+        #expect(html == "<p><img src=\"data:image/png;base64,AAAA\" alt=\"alt\"></p>")
+    }
+
+    @Test func remoteAndUnsafeImageDestinationsStayAltText() {
+        let baseURL = URL(fileURLWithPath: "/tmp/docs", isDirectory: true)
+        for destination in [
+            "https://example.com/pic.png",
+            "//example.com/pic.png",
+            "javascript:alert(1)",
+            "data:text/html,hello",
+            "file://remotehost/pic.png",
+        ] {
+            let html = MarkdownHTML.render("![alt](\(destination))", baseURL: baseURL)
+            #expect(!html.contains("<img "), "unexpected image for \(destination)")
+            #expect(html.contains("alt"))
+        }
+    }
+
+    @Test func imageDestinationsAreEscapedOnce() {
+        let html = MarkdownHTML.render(
+            "![alt](pic.png?a=1&b=2)",
+            baseURL: URL(fileURLWithPath: "/tmp/docs", isDirectory: true))
+
+        #expect(html.contains("src=\"pic.png?a=1&amp;b=2\""))
+        #expect(!html.contains("&amp;amp;"))
+    }
 }
 
 @Suite("Preview scroll bridge")
@@ -358,6 +458,33 @@ struct PreviewRenderingTests {
         #expect(html.contains("<table data-source-line=\"4\">"))
         #expect(html.contains("<th>a</th><th>b</th>"))
     }
+
+    @Test func helperForwardsTheDocumentDirectory() async throws {
+        let baseURL = URL(fileURLWithPath: "/tmp/docs", isDirectory: true)
+        let probe = BaseURLProbe()
+
+        _ = try await PreviewRendering.renderHTML(
+            from: "x", baseURL: baseURL, with: BaseURLProbeRenderer(probe: probe))
+
+        #expect(probe.observedBaseURL == baseURL)
+    }
+
+    @Test func markdownPreviewResolvesImagesThroughTheDocumentDirectory() async throws {
+        let baseURL = URL(fileURLWithPath: "/tmp/docs", isDirectory: true)
+        let html = try await MarkdownPreviewRenderer().renderHTML(
+            from: "![alt](pic.png)", baseURL: baseURL)
+
+        #expect(html.contains("<img src=\"pic.png\" alt=\"alt\">"))
+        #expect(html.contains("img-src data: file:"))
+    }
+
+    @Test func renderersUseTheBaseURLLessDefault() async throws {
+        let html = try await HTMLPreviewRenderer().renderHTML(
+            from: "<p>x</p>", baseURL: URL(fileURLWithPath: "/tmp/docs"))
+
+        #expect(html.contains("<p>x</p>"))
+        #expect(!html.contains("file:///tmp/docs"))
+    }
 }
 
 /// Records which thread a renderer observed, without assuming the test runs
@@ -387,6 +514,37 @@ private struct OffMainProbeRenderer: PreviewRenderer {
         // pthread API directly.
         probe.record(isMainThread: pthread_main_np() != 0)
         return "<p>\(HTMLEscaping.escape(source))</p>"
+    }
+}
+
+/// Records the document directory a renderer received.
+private final class BaseURLProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var baseURL: URL?
+
+    func record(_ url: URL?) {
+        lock.lock()
+        baseURL = url
+        lock.unlock()
+    }
+
+    var observedBaseURL: URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        return baseURL
+    }
+}
+
+private struct BaseURLProbeRenderer: PreviewRenderer {
+    let probe: BaseURLProbe
+
+    func renderHTML(from source: String) async throws -> String {
+        "<p>default</p>"
+    }
+
+    func renderHTML(from source: String, baseURL: URL?) async throws -> String {
+        probe.record(baseURL)
+        return "<p>\(baseURL?.lastPathComponent ?? "none")</p>"
     }
 }
 

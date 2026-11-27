@@ -60,5 +60,20 @@ extension DocumentFormat {
 
 /// Turns document source into an HTML page for the preview pane.
 protocol PreviewRenderer: Sendable {
+    /// Renders without a document location. Relative resources generally cannot
+    /// resolve in this form.
     func renderHTML(from source: String) async throws -> String
+
+    /// Renders with the directory of the document being previewed.
+    ///
+    /// The pane also gives this directory to `WKWebView` as its base URL, so
+    /// relative resources that the renderer emits resolve locally. Renderers
+    /// that do not map resources keep the default implementation.
+    func renderHTML(from source: String, baseURL: URL?) async throws -> String
+}
+
+extension PreviewRenderer {
+    func renderHTML(from source: String, baseURL: URL?) async throws -> String {
+        try await renderHTML(from: source)
+    }
 }

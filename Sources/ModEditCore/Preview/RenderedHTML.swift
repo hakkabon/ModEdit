@@ -3,11 +3,12 @@ import RenderedText
 
 /// Renders the shared `RenderedText` projection as safe preview HTML.
 ///
-/// The editor and the WebKit preview now consume the same swift-markdown
+/// The editor and the WebKit preview consume the same swift-markdown
 /// projection. This adapter only maps block kinds, runs and semantic attributes
 /// to HTML: it never re-parses Markdown and never trusts source text as markup.
-/// All source text is escaped before tags are added, and link targets are
-/// restricted to `http`, `https` and `mailto`.
+/// All source text is escaped before tags are added, link targets are
+/// restricted to `http`, `https` and `mailto`, and local images are emitted only
+/// when the preview can supply a document base URL.
 ///
 /// Source anchors are optional and one-based. Only this renderer and the
 /// Markdown preview opt into them, so a hand-written HTML document can never
@@ -15,7 +16,8 @@ import RenderedText
 enum RenderedHTML {
 
     static func render(_ document: RenderedDocument,
-                       sourceAnchors: Bool = false) -> String {
+                       sourceAnchors: Bool = false,
+                       allowsLocalImages: Bool = false) -> String {
         let lines = LineStarts(source: document.source)
         let source = document.source as NSString
         var output: [String] = []
@@ -24,7 +26,8 @@ enum RenderedHTML {
             let html = render(block,
                               source: source,
                               lines: lines,
-                              sourceAnchors: sourceAnchors)
+                              sourceAnchors: sourceAnchors,
+                              allowsLocalImages: allowsLocalImages)
             if !html.isEmpty { output.append(html) }
         }
         return output.joined(separator: "\n")
@@ -35,7 +38,8 @@ enum RenderedHTML {
     private static func render(_ block: RenderedBlock,
                                source: NSString,
                                lines: LineStarts,
-                               sourceAnchors: Bool) -> String {
+                               sourceAnchors: Bool,
+                               allowsLocalImages: Bool) -> String {
         let anchor = anchored(lines.line(at: block.sourceRange.lowerBound),
                               enabled: sourceAnchors)
 
@@ -44,27 +48,37 @@ enum RenderedHTML {
             return ""
         case .heading:
             let level = block.runs.compactMap(\.attributes.headingLevel).first ?? 1
-            let content = inlineHTML(block.runs, dropTrailingLineBreak: true)
+            let content = inlineHTML(block.runs, source: source,
+                                     allowsLocalImages: allowsLocalImages,
+                                     dropTrailingLineBreak: true)
             return "<h\(level)\(anchor)>\(content)</h\(level)>"
         case .paragraph:
-            return "<p\(anchor)>\(inlineHTML(block.runs))</p>"
+            let content = inlineHTML(block.runs, source: source,
+                                     allowsLocalImages: allowsLocalImages)
+            return "<p\(anchor)>\(content)</p>"
         case .codeBlock:
             let code = codeText(block.runs)
             return "<pre\(anchor)><code>\(HTMLEscaping.escape(code))</code></pre>"
         case .list:
             return renderList(block.runs, source: source, lines: lines,
-                              anchor: anchor, sourceAnchors: sourceAnchors)
+                              anchor: anchor, sourceAnchors: sourceAnchors,
+                              allowsLocalImages: allowsLocalImages)
         case .blockQuote:
             return renderBlockQuote(block, source: source, lines: lines,
-                                    anchor: anchor, sourceAnchors: sourceAnchors)
+                                    anchor: anchor, sourceAnchors: sourceAnchors,
+                                    allowsLocalImages: allowsLocalImages)
         case .table:
-            return renderTable(block, anchor: anchor)
+            return renderTable(block, source: source, anchor: anchor,
+                               allowsLocalImages: allowsLocalImages)
         case .thematicBreak:
             return "<hr\(anchor)>"
         case .htmlBlock, .other:
             // Raw HTML is source text, not markup. Rendering it through the
             // inline path keeps every character escaped and visible.
-            return "<p\(anchor)>\(inlineHTML(block.runs, dropTrailingLineBreak: true))</p>"
+            let content = inlineHTML(block.runs, source: source,
+                                     allowsLocalImages: allowsLocalImages,
+                                     dropTrailingLineBreak: true)
+            return "<p\(anchor)>\(content)</p>"
         }
     }
 
@@ -78,8 +92,12 @@ enum RenderedHTML {
     ///
     /// Consecutive runs that share a link destination are wrapped in one
     /// anchor, so emphasis and code inside a link label keep a single `href`.
-    /// Unsafe destinations leave their label as plain escaped text.
+    /// Unsafe destinations leave their label as plain escaped text. Image
+    /// description runs are grouped into one `<img>` when the source can be
+    /// loaded, with their styled words flattened into the `alt` attribute.
     private static func inlineHTML(_ runs: [RenderedRun],
+                                   source: NSString,
+                                   allowsLocalImages: Bool,
                                    dropTrailingLineBreak: Bool = false) -> String {
         var effective = runs
         if dropTrailingLineBreak {
@@ -94,6 +112,9 @@ enum RenderedHTML {
         var output = ""
         var openLink: String?
         var linkHTML = ""
+        var openImageSource: String?
+        var openImageAlt = ""
+        var lastImageRun: RenderedRun?
 
         func flushLink() {
             guard let href = openLink else { return }
@@ -102,8 +123,52 @@ enum RenderedHTML {
             linkHTML = ""
         }
 
+        func flushImage() {
+            guard let src = openImageSource else { return }
+            output += "<img src=\"\(src)\" alt=\"\(HTMLEscaping.escape(openImageAlt))\">"
+            openImageSource = nil
+            openImageAlt = ""
+            lastImageRun = nil
+        }
+
         for run in effective {
             guard !run.displayText.isEmpty else { continue }
+
+            if run.attributes.isImage {
+                // An image inside a link has its own source in the projection;
+                // the outer link is not available, so never wrap the image text
+                // in an unrelated anchor.
+                flushLink()
+
+                guard let imageSource = imageSource(run.attributes.linkDestination,
+                                                    allowsLocalImages: allowsLocalImages)
+                else {
+                    flushImage()
+                    output += styledInline(run)
+                    continue
+                }
+
+                let beginsAnother = lastImageRun.map {
+                    beginsAnotherImage(in: source,
+                                       after: $0.sourceRange.upperBound,
+                                       before: run.sourceRange.lowerBound)
+                } ?? false
+                if openImageSource != imageSource || beginsAnother {
+                    flushImage()
+                    openImageSource = imageSource
+                }
+                // A description-less image projects a visible "image"
+                // placeholder for rendered editing. The preview keeps the
+                // accessible attribute empty instead of narrating the
+                // placeholder as the alt text.
+                if run.role != .image {
+                    openImageAlt += run.displayText
+                }
+                lastImageRun = run
+                continue
+            }
+
+            flushImage()
 
             switch run.role {
             case .hiddenSyntax:
@@ -131,6 +196,7 @@ enum RenderedHTML {
                 }
             }
         }
+        flushImage()
         flushLink()
         return output
     }
@@ -155,9 +221,8 @@ enum RenderedHTML {
     /// Accepts only absolute `http`, `https` and `mailto` destinations.
     ///
     /// The returned value is escaped for a quoted attribute, so text escaping
-    /// later in the pipeline cannot rewrite the URL. Images and other relative
-    /// destinations remain plain text until the preview gains a document base
-    /// URL.
+    /// later in the pipeline cannot rewrite the URL. Images use
+    /// `imageSource(_:allowsLocalImages:)` instead.
     private static func safeDestination(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let destination = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -173,6 +238,60 @@ enum RenderedHTML {
         return HTMLEscaping.escape(destination)
     }
 
+    // MARK: Images
+
+    /// Returns an escaped `src` value for an image the preview may load.
+    ///
+    /// `data:image` sources are self-contained and always allowed. Relative
+    /// paths, absolute paths and local `file:` URLs need a document directory
+    /// so the web view can resolve them; remote URLs and other schemes stay
+    /// alt text, matching the preview's no-remote-loads policy.
+    private static func imageSource(_ raw: String?,
+                                    allowsLocalImages: Bool) -> String? {
+        guard let raw else { return nil }
+        let destination = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty else { return nil }
+
+        if destination.lowercased().hasPrefix("data:image/") {
+            return HTMLEscaping.escape(destination)
+        }
+        guard allowsLocalImages, isLocalImageDestination(destination) else {
+            return nil
+        }
+        return HTMLEscaping.escape(destination)
+    }
+
+    private static func isLocalImageDestination(_ destination: String) -> Bool {
+        // A fragment cannot name an image, and `//host/path` is a remote URL
+        // with the scheme supplied by the document.
+        guard !destination.hasPrefix("#"), !destination.hasPrefix("//") else {
+            return false
+        }
+
+        if let url = URL(string: destination), let scheme = url.scheme?.lowercased() {
+            guard scheme == "file", url.isFileURL else { return false }
+            // `file://host/path` can address another machine; only local file
+            // URLs (including the localhost spelling) are preview resources.
+            return url.host == nil || url.host == "" || url.host == "localhost"
+        }
+        return true
+    }
+
+    /// True when the source between two image runs starts another image.
+    ///
+    /// Formatted alt text (`![a **b**](x)`) produces several image runs with
+    /// one destination, while two adjacent images (`![a](x)![b](x)`) produce
+    /// the same pattern; the closing/opening syntax in the gap distinguishes
+    /// them.
+    private static func beginsAnotherImage(in source: NSString,
+                                           after end: Int,
+                                           before start: Int) -> Bool {
+        guard start >= end, start <= source.length else { return true }
+        return source.substring(
+            with: NSRange(location: end, length: start - end)
+        ).contains("![")
+    }
+
     // MARK: Block quotes
 
     /// Block quotes normally contain inline text, but a quote may also hold a
@@ -183,11 +302,14 @@ enum RenderedHTML {
                                          source: NSString,
                                          lines: LineStarts,
                                          anchor: String,
-                                         sourceAnchors: Bool) -> String {
+                                         sourceAnchors: Bool,
+                                         allowsLocalImages: Bool) -> String {
         guard let firstMarker = block.runs.firstIndex(where: {
             $0.role == .listMarker
         }) else {
-            let body = inlineHTML(block.runs, dropTrailingLineBreak: true)
+            let body = inlineHTML(block.runs, source: source,
+                                  allowsLocalImages: allowsLocalImages,
+                                  dropTrailingLineBreak: true)
             return "<blockquote\(anchor)>\(body)</blockquote>"
         }
 
@@ -195,9 +317,12 @@ enum RenderedHTML {
                               source: source,
                               lines: lines,
                               anchor: "",
-                              sourceAnchors: sourceAnchors)
+                              sourceAnchors: sourceAnchors,
+                              allowsLocalImages: allowsLocalImages)
         var body = ""
         let prose = inlineHTML(Array(block.runs[..<firstMarker]),
+                               source: source,
+                               allowsLocalImages: allowsLocalImages,
                                dropTrailingLineBreak: true)
         if !prose.isEmpty {
             body = "<p>\(prose)</p>\n"
@@ -236,7 +361,8 @@ enum RenderedHTML {
                                    source: NSString,
                                    lines: LineStarts,
                                    anchor: String,
-                                   sourceAnchors: Bool) -> String {
+                                   sourceAnchors: Bool,
+                                   allowsLocalImages: Bool) -> String {
         var roots: [ListBuilder] = []
         var stack: [ListBuilder] = []
         var currentItem: ItemBuilder?
@@ -304,14 +430,18 @@ enum RenderedHTML {
             render(list,
                    anchor: index == 0 ? anchor : "",
                    includeContainerAnchor: index == 0,
-                   sourceAnchors: sourceAnchors)
+                   source: source,
+                   sourceAnchors: sourceAnchors,
+                   allowsLocalImages: allowsLocalImages)
         }.joined(separator: "\n")
     }
 
     private static func render(_ list: ListBuilder,
                                anchor: String,
                                includeContainerAnchor: Bool,
-                               sourceAnchors: Bool) -> String {
+                               source: NSString,
+                               sourceAnchors: Bool,
+                               allowsLocalImages: Bool) -> String {
         var start = ""
         if list.tag == "ol", let number = list.start, number != 1 {
             start = " start=\"\(number)\""
@@ -320,14 +450,19 @@ enum RenderedHTML {
         guard !list.items.isEmpty else { return opening + "</\(list.tag)>" }
 
         let items = list.items.map {
-            render($0, sourceAnchors: sourceAnchors)
+            render($0, source: source, sourceAnchors: sourceAnchors,
+                   allowsLocalImages: allowsLocalImages)
         }.joined(separator: "\n")
         return opening + "\n" + items + "\n</\(list.tag)>"
     }
 
     private static func render(_ item: ItemBuilder,
-                               sourceAnchors: Bool) -> String {
-        var body = inlineHTML(item.runs, dropTrailingLineBreak: true)
+                               source: NSString,
+                               sourceAnchors: Bool,
+                               allowsLocalImages: Bool) -> String {
+        var body = inlineHTML(item.runs, source: source,
+                              allowsLocalImages: allowsLocalImages,
+                              dropTrailingLineBreak: true)
         switch item.marker {
         case .task(let checked):
             body = "<input type=\"checkbox\" disabled\(checked ? " checked" : "")> " + body
@@ -338,7 +473,8 @@ enum RenderedHTML {
             let children = item.children
                 .map {
                     render($0, anchor: "", includeContainerAnchor: false,
-                           sourceAnchors: sourceAnchors)
+                           source: source, sourceAnchors: sourceAnchors,
+                           allowsLocalImages: allowsLocalImages)
                 }
                 .joined(separator: "\n")
             body += (body.isEmpty ? "" : "\n") + children
@@ -379,14 +515,18 @@ enum RenderedHTML {
 
     // MARK: Tables
 
-    private static func renderTable(_ block: RenderedBlock, anchor: String) -> String {
+    private static func renderTable(_ block: RenderedBlock,
+                                    source: NSString,
+                                    anchor: String,
+                                    allowsLocalImages: Bool) -> String {
         var rows: [[String]] = []
         var row: [String] = []
         var cell: [RenderedRun] = []
         var hasContent = false
 
         func flushCell() {
-            row.append(inlineHTML(cell))
+            row.append(inlineHTML(cell, source: source,
+                                  allowsLocalImages: allowsLocalImages))
             cell = []
         }
 
