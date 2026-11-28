@@ -77,6 +77,53 @@ struct RenderedEditorStylerTests {
         #expect(isHidden(storage, at: marker.location))
     }
 
+    @Test func renderedTextUsesTheSelectedFontFamilyAndSize() throws {
+        let theme = EditorTheme(fontSize: 17, fontName: "Menlo-Regular")
+        let styler = RenderedEditorStyler(theme: theme, tabSize: 4)
+        let source = "Plain **bold** text\n"
+        let presentation = try RenderedEditorPresentation(source: source)
+        let storage = makeStorage(source: source, theme: theme, styler: styler,
+                                  presentation: presentation, activeLine: nil)
+
+        let plain = try #require(storage.attribute(
+            .font, at: 0, effectiveRange: nil) as? NSFont)
+        #expect(plain.pointSize == 17)
+        #expect(plain.fontName.hasPrefix("Menlo"))
+
+        let bold = (source as NSString).range(of: "bold")
+        let boldFont = try #require(storage.attribute(
+            .font, at: bold.location, effectiveRange: nil) as? NSFont)
+        #expect(boldFont.pointSize == 17)
+        #expect(boldFont.fontName.hasPrefix("Menlo"))
+        #expect(boldFont.fontDescriptor.symbolicTraits.contains(.bold))
+    }
+
+    @Test func headingSizesScaleWithTheSelectedBaseSize() throws {
+        let source = "# Heading\n"
+        let presentation = try RenderedEditorPresentation(source: source)
+        let heading = (source as NSString).range(of: "Heading")
+
+        func headingFont(baseSize: CGFloat) throws -> NSFont {
+            let theme = EditorTheme(fontSize: baseSize)
+            let styler = RenderedEditorStyler(theme: theme, tabSize: 4)
+            let storage = makeStorage(source: source, theme: theme,
+                                      styler: styler,
+                                      presentation: presentation,
+                                      activeLine: nil)
+            return try #require(storage.attribute(
+                .font, at: heading.location,
+                effectiveRange: nil) as? NSFont)
+        }
+
+        let normal = try headingFont(baseSize: 13)
+        let large = try headingFont(baseSize: 20)
+
+        #expect(normal.pointSize > 13)
+        #expect(large.pointSize > normal.pointSize)
+        let expectedRatio = 20.0 / 13.0
+        #expect(abs(large.pointSize / normal.pointSize - expectedRatio) < 0.01)
+    }
+
     @Test func taskCheckboxesSelectAFallbackFont() throws {
         let theme = EditorTheme()
         let styler = RenderedEditorStyler(theme: theme, tabSize: 4)

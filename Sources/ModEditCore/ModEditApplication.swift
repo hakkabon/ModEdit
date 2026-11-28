@@ -20,12 +20,15 @@ public enum ModEditApplication {
 
 @MainActor
 private final class ModEditApplicationDelegate: NSObject, NSApplicationDelegate {
+    private var settingsWindowController: EditorSettingsWindowController?
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Force the Objective-C runtime to register the class named by
         // `NSDocumentClass` in Info.plist. The string reference alone does not
         // keep a Swift class from being stripped from the linked image.
         _ = ModEditDocument.self
         _ = NSDocumentController.shared
+        NSApp.appearance = EditorPreferences.shared.settings.appearance.nsAppearance
         installMainMenu()
     }
 
@@ -65,8 +68,23 @@ private final class ModEditApplicationDelegate: NSObject, NSApplicationDelegate 
         mainMenu.addItem(appMenuItem())
         mainMenu.addItem(fileMenuItem())
         mainMenu.addItem(editMenuItem())
+        mainMenu.addItem(viewMenuItem())
         mainMenu.addItem(windowMenuItem())
         NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func showSettings(_ sender: Any?) {
+        if settingsWindowController == nil {
+            settingsWindowController = EditorSettingsWindowController(
+                preferences: .shared)
+        }
+        settingsWindowController?.showWindow(nil)
+        settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func toggleSoftWrap(_ sender: Any?) {
+        EditorPreferences.shared.toggleSoftWrap()
     }
 
     private func appMenuItem() -> NSMenuItem {
@@ -77,6 +95,10 @@ private final class ModEditApplicationDelegate: NSObject, NSApplicationDelegate 
         menu.addItem(menuItem("About ModEdit",
                               action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                               target: NSApp))
+        menu.addItem(menuItem("Settings…",
+                              action: #selector(showSettings(_:)),
+                              keyEquivalent: ",",
+                              target: self))
         menu.addItem(.separator())
 
         let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
@@ -188,6 +210,17 @@ private final class ModEditApplicationDelegate: NSObject, NSApplicationDelegate 
         return item
     }
 
+    private func viewMenuItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "View")
+        item.submenu = menu
+
+        menu.addItem(menuItem("Soft Wrap",
+                              action: #selector(toggleSoftWrap(_:)),
+                              target: self))
+        return item
+    }
+
     private func windowMenuItem() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Window")
@@ -214,5 +247,14 @@ private final class ModEditApplicationDelegate: NSObject, NSApplicationDelegate 
         item.target = target
         item.tag = tag
         return item
+    }
+}
+
+extension ModEditApplicationDelegate: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleSoftWrap(_:)) {
+            menuItem.state = EditorPreferences.shared.settings.softWrap ? .on : .off
+        }
+        return true
     }
 }

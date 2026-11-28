@@ -97,6 +97,13 @@ the right shows it as headings, emphasis, symbols and mathematics.
 * Light/dark mode aware: `EditorTheme` has explicit light and dark palettes for
   text, syntax, gutter and current-line colours; preview pages use
   `color-scheme` so they follow the system appearance too.
+* **App-wide editor settings** (Settings…, <kbd>Cmd</kbd>-<kbd>,</kbd>):
+  System, Light or Dark appearance; System Monospaced, Menlo or Monaco font;
+  10–24 pt text; and a soft-wrap toggle that is also available as
+  View > Soft Wrap. Every open editor updates immediately, rendered-editing
+  text uses the chosen family and scales headings from the chosen size, and the
+  one versioned settings blob is restored on launch. Invalid or corrupt values
+  fall back to the defaults.
 * Experimental **PL/0 language workbench**: native `.pl0` documents, incremental
   UTF-16 tokenization and reference LL parsing with identity reuse, robust error
   recovery, a parser-neutral CST with source/missing/skipped terminals,
@@ -258,7 +265,8 @@ ModEditCore (library)
 │                         └ PL0WorkbenchAdapter (snapshot/result boundary)  │
 │                 status bar       └ LineNumberRulerView       (WKWebView) │
 │                    │                  │  ▲ edits           (WKWebView)    │
-│ Model         EditorModel (@MainActor, @Published revision/format)       │
+│ Model         EditorPreferences (persisted appearance/font/wrap)         │
+│               EditorModel (@MainActor, @Published revision/format)       │
 │                    │ writes through                                       │
 │               EditorDocument (locked mutable text; atomic snapshots)      │
 │                 └ LineIndex (shared, incrementally updated line starts)  │
@@ -867,6 +875,13 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
   when it draws and an appearance switch needs no re-highlighting. The editor
   background, current-line fill, gutter, caret and every token kind come from
   the same theme.
+* **Settings are one versioned JSON value, applied live.** `EditorPreferences`
+  publishes one normalized `EditorSettings` value and persists it as a single
+  `UserDefaults` blob. Appearance is applied to `NSApp`; font family and size
+  update the live text view and rendered styler, then re-highlight through the
+  normal chunked or rendered path. Soft wrap changes only the text container
+  and scroller, so it never touches text, selection or undo. A corrupt or
+  missing blob fails closed to the defaults instead of half-applying old keys.
 * **Soft wrapping is a layout concern, not a document concern.** Line numbers
   come from the shared logical `LineIndex`, so a wrapped line is numbered once.
   Current-line drawing asks TextKit for every visual fragment of the caret's
@@ -979,6 +994,11 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
   so relative and absolute local resources load, but remote stylesheets, images,
   fonts and media stay blocked by policy. Documents without a file location
   cannot resolve relative resources.
+* **Editor typography is limited and local to the editor.** Settings offer
+  three monospaced families and 10–24 pt. Family and size affect source and
+  rendered-editing text, not the preview stylesheet or its code blocks.
+  Appearance is app-wide (System, Light or Dark), not per window, and a font
+  family that is not installed falls back to the system monospaced font.
 * **Live preview is capped at 5 MB and rendered editing at 512 KB.** Larger
   documents remain editable and savable in source mode; the preview pane shows a
   notice instead of copying and rendering them.
@@ -1107,7 +1127,10 @@ evidence as stable-prefix reuse.
    the document directory as its base URL, Markdown emits local images only for
    located documents, and Save As refreshes the base URL. Remote resources stay
    blocked by policy.
-8. User-selectable themes, font and size settings; soft-wrap toggle.
+8. **Editor settings** are implemented: app-wide System/Light/Dark appearance,
+   System Monospaced/Menlo/Monaco font families, 10–24 pt sizes, and a persisted
+   soft-wrap toggle with a View menu item. Remaining work is extending the same
+   controls to the preview and the iPad prototype.
 9. Export (HTML/PDF) from the preview.
 
 ## Contributing

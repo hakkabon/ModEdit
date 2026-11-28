@@ -19,7 +19,7 @@ final class LineNumberRulerView: NSRulerView {
 
     private weak var textView: NSTextView?
     private let lineSource: any LineNumberSource
-    private let theme: EditorTheme
+    private var theme: EditorTheme
     private(set) var currentLine = 1
     private(set) var displayedLineCount = 1
 
@@ -64,6 +64,13 @@ final class LineNumberRulerView: NSRulerView {
 
     func updateCurrentLine(_ line: Int) {
         currentLine = max(1, line)
+        needsDisplay = true
+    }
+
+    /// Replaces the palette without recreating the ruler or losing its scroll
+    /// observations.
+    func setTheme(_ theme: EditorTheme) {
+        self.theme = theme
         needsDisplay = true
     }
 

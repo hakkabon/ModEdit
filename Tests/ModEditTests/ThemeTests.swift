@@ -33,6 +33,29 @@ struct EditorThemeTests {
         }
     }
 
+    @Test func selectedFontFamilyAndSizeChangeTheBaseFonts() {
+        let theme = EditorTheme(fontSize: 18, fontName: "Menlo-Regular")
+
+        #expect(theme.baseFont.pointSize == 18)
+        #expect(theme.boldFont.pointSize == 18)
+        #expect(theme.baseFont.fontName.hasPrefix("Menlo"))
+        #expect(theme.boldFont.fontDescriptor.symbolicTraits.contains(.bold))
+
+        let italic = theme.font(ofSize: 16, italic: true)
+        #expect(italic.pointSize == 16)
+        #expect(italic.fontDescriptor.symbolicTraits.contains(.italic))
+    }
+
+    @Test func missingFontFallsBackToTheSystemMonospacedFont() {
+        let theme = EditorTheme(fontSize: 15, fontName: "ModEditTests-Missing")
+
+        #expect(theme.baseFont.pointSize == 15)
+        #expect(theme.baseFont.fontName
+                == NSFont.monospacedSystemFont(ofSize: 15,
+                                               weight: .regular).fontName)
+        #expect(theme.boldFont.fontDescriptor.symbolicTraits.contains(.bold))
+    }
+
     @Test func adaptiveColoursResolveToTheCurrentAppearance() {
         let theme = EditorTheme()
         let light = resolved(theme.backgroundColor, for: .aqua)

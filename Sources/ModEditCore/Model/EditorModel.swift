@@ -62,6 +62,8 @@ final class EditorModel: ObservableObject {
     let tabSize = 4
     /// The format catalogue shown in the status-bar picker.
     let registry: FormatRegistry
+    /// App-wide appearance, font and wrapping preferences.
+    let preferences: EditorPreferences
 
     /// Called after an edit has been applied to the buffer. The `NSDocument`
     /// shell uses this to record a change for autosave and the window's edited
@@ -72,9 +74,12 @@ final class EditorModel: ObservableObject {
 
     private let document: EditorDocument
 
-    init(document: EditorDocument, registry: FormatRegistry? = nil) {
+    init(document: EditorDocument,
+         registry: FormatRegistry? = nil,
+         preferences: EditorPreferences = EditorPreferences()) {
         self.document = document
         self.registry = registry ?? document.registry
+        self.preferences = preferences
         self.textRevision = document.textGeneration
         self.format = document.currentFormat
         self.isDocumentDirty = document.isDirty

@@ -7,6 +7,12 @@ import RenderedText
 /// SwiftUI wrapper around an AppKit `NSTextView`.
 struct EditorTextView: NSViewRepresentable {
     @ObservedObject var model: EditorModel
+    @ObservedObject private var preferences: EditorPreferences
+
+    init(model: EditorModel) {
+        _model = ObservedObject(wrappedValue: model)
+        _preferences = ObservedObject(wrappedValue: model.preferences)
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
@@ -37,9 +43,9 @@ struct EditorTextView: NSViewRepresentable {
         textView.backgroundColor = theme.backgroundColor
         textView.currentLineColor = theme.currentLineColor
         textView.insertionPointColor = theme.insertionPointColor
-        textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.font = theme.baseFont
         let paragraphStyle = NSMutableParagraphStyle()
-        let spaceWidth = textView.font?.maximumAdvancement.width ?? 8
+        let spaceWidth = theme.baseFont.maximumAdvancement.width
         paragraphStyle.defaultTabInterval = spaceWidth * CGFloat(model.tabSize)
         paragraphStyle.tabStops = []
         textView.defaultParagraphStyle = paragraphStyle
@@ -69,11 +75,13 @@ struct EditorTextView: NSViewRepresentable {
         // whole document is highlighted synchronously, freezing large files.
         // The coordinator instead runs a chunked, cancellable pass.
         context.coordinator.attach(to: textView)
+        context.coordinator.applyPreferences(in: scrollView)
         context.coordinator.modelDidChange()
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.applyPreferences(in: scrollView)
         // Synchronize first: the ruler must read the new text, not the old one.
         context.coordinator.synchronizeFromDocumentIfNeeded()
         (scrollView.verticalRulerView as? LineNumberRulerView)?.refreshLineCount()
@@ -91,9 +99,11 @@ extension EditorTextView {
 
         private let model: EditorModel
         private weak var textView: NSTextView?
-        let theme: EditorTheme
-        private let renderedStyler: RenderedEditorStyler
+        private(set) var theme: EditorTheme
+        private var renderedStyler: RenderedEditorStyler
         private let renderedImageCache = RenderedEditorImageCache()
+        /// Settings last copied into AppKit. `nil` until the first view update.
+        private var appliedSettings: EditorSettings?
 
         /// Highlighter cache: compiling the regular expressions is expensive,
         /// so build once per format instead of once per pass.
@@ -133,7 +143,7 @@ extension EditorTextView {
 
         init(model: EditorModel) {
             self.model = model
-            let theme = EditorTheme()
+            let theme = model.preferences.theme
             self.theme = theme
             self.renderedStyler = RenderedEditorStyler(theme: theme, tabSize: model.tabSize)
             super.init()
@@ -143,6 +153,64 @@ extension EditorTextView {
             highlightTask?.cancel()
             fullPassTask?.cancel()
             renderedTask?.cancel()
+        }
+
+        /// Copies appearance, font and wrapping changes into the live view.
+        ///
+        /// Font and size changes invalidate cached scanner/styler state and
+        /// re-highlight through the normal chunked or rendered path. Wrapping
+        /// changes only adjust the text container, so they leave attributes
+        /// alone.
+        func applyPreferences(in scrollView: NSScrollView) {
+            let settings = model.preferences.settings
+            let previous = appliedSettings
+            guard settings != previous else { return }
+            appliedSettings = settings
+
+            let newTheme = model.preferences.theme
+            let fontsChanged = previous.map {
+                $0.fontFamily != settings.fontFamily
+                    || $0.fontSize != settings.fontSize
+            } ?? false
+            theme = newTheme
+            if fontsChanged {
+                renderedStyler = RenderedEditorStyler(theme: newTheme,
+                                                      tabSize: model.tabSize)
+                highlighter = nil
+                highlighterFormatID = nil
+            }
+
+            if let textView {
+                textView.font = newTheme.baseFont
+                textView.backgroundColor = newTheme.backgroundColor
+                (textView as? EditorNSTextView)?.currentLineColor =
+                    newTheme.currentLineColor
+                textView.insertionPointColor = newTheme.insertionPointColor
+                textView.typingAttributes = newTheme.baseAttributes
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.defaultTabInterval =
+                    newTheme.baseFont.maximumAdvancement.width
+                        * CGFloat(model.tabSize)
+                paragraph.tabStops = []
+                textView.defaultParagraphStyle = paragraph
+                (textView as? EditorNSTextView)?.renderedImageBackgroundColor =
+                    newTheme.backgroundColor
+                EditorSoftWrap.apply(settings.softWrap, to: textView,
+                                     in: scrollView)
+                textView.needsDisplay = true
+            }
+            scrollView.backgroundColor = newTheme.backgroundColor
+            (scrollView.verticalRulerView as? LineNumberRulerView)?
+                .setTheme(newTheme)
+
+            guard fontsChanged else { return }
+            fullPassFormatID = nil
+            if model.isRenderedEditingActive {
+                scheduleRenderedProjection(full: true, delay: .zero)
+            } else {
+                fullPassFormatID = model.format.id
+                highlightWholeDocument()
+            }
         }
 
         func attach(to textView: NSTextView) {

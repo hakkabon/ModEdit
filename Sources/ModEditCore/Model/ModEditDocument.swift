@@ -69,7 +69,8 @@ final class ModEditDocument: NSDocument {
     // MARK: Window
 
     override func makeWindowControllers() {
-        let model = EditorModel(document: buffer, registry: registry)
+        let model = EditorModel(document: buffer, registry: registry,
+                                preferences: .shared)
         model.resourceBaseURL = fileURL?.deletingLastPathComponent()
         model.onTextChange = { [weak self] in
             // This drives autosave, the window's edited dot and close prompts.

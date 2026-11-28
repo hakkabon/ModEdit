@@ -106,6 +106,7 @@ struct EditorTheme {
 
     let baseFont: NSFont
     let boldFont: NSFont
+    private let fontName: String?
 
     let backgroundColor: NSColor
     let currentLineColor: NSColor
@@ -117,11 +118,20 @@ struct EditorTheme {
     private let textColor: NSColor
     private let tokenColors: [TokenKind: NSColor]
 
+    /// - Parameters:
+    ///   - fontSize: Point size for body text and the base for scaled headings.
+    ///   - fontName: A PostScript font name. Missing fonts fall back to the
+    ///     system monospaced font, so a removed font never prevents editing.
     init(fontSize: CGFloat = 13,
+         fontName: String? = nil,
          light: Palette = EditorTheme.light,
          dark: Palette = EditorTheme.dark) {
-        baseFont = .monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        boldFont = .monospacedSystemFont(ofSize: fontSize, weight: .bold)
+        let resolvedName = fontName.flatMap { name in
+            NSFont(name: name, size: fontSize) == nil ? nil : name
+        }
+        self.fontName = resolvedName
+        baseFont = Self.makeFont(name: resolvedName, size: fontSize, bold: false)
+        boldFont = Self.makeFont(name: resolvedName, size: fontSize, bold: true)
 
         func adaptive(_ lightColor: NSColor, _ darkColor: NSColor) -> NSColor {
             NSColor(name: nil) { appearance in
@@ -141,6 +151,34 @@ struct EditorTheme {
         tokenColors = Dictionary(uniqueKeysWithValues: TokenKind.allCases.map { kind in
             (kind, adaptive(light.color(for: kind), dark.color(for: kind)))
         })
+    }
+
+    /// A font in the selected family and size, with optional bold/italic traits.
+    ///
+    /// Rendered editing uses this instead of constructing system fonts, so the
+    /// chosen family also covers headings and emphasised runs.
+    func font(ofSize size: CGFloat,
+              bold: Bool = false,
+              italic: Bool = false) -> NSFont {
+        var font = Self.makeFont(name: fontName, size: size, bold: bold)
+        guard italic else { return font }
+        let traits = font.fontDescriptor.symbolicTraits.union(.italic)
+        let descriptor = font.fontDescriptor.withSymbolicTraits(traits)
+        font = NSFont(descriptor: descriptor, size: size) ?? font
+        return font
+    }
+
+    private static func makeFont(name: String?,
+                                 size: CGFloat,
+                                 bold: Bool) -> NSFont {
+        guard let name, let regular = NSFont(name: name, size: size) else {
+            return .monospacedSystemFont(ofSize: size,
+                                         weight: bold ? .bold : .regular)
+        }
+        guard bold else { return regular }
+        let traits = regular.fontDescriptor.symbolicTraits.union(.bold)
+        let descriptor = regular.fontDescriptor.withSymbolicTraits(traits)
+        return NSFont(descriptor: descriptor, size: size) ?? regular
     }
 
     /// The concrete palette used for `appearance`.

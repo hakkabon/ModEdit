@@ -28,13 +28,14 @@ final class RenderedEditorStyler {
         let size: CGFloat
     }
 
-    private static let headingSizes: [CGFloat] = [22, 19, 17, 15.5, 14.5, 13.5]
+    private static let headingBaseSizes: [CGFloat] = [22, 19, 17, 15.5, 14.5, 13.5]
 
     private let theme: EditorTheme
     private let tabSize: Int
     private let baseFont: NSFont
     private let spaceAdvance: CGFloat
     private let codeBackgroundColor: NSColor
+    private let headingSizes: [CGFloat]
     private var fonts: [FontKey: NSFont] = [:]
     private var fallbackFonts: [FallbackFontKey: NSFont] = [:]
     private var missingFallbackFonts: Set<FallbackFontKey> = []
@@ -45,6 +46,9 @@ final class RenderedEditorStyler {
         self.baseFont = theme.baseFont
         self.spaceAdvance = theme.baseFont.maximumAdvancement.width
         self.codeBackgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.22)
+        // Headings stay proportionate when the user chooses another size.
+        let scale = theme.baseFont.pointSize / EditorSettings.defaultFontSize
+        self.headingSizes = Self.headingBaseSizes.map { $0 * scale }
     }
 
     /// Applies every non-raw span, clipped to `range`.
@@ -76,7 +80,7 @@ final class RenderedEditorStyler {
 
         var size = theme.baseFont.pointSize
         if let level = semantic.headingLevel {
-            size = Self.headingSizes[min(max(level, 1), Self.headingSizes.count) - 1]
+            size = headingSizes[min(max(level, 1), headingSizes.count) - 1]
         }
         let bold = semantic.isStrong || semantic.headingLevel != nil
         let italic = semantic.isEmphasis
@@ -217,13 +221,7 @@ final class RenderedEditorStyler {
         let key = FontKey(size: size, bold: bold, italic: italic)
         if let cached = fonts[key] { return cached }
 
-        var font = NSFont.monospacedSystemFont(
-            ofSize: size, weight: bold ? .bold : .regular)
-        if italic {
-            let traits = font.fontDescriptor.symbolicTraits.union(.italic)
-            let descriptor = font.fontDescriptor.withSymbolicTraits(traits)
-            font = NSFont(descriptor: descriptor, size: size) ?? font
-        }
+        let font = theme.font(ofSize: size, bold: bold, italic: italic)
         fonts[key] = font
         return font
     }
