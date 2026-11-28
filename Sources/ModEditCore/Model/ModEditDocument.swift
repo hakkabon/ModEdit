@@ -319,8 +319,62 @@ final class ModEditWindowController: NSWindowController, NSToolbarDelegate, NSMe
         }
     }
 
+    @objc func exportHTML(_ sender: Any?) {
+        exportPreview(as: .html)
+    }
+
+    @objc func exportPDF(_ sender: Any?) {
+        exportPreview(as: .pdf)
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        menuItem.action != #selector(formatDocument(_:)) || model.canFormatDocument
+        switch menuItem.action {
+        case #selector(formatDocument(_:)):
+            return model.canFormatDocument
+        case #selector(exportHTML(_:)), #selector(exportPDF(_:)):
+            return model.canExportPreview
+        default:
+            return true
+        }
+    }
+
+    /// Renders the same page the preview pane shows, then writes it through a
+    /// standard save panel. Rendering starts only after the user picks a
+    /// destination, so cancelling costs nothing.
+    private func exportPreview(as format: PreviewExportFormat) {
+        guard let window else { return }
+        guard let renderer = model.format.makePreviewRenderer() else {
+            presentError(PreviewExportError.noPreview)
+            return
+        }
+        guard let source = model.previewSnapshot(
+            upTo: PreviewLimits.maximumSourceLength) else {
+            presentError(PreviewExportError.sourceTooLarge)
+            return
+        }
+        let request = PreviewExportRequest(source: source,
+                                           baseURL: model.resourceBaseURL,
+                                           renderer: renderer)
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [format.contentType]
+        panel.message = "Export the current preview as \(format.displayName)."
+        panel.prompt = "Export"
+        panel.nameFieldStringValue = format.defaultFileName(
+            forDocumentNamed: document?.displayName ?? "Untitled")
+        panel.directoryURL = document?.fileURL?.deletingLastPathComponent()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                do {
+                    try await PreviewExport.write(request, as: format, to: url)
+                } catch {
+                    self.presentError(error)
+                }
+            }
+        }
     }
 
     @objc private func togglePreview(_ sender: Any?) {

@@ -109,6 +109,15 @@ final class EditorModel: ObservableObject {
 
     func textSnapshot() -> String { document.text }
 
+    /// Whether the current format has an HTML preview small enough to export.
+    ///
+    /// The size check uses the UTF-16 length only, so menu validation does not
+    /// copy the document.
+    var canExportPreview: Bool {
+        format.makePreviewRenderer() != nil
+            && document.textLength <= PreviewLimits.maximumSourceLength
+    }
+
     /// Snapshot for the live preview. Large documents return `nil` instead of
     /// being copied and rendered on every debounce.
     func previewSnapshot(upTo limit: Int) -> String? {

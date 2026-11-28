@@ -89,6 +89,13 @@ the right shows it as headings, emphasis, symbols and mathematics.
   * *HTML* — your page as written, with scripts, frames and remote loads
     disabled by the preview policy. Local images, styles and fonts resolve
     against the document's directory.
+* **Preview export** (File > Export as HTML… / Export as PDF…): renders the
+  same page as the live preview and writes it through a save panel. HTML keeps
+  the preview's escaped body and, for user HTML documents, the injected
+  Content-Security-Policy. PDF runs an offscreen WebKit view with the same
+  no-JavaScript, non-persistent and navigation-restricted configuration.
+  Export is available for formats with an HTML preview and follows the same
+  5 MB source cap.
 * **Encoding-faithful I/O**: UTF-8 (with/without BOM), UTF-16 little- and
   big-endian (with BOM, plus unambiguous BOM-less ASCII/Latin text), and
   detected legacy encodings are written back with the same encoding. UTF-16
@@ -283,6 +290,7 @@ ModEditCore (library)
 │               StorageHighlighter: applies tokens to NSTextStorage        │
 │               DirtyRange: accumulates pending edits for debouncing       │
 │ Preview       PreviewRenderer → RenderedHTML / LaTeXHTML → PreviewPage   │
+│ Export        PreviewExport → PreviewPDFExporter (offscreen WKWebView)   │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -853,9 +861,10 @@ Sources/
     Formats/                        DocumentFormat, FormatRegistry, PreferenceStore, formats
     Highlighting/                   Token, Tokenizer, scanners, DirtyRange, EditorTheme, StorageHighlighter
     IO/TextIO.swift
+    Export/                         preview HTML/PDF export and hardened offscreen PDF renderer
     Model/                          EditorDocument, EditorModel, LineIndex, LineNumberSource
     Preview/                        PreviewRenderer, RenderedHTML, MarkdownHTML, LaTeXHTML,
-                                    escaping, page
+                                    escaping, page, limits, web-view security config
     Workbench/                      PL/0 parser inspector
     UI/                             root/status bar, editor/gutter, preview
   RenderedText/                     platform-neutral Markdown projection and source/display map
@@ -938,6 +947,13 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
   skipped before the web view is touched. The document directory travels with
   the render request and is also the load's base URL, so local resources resolve
   without being inlined into the HTML.
+* **Export renders the preview, not an approximation of it.** Both export
+  commands reuse the pane's `PreviewRenderer` and document directory, so
+  Markdown, LaTeX and HTML output matches what was on screen. PDF uses an
+  offscreen `WKWebView` with the same no-JavaScript, non-persistent
+  configuration and navigation policy; user HTML keeps the injected CSP.
+  Export refuses documents above the 5 MB preview cap and rejects empty PDF
+  data before replacing a file.
 * **One shared incremental line index.** The document owns the UTF-16 line
   starts. A text edit rebuilds only the affected line window and shifts the
   remaining starts; the status bar and gutter both read that index instead of
@@ -994,6 +1010,12 @@ Tests/RenderedTextTests/            projection, mapping, renderer and incrementa
   so relative and absolute local resources load, but remote stylesheets, images,
   fonts and media stay blocked by policy. Documents without a file location
   cannot resolve relative resources.
+* **Preview export is HTML/PDF and web-preview-only.** Formats without an HTML
+  renderer (plain text, PL/0, JSON, CSS) and the custom DOT pane cannot be
+  exported. PDF export currently produces one continuous page rather than
+  paginated Letter/A4 pages. HTML export references local resources relative to
+  the document directory, so it expects to stay beside the source document;
+  `data:` images remain embedded.
 * **Editor typography is limited and local to the editor.** Settings offer
   three monospaced families and 10–24 pt. Family and size affect source and
   rendered-editing text, not the preview stylesheet or its code blocks.
@@ -1131,7 +1153,13 @@ evidence as stable-prefix reuse.
    System Monospaced/Menlo/Monaco font families, 10–24 pt sizes, and a persisted
    soft-wrap toggle with a View menu item. Remaining work is extending the same
    controls to the preview and the iPad prototype.
-9. Export (HTML/PDF) from the preview.
+9. **Preview export** is implemented: File > Export as HTML… / PDF… renders the
+   same page as the live preview, with the same security policy and size cap.
+   Remaining work is paginated PDF output, self-contained HTML resource copying,
+   and export for the custom DOT preview.
+10. **Export polish.** Add page-size and margin choices for multi-page PDFs,
+    copy or embed local resources for portable HTML, and extend export to the
+    DOT preview and the iPad prototype.
 
 ## Contributing
 

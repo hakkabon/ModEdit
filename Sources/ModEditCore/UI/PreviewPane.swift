@@ -11,7 +11,7 @@ import AppKit
 struct PreviewPane: NSViewRepresentable {
     /// Above this many UTF-16 units the preview refuses to copy and render the
     /// document. Editing large files must not be starved by a debounced render.
-    static let maximumSourceLength = 5 * 1_024 * 1_024
+    static let maximumSourceLength = PreviewLimits.maximumSourceLength
 
     let renderer: any PreviewRenderer
     let revision: UInt64
@@ -31,10 +31,7 @@ struct PreviewPane: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        // No cookies, caches or other state survive between previews.
-        configuration.websiteDataStore = .nonPersistent()
+        let configuration = PreviewWebViewConfiguration.make()
         configuration.userContentController.add(
             context.coordinator, name: PreviewScrollBridge.messageHandlerName)
         let webView = WKWebView(frame: .zero, configuration: configuration)

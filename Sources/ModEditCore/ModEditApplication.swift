@@ -167,6 +167,11 @@ private final class ModEditApplicationDelegate: NSObject, NSApplicationDelegate 
         menu.addItem(saveAs)
         menu.addItem(menuItem("Revert to Saved",
                               action: #selector(NSDocument.revertToSaved(_:))))
+        menu.addItem(.separator())
+        menu.addItem(menuItem("Export as HTML…",
+                              action: #selector(ModEditWindowController.exportHTML(_:))))
+        menu.addItem(menuItem("Export as PDF…",
+                              action: #selector(ModEditWindowController.exportPDF(_:))))
         return item
     }
 
